@@ -1,33 +1,34 @@
 """
-edge_llm/proxy.py — Lightweight auto-routing proxy + web dashboard.
+edge_llm/proxy.py — Robust auto-routing proxy + web dashboard.
 
-Sits between OpenClaw and vLLM:
-1. Receives OpenAI-compatible /v1/chat/completions request
-2. Checks which model is being requested
-3. Auto-switches profile if needed
-4. Forwards to the correct vLLM instance
-5. Serves web dashboard at /
+v3.2 rewrite — fixes:
+  - shutdown deadlock: handle_request() loop + Event flag (no server.shutdown())
+  - BrokenPipeError: silently caught in all response paths
+  - streaming proxy: robust chunk forwarding with error recovery
+  - systemd watchdog: independent thread, decoupled from health_check
+  - connection reuse: HTTPConnection per upstream, kept alive
 
-v3.0 changes:
-  - ThreadingHTTPServer (no more single-thread blocking)
-  - Fixed non-streaming proxy bug (double read)
-  - Uses dashboard.py HTML (not inline fallback)
-  - Adapted to new ProfileManager API (profile_state, vllm_pid)
-  - Health check logs only, never auto-restarts
+Architecture:
+  Main thread: handle_request() loop with select timeout
+  Signal handler: sets shutdown Event (thread-safe)
+  Watchdog thread: sd_notify(WATCHDOG=1) every 20s
+  Health thread: status logging every N seconds
+  Worker threads: per-connection via ThreadingMixIn
 """
 
 import sys
 import os
 import signal
 import socket
+import select
 import logging
-import urllib.request
 import json
 import http.server
 import socketserver
 import threading
 import time
 from pathlib import Path
+from http.client import HTTPConnection
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from edge_llm.manager import ProfileManager
@@ -41,6 +42,7 @@ PROXY_HOST = os.environ.get("EDGE_PROXY_HOST", "127.0.0.1")
 PROXY_PORT = int(os.environ.get("EDGE_PROXY_PORT", "8999"))
 AUTO_SWITCH = os.environ.get("EDGE_AUTO_SWITCH", "1") == "1"
 HEALTH_CHECK_INTERVAL = int(os.environ.get("EDGE_HEALTH_CHECK", "60"))
+WATCHDOG_INTERVAL = 20  # seconds between sd_notify WATCHDOG=1
 
 
 # ─── Proxy Manager ──────────────────────────────────────────────
@@ -51,8 +53,9 @@ class ProxyManager:
     def __init__(self):
         self.mgr = ProfileManager()
         self._last_switch = 0.0
-        self._cooldown = 10  # min seconds between switches
+        self._cooldown = 10
         self._switch_lock = threading.Lock()
+        self._upstream_pool: dict[int, HTTPConnection] = {}
 
     @property
     def current(self) -> str:
@@ -67,7 +70,6 @@ class ProxyManager:
         return model_map.get(model_name)
 
     def ensure_profile(self, target: str) -> bool:
-        """Thread-safe profile switching with cooldown."""
         if self.current == target:
             return True
         if not self._switch_lock.acquire(blocking=False):
@@ -90,11 +92,29 @@ class ProxyManager:
                 return p.vllm.port
         return None
 
+    def get_upstream(self, port: int) -> HTTPConnection:
+        """Get or create a keep-alive HTTPConnection to upstream."""
+        conn = self._upstream_pool.get(port)
+        if conn:
+            try:
+                # Test if connection is still usable
+                conn.request("GET", "/health")
+                resp = conn.getresponse()
+                resp.read()  # drain
+                if resp.status in (200, 503):
+                    return conn
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        conn = HTTPConnection("127.0.0.1", port, timeout=300)
+        self._upstream_pool[port] = conn
+        return conn
+
     def health_check(self):
-        """Background health monitor: LOG ONLY, never auto-restart.
-        Auto-restart was too aggressive — it kills processes during model loading
-        (when /health returns 503), causing infinite kill/restart loops.
-        Use `edge-llm switch <profile>` or `edge-llm reconcile` manually instead."""
         try:
             s = self.mgr.status()
             log.info("Health check: profile=%s state=%s vllm=%s comfyui=%s",
@@ -117,65 +137,89 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     @property
     def proxy(self):
-        """Resolve proxy manager from the server instance."""
         return self.server.proxy_mgr
 
+    def _safe_write(self, data: bytes):
+        """Write to wfile, silently catching BrokenPipeError."""
+        try:
+            self.wfile.write(data)
+            self.wfile.flush()
+        except BrokenPipeError:
+            log.debug("Client disconnected (BrokenPipe)")
+        except ConnectionResetError:
+            log.debug("Client disconnected (ConnectionReset)")
+        except OSError:
+            pass
+
+    def _safe_close(self):
+        """End headers and flush, silently catching errors."""
+        try:
+            self.wfile.flush()
+        except Exception:
+            pass
+
     def do_OPTIONS(self):
-        self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
+        try:
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.end_headers()
+        except Exception:
+            pass
 
     def do_GET(self):
         pm = self.proxy
-        if self.path == "/":
-            self._serve_dashboard()
-        elif self.path == "/health":
-            self._send_json({"status": "ok", "profile": pm.current})
-        elif self.path == "/status":
-            self._send_json(pm.mgr.status())
-        elif self.path == "/profiles":
-            self._send_json(pm.mgr.list_profiles())
-        elif self.path == "/system":
-            self._send_json(self._system_info())
-        elif self.path == "/history":
-            self._send_json(pm.mgr.state.get_history(limit=30))
-        else:
-            self._send_json({"error": "not found"}, 404)
+        try:
+            if self.path == "/":
+                self._serve_dashboard()
+            elif self.path == "/health":
+                self._send_json({"status": "ok", "profile": pm.current})
+            elif self.path == "/status":
+                self._send_json(pm.mgr.status())
+            elif self.path == "/profiles":
+                self._send_json(pm.mgr.list_profiles())
+            elif self.path == "/system":
+                self._send_json(self._system_info())
+            elif self.path == "/history":
+                self._send_json(pm.mgr.state.get_history(limit=30))
+            else:
+                self._send_json({"error": "not found"}, 404)
+        except BrokenPipeError:
+            pass
+        except Exception as e:
+            log.error("GET %s error: %s", self.path, e)
 
     def do_POST(self):
         pm = self.proxy
-        if self.path in ("/v1/chat/completions", "/v1/completions"):
-            self._handle_chat(pm)
-        elif self.path == "/switch":
-            self._handle_switch(pm)
-        elif self.path == "/reset":
-            self._handle_reset(pm)
-        elif self.path == "/reconcile":
-            self._handle_reconcile(pm)
-        else:
-            self._send_json({"error": "not found"}, 404)
+        try:
+            if self.path in ("/v1/chat/completions", "/v1/completions"):
+                self._handle_chat(pm)
+            elif self.path == "/switch":
+                self._handle_switch(pm)
+            elif self.path == "/reset":
+                self._handle_reset(pm)
+            elif self.path == "/reconcile":
+                self._handle_reconcile(pm)
+            else:
+                self._send_json({"error": "not found"}, 404)
+        except BrokenPipeError:
+            pass
+        except Exception as e:
+            log.error("POST %s error: %s", self.path, e)
 
     def _serve_dashboard(self):
-        """Serve dashboard HTML. Priority: static/index.html > dashboard.py > minimal fallback."""
-        # Try static/index.html first
+        body = None
         static_dir = Path(__file__).parent / "static"
         dashboard = static_dir / "index.html"
-        body = None
-
         if dashboard.exists():
             body = dashboard.read_bytes()
-
-        # Try dashboard.py
         if body is None:
             try:
                 from edge_llm.dashboard import DASHBOARD_HTML
                 body = DASHBOARD_HTML.encode("utf-8")
             except ImportError:
                 pass
-
-        # Minimal fallback
         if body is None:
             body = (
                 "<!DOCTYPE html><html><head><title>EdgeLLM</title>"
@@ -190,11 +234,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        self.wfile.write(body)
+        self._safe_write(body)
 
     def _system_info(self):
-        """Get CPU, RAM, and system info."""
-        info = {"cpu_percent": 0, "cpu_cores": os.cpu_count() or 1, "ram_total_gb": 0, "ram_used_gb": 0, "uptime_seconds": 0}
+        info = {"cpu_percent": 0, "cpu_cores": os.cpu_count() or 1,
+                "ram_total_gb": 0, "ram_used_gb": 0, "uptime_seconds": 0}
         try:
             with open("/proc/meminfo") as f:
                 mem = f.read()
@@ -202,31 +246,37 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             avail_kb = int([l for l in mem.splitlines() if l.startswith("MemAvailable")][0].split()[1])
             info["ram_total_gb"] = round(total_kb / 1024**2, 1)
             info["ram_used_gb"] = round((total_kb - avail_kb) / 1024**2, 1)
-        except Exception: pass
+        except Exception:
+            pass
         try:
             with open("/proc/loadavg") as f:
                 loadavg = f.read().split()[0]
-            load = float(loadavg)
-            cores = info["cpu_cores"]
-            info["cpu_percent"] = round(load / cores * 100, 1)
-        except Exception: pass
+            info["cpu_percent"] = round(float(loadavg) / info["cpu_cores"] * 100, 1)
+        except Exception:
+            pass
         try:
             with open("/proc/uptime") as f:
                 info["uptime_seconds"] = int(float(f.read().split()[0]))
-        except Exception: pass
+        except Exception:
+            pass
         return info
 
-    def _handle_chat(self, pm):
-        """Forward chat/completions request to upstream vLLM with streaming support."""
+    def _read_body(self):
+        """Read request body, return parsed JSON or None on error."""
         try:
             content_length = int(self.headers.get("Content-Length", 0))
             if content_length == 0:
-                self._send_json({"error": "Empty request body"}, 400)
-                return
+                return {}
             body = self.rfile.read(content_length)
-            data = json.loads(body)
+            return json.loads(body)
         except (json.JSONDecodeError, ValueError) as e:
             self._send_json({"error": f"Invalid JSON: {e}"}, 400)
+            return None
+
+    def _handle_chat(self, pm):
+        """Forward chat/completions to upstream vLLM with streaming support."""
+        data = self._read_body()
+        if data is None:
             return
 
         model = data.get("model", "vllm_qwen27b")
@@ -241,54 +291,62 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": f"Unknown model: {model}"}, 404)
             return
 
-        # Forward upstream request
-        upstream_url = f"http://127.0.0.1:{target_port}{self.path}"
-        upstream_req = urllib.request.Request(
-            upstream_url,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+        # Forward using HTTPConnection (connection reuse)
+        body = json.dumps(data).encode("utf-8")
         try:
-            upstream_resp = urllib.request.urlopen(upstream_req, timeout=300)
+            conn = pm.get_upstream(target_port)
+            conn.request("POST", self.path, body=body,
+                         headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
         except Exception as e:
             log.error("Forward to :%d failed: %s", target_port, e)
+            # Discard stale connection
+            pm._upstream_pool.pop(target_port, None)
             self._send_json({"error": str(e)}, 502)
             return
 
         try:
-            resp_status = upstream_resp.status
-            resp_content_type = upstream_resp.headers.get("Content-Type", "text/plain")
+            resp_status = resp.status
+            resp_headers = dict(resp.getheaders())
+            resp_ct = resp_headers.get("Content-Type", "text/plain")
 
             if stream:
                 # Streaming: forward chunk-by-chunk
                 self.send_response(resp_status)
-                self.send_header("Content-Type", resp_content_type)
+                self.send_header("Content-Type", resp_ct)
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Transfer-Encoding", "chunked")
+                self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
-                chunk_size = 8192
-                while True:
-                    chunk = upstream_resp.read(chunk_size)
-                    if not chunk:
-                        break
-                    self.wfile.write(f"{len(chunk):x}\r\n".encode())
-                    self.wfile.write(chunk)
-                    self.wfile.write(b"\r\n")
-                    self.wfile.flush()
-                self.wfile.write(b"0\r\n\r\n")
-                self.wfile.flush()
+
+                try:
+                    while True:
+                        chunk = resp.read(8192)
+                        if not chunk:
+                            break
+                        size = f"{len(chunk):x}\r\n".encode()
+                        self._safe_write(size)
+                        self._safe_write(chunk)
+                        self._safe_write(b"\r\n")
+                    self._safe_write(b"0\r\n\r\n")
+                except Exception as e:
+                    log.debug("Stream forwarding interrupted: %s", e)
             else:
-                # Non-streaming: read once, send once (BUG FIX: was reading twice)
-                resp_body = upstream_resp.read()
+                # Non-streaming: read full body, send once
+                resp_body = resp.read()
                 self.send_response(resp_status)
-                self.send_header("Content-Type", resp_content_type)
+                self.send_header("Content-Type", resp_ct)
                 self.send_header("Content-Length", str(len(resp_body)))
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
-                self.wfile.write(resp_body)
+                self._safe_write(resp_body)
 
-            upstream_resp.close()
+            # Drain remaining response for connection reuse
+            try:
+                resp.read()
+            except Exception:
+                pass
+
         except Exception as e:
             log.error("Error forwarding response: %s", e)
             try:
@@ -297,12 +355,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 pass
 
     def _handle_switch(self, pm):
-        try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length) if content_length > 0 else b'{}'
-            data = json.loads(body) if body else {}
-        except (json.JSONDecodeError, ValueError):
-            self._send_json({"error": "Invalid JSON"}, 400)
+        data = self._read_body()
+        if data is None:
             return
         target = data.get("profile")
         if not target:
@@ -312,12 +366,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self._send_json(result)
 
     def _handle_reset(self, pm):
-        try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length) if content_length > 0 else b'{}'
-            data = json.loads(body) if body else {}
-        except (json.JSONDecodeError, ValueError):
-            self._send_json({"error": "Invalid JSON"}, 400)
+        data = self._read_body()
+        if data is None:
             return
         target = data.get("profile", "idle")
         result = pm.mgr.force_reset(target)
@@ -329,22 +379,27 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def _send_json(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.end_headers()
+            self._safe_write(body)
+        except BrokenPipeError:
+            pass
+        except Exception:
+            pass
 
 
 # ─── Threaded HTTP Server ───────────────────────────────────────
 
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
-    """HTTPServer with thread-per-connection. Solves single-thread blocking."""
     allow_reuse_address = True
-    daemon_threads = True  # Don't wait for worker threads on shutdown
+    daemon_threads = True
+    timeout = 1.0  # for handle_request() to check shutdown flag
 
 
 # ─── Main ─────────────────────────────────────────────────────────
@@ -356,26 +411,16 @@ def main():
     )
 
     mgr = ProxyManager()
+    shutdown_event = threading.Event()
 
     server = ThreadedHTTPServer((PROXY_HOST, PROXY_PORT), ProxyHandler)
-    server.proxy_mgr = mgr  # type: ignore
+    server.proxy_mgr = mgr
 
-    def health_loop():
-        while True:
-            time.sleep(HEALTH_CHECK_INTERVAL)
-            try:
-                mgr.health_check()
-            except Exception as e:
-                log.error("Health check error: %s", e)
-
-    threading.Thread(target=health_loop, daemon=True).start()
-
-    # systemd notify + watchdog integration (no external dependency)
+    # ── systemd notify ─────────────────────────────────────────
     _notify_socket = os.environ.get('NOTIFY_SOCKET')
     _notify_enabled = bool(_notify_socket)
 
     def sd_notify(message: str):
-        """Send notification to systemd (READY=1, WATCHDOG=1, STOPPING=1)."""
         if not _notify_socket:
             return
         try:
@@ -386,46 +431,63 @@ def main():
         except Exception:
             pass
 
+    # ── Signal handler (only sets Event, no deadlock) ──────────
+    def handle_signal(signum, frame):
+        log.info("Received signal %s, initiating shutdown", signum)
+        shutdown_event.set()
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    # ── Watchdog thread (independent of health_check) ──────────
+    def watchdog_loop():
+        while not shutdown_event.is_set():
+            shutdown_event.wait(WATCHDOG_INTERVAL)
+            if not shutdown_event.is_set():
+                sd_notify("WATCHDOG=1")
+
     if _notify_enabled:
-        sd_notify("READY=1")
-        log.info("systemd notify: READY=1 (watchdog enabled)")
-    else:
-        log.debug("NOTIFY_SOCKET not set — running outside systemd")
+        threading.Thread(target=watchdog_loop, daemon=True, name="watchdog").start()
+        log.info("Watchdog thread started (interval=%ds)", WATCHDOG_INTERVAL)
 
-    def notify_watchdog():
-        """Periodically notify systemd that we're alive."""
-        if _notify_enabled:
-            sd_notify("WATCHDOG=1")
+    # ── Health check thread ────────────────────────────────────
+    def health_loop():
+        while not shutdown_event.is_set():
+            shutdown_event.wait(HEALTH_CHECK_INTERVAL)
+            if not shutdown_event.is_set():
+                mgr.health_check()
 
-    shutdown_requested = False
+    threading.Thread(target=health_loop, daemon=True, name="health").start()
 
-    def shutdown(signum, frame):
-        nonlocal shutdown_requested
-        if shutdown_requested:
-            log.warning("Forced shutdown — second signal")
-            sd_notify("STOPPING=1")
-            server.shutdown()
-            sys.exit(1)
-        shutdown_requested = True
-        log.info("Shutting down (signal %s)", signum)
-        sd_notify("STOPPING=1")
-        server.shutdown()
-
-    signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
-
+    # ── READY ──────────────────────────────────────────────────
+    sd_notify("READY=1")
     log.info("EdgeLLM Proxy: %s:%d (auto_switch=%s, threaded)", PROXY_HOST, PROXY_PORT, AUTO_SWITCH)
     log.info("Dashboard: http://%s:%d/", PROXY_HOST, PROXY_PORT)
     log.info("Current profile: %s", mgr.current)
 
-    # Integrate watchdog notification into health loop
-    original_health = mgr.health_check
-    def health_with_watchdog():
-        original_health()
-        notify_watchdog()
-    mgr.health_check = health_with_watchdog
-
-    server.serve_forever()
+    # ── Main loop: handle_request + shutdown check ─────────────
+    # This replaces serve_forever() to avoid the shutdown() deadlock.
+    # handle_request() respects server.timeout (1s), so we check
+    # shutdown_event every second.
+    try:
+        while not shutdown_event.is_set():
+            server.handle_request()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        log.info("Closing server...")
+        try:
+            server.server_close()
+        except Exception:
+            pass
+        # Close upstream connections
+        for port, conn in mgr._upstream_pool.items():
+            try:
+                conn.close()
+            except Exception:
+                pass
+        sd_notify("STOPPING=1")
+        log.info("Shutdown complete")
 
 
 if __name__ == "__main__":
