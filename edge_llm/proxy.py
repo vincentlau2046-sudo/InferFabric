@@ -19,6 +19,7 @@ v3.0 changes:
 import sys
 import os
 import signal
+import socket
 import logging
 import urllib.request
 import json
@@ -369,16 +370,45 @@ def main():
 
     threading.Thread(target=health_loop, daemon=True).start()
 
+    # systemd notify + watchdog integration (no external dependency)
+    _notify_socket = os.environ.get('NOTIFY_SOCKET')
+    _notify_enabled = bool(_notify_socket)
+
+    def sd_notify(message: str):
+        """Send notification to systemd (READY=1, WATCHDOG=1, STOPPING=1)."""
+        if not _notify_socket:
+            return
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            sock.connect(_notify_socket)
+            sock.sendall(message.encode())
+            sock.close()
+        except Exception:
+            pass
+
+    if _notify_enabled:
+        sd_notify("READY=1")
+        log.info("systemd notify: READY=1 (watchdog enabled)")
+    else:
+        log.debug("NOTIFY_SOCKET not set — running outside systemd")
+
+    def notify_watchdog():
+        """Periodically notify systemd that we're alive."""
+        if _notify_enabled:
+            sd_notify("WATCHDOG=1")
+
     shutdown_requested = False
 
     def shutdown(signum, frame):
         nonlocal shutdown_requested
         if shutdown_requested:
             log.warning("Forced shutdown — second signal")
+            sd_notify("STOPPING=1")
             server.shutdown()
             sys.exit(1)
         shutdown_requested = True
         log.info("Shutting down (signal %s)", signum)
+        sd_notify("STOPPING=1")
         server.shutdown()
 
     signal.signal(signal.SIGINT, shutdown)
@@ -387,6 +417,14 @@ def main():
     log.info("EdgeLLM Proxy: %s:%d (auto_switch=%s, threaded)", PROXY_HOST, PROXY_PORT, AUTO_SWITCH)
     log.info("Dashboard: http://%s:%d/", PROXY_HOST, PROXY_PORT)
     log.info("Current profile: %s", mgr.current)
+
+    # Integrate watchdog notification into health loop
+    original_health = mgr.health_check
+    def health_with_watchdog():
+        original_health()
+        notify_watchdog()
+    mgr.health_check = health_with_watchdog
+
     server.serve_forever()
 
 
