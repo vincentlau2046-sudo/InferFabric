@@ -12,10 +12,13 @@ FULL="${1:-}"
 echo "=== EdgeLLM Emergency Recovery ==="
 echo "[$(date '+%H:%M:%S')] Starting recovery..."
 
-# Step 1: Stop via known scripts
-echo "[1/6] Stopping via switch scripts..."
-~/edge_llm/scripts/switch_vllm.sh stop 2>/dev/null || true
-~/edge_llm/scripts/switch_comfyui.sh stop 2>/dev/null || true
+# Step 1: Stop via edge-llm
+echo "[1/6] Stopping via edge-llm..."
+edge-llm reset idle 2>/dev/null || {
+    # Fallback to old scripts if edge-llm not installed
+    ~/edge_llm/scripts/switch_vllm.sh stop 2>/dev/null || true
+    ~/edge_llm/scripts/switch_comfyui.sh stop 2>/dev/null || true
+}
 sleep 2
 
 # Step 2: SIGKILL all vLLM processes
@@ -73,6 +76,7 @@ c.execute('''CREATE TABLE IF NOT EXISTS history (
 c.execute("INSERT OR REPLACE INTO state VALUES ('current_profile', 'idle')")
 c.execute("INSERT OR REPLACE INTO state VALUES ('profile_state', 'idle')")
 c.execute("INSERT OR REPLACE INTO state VALUES ('vllm_pid', '')")
+c.execute("INSERT OR REPLACE INTO state VALUES ('comfyui_pid', '')")
 c.commit()
 c.close()
 PYEOF

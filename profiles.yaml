@@ -52,9 +52,11 @@ profiles:
         --reasoning-parser qwen3
         --trust-remote-code
     comfyui:
-      startup_script: ~/edge_llm/scripts/switch_comfyui.sh start
+      conda_env: comfyui
+      port: 8188
+      working_dir: ~/ComfyUI
       health_url: http://localhost:8188/system_stats
-      stop_script: ~/edge_llm/scripts/switch_comfyui.sh stop
+      extra_flags: --cache-none --enable-manager
     switch_cost_sec: 45
 
   gemma_full:
@@ -85,9 +87,11 @@ profiles:
     gpu_owner: comfyui
     vllm: null
     comfyui:
-      startup_script: ~/edge_llm/scripts/switch_comfyui.sh start
+      conda_env: comfyui
+      port: 8188
+      working_dir: ~/ComfyUI
       health_url: http://localhost:8188/system_stats
-      stop_script: ~/edge_llm/scripts/switch_comfyui.sh stop
+      extra_flags: --cache-none --enable-manager
     switch_cost_sec: 30
 
   idle:

@@ -26,7 +26,9 @@ log = logging.getLogger("edge_llm.cli")
 
 # Add parent to path for import
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from edge_llm.profile_manager import ProfileManager, ProfileState
+from edge_llm.manager import ProfileManager
+from edge_llm.state import ProfileState
+from edge_llm.health import gpu_used_mb
 
 
 def cmd_status():
@@ -41,7 +43,7 @@ def cmd_status():
     print(f"Profile : {s['profile']} ({s['description']})")
     print(f"State   : {state_label}")
     print(f"vLLM    : {s['vllm']}  (PID: {s.get('vllm_pid', '-') or '-'})")
-    print(f"ComfyUI : {s['comfyui']}")
+    print(f"ComfyUI : {s['comfyui']}  (PID: {s.get('comfyui_pid', '-') or '-'})")
     print(f"GPU     : {s['gpu_used_mb']}/{s['gpu_total_mb']} MiB used")
 
 

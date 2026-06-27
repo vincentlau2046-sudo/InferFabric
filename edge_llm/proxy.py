@@ -29,7 +29,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from edge_llm.profile_manager import ProfileManager, ProfileState
+from edge_llm.manager import ProfileManager
+from edge_llm.state import ProfileState
 
 log = logging.getLogger("edge_llm.proxy")
 
