@@ -191,6 +191,23 @@ body {
 }
 .model-card.idle-card:hover { border-color:var(--gray); }
 
+/* ── Model Card Actions ── */
+.model-actions {
+  display:flex; gap:6px; margin-top:8px;
+}
+.model-btn {
+  flex:1; padding:6px 0; border:none; border-radius:7px;
+  font-size:12px; font-weight:600; cursor:pointer;
+  transition:all .15s; letter-spacing:-.01em;
+}
+.model-btn.start { background:var(--green-l); color:var(--green); }
+.model-btn.start:hover { background:#CEF5D8; }
+.model-btn.stop  { background:var(--red-l); color:var(--red); }
+.model-btn.stop:hover  { background:#FFD6D4; }
+.model-btn.start:disabled, .model-btn.stop:disabled {
+  opacity:.4; cursor:default;
+}
+
 /* ─── Section Label ── */
 .sec-label {
   font-size:12px; font-weight:600; text-transform:uppercase;
@@ -499,10 +516,14 @@ async function loadModels() {
     html += '<div class="model-grid">';
     for (const m of shared) {
       const a = m.active;
-      html += '<div class="model-card'+(a?' active':'')+'" id="sw-'+m.name+'" onclick="doSwitch(\''+m.name+'\')">';
+      html += '<div class="model-card'+(a?' active':'')+'" id="sw-'+m.name+'">';
       html += '<div class="model-name">'+m.name+'</div>';
       html += '<div class="model-desc">'+(m.description||'')+'</div>';
       html += '<span class="model-mode shrd">共享</span>';
+      html += '<div class="model-actions">';
+      html += '<button class="model-btn stop"'+(a?'':' disabled')+' onclick="doStop(\''+m.name+'\')">停止</button>';
+      html += '<button class="model-btn start"'+(a?' disabled':'')+' onclick="doSwitch(\''+m.name+'\')">启动</button>';
+      html += '</div>';
       html += '</div>';
     }
     html += '</div>';
@@ -513,8 +534,6 @@ async function loadModels() {
 
 async function doSwitch(n) {
   if (sw) return;
-  const b = document.getElementById('sw-'+n);
-  if (b) b.classList.add('loading');
   sw = true;
   try {
     const r = await j('/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:n})});
@@ -524,6 +543,19 @@ async function doSwitch(n) {
   } catch(e) { toast(e.message,'err'); }
   sw = false;
   document.querySelectorAll('.model-card').forEach(c => c.classList.remove('loading'));
+  await Promise.all([load(),loadModels()]);
+}
+
+async function doStop(n) {
+  if (sw) return;
+  sw = true;
+  try {
+    const r = await j('/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:n})});
+    if (r.status==='stopped')          toast(n+' 已停止','ok');
+    else if (r.status==='already_stopped') toast(n+' 未在运行','info');
+    else                               toast(r.message||'停止失败','err');
+  } catch(e) { toast(e.message,'err'); }
+  sw = false;
   await Promise.all([load(),loadModels()]);
 }
 
