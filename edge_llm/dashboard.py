@@ -113,6 +113,7 @@ body {
   background:var(--card); border-radius:var(--radius);
   border:1px solid var(--border); box-shadow:var(--shadow);
   padding:20px; transition:box-shadow .2s;
+  display:flex; flex-direction:column;
 }
 .panel:hover { box-shadow:0 4px 16px rgba(0,0,0,.06); }
 .panel-hdr {
@@ -126,6 +127,22 @@ body {
 .panel-icon.excl { background:var(--red-g);  box-shadow:0 2px 6px rgba(255,69,58,.2); }
 .panel-icon.shrd { background:var(--green-g); box-shadow:0 2px 6px rgba(48,209,88,.2); }
 .panel-title { font-size:15px; font-weight:600; color:var(--text1); letter-spacing:-.01em; }
+
+/* ── Service Chips ── */
+.svc-chip {
+  display:inline-flex; align-items:center; gap:5px;
+  padding:4px 12px; border-radius:16px;
+  font-size:13px; font-weight:600;
+  transition:all .2s;
+}
+.svc-chip.active { background:var(--green-s); color:var(--green); }
+.svc-chip.inactive { background:var(--bg); color:var(--text4); }
+.svc-chip .chip-dot {
+  width:6px; height:6px; border-radius:50%;
+  background:var(--green); flex-shrink:0;
+}
+.svc-chip.inactive .chip-dot { background:var(--text4); }
+.svc-empty { font-size:13px; color:var(--text4); }
 
 /* ── Model Card ── */
 .model-card {
@@ -310,6 +327,15 @@ body {
     </div>
   </div>
 
+  <!-- Active Services -->
+  <div class="panel" id="svcCard" style="margin-bottom:18px;padding:16px 20px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(10,132,255,.2)">📡</div>
+      <span class="panel-title">活跃服务</span>
+      <div id="svcChips" style="display:flex;gap:8px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end"></div>
+    </div>
+  </div>
+
   <!-- Model Panels -->
   <div class="panels">
     <div class="panel">
@@ -317,14 +343,14 @@ body {
         <div class="panel-icon excl">🔒</div>
         <span class="panel-title">独占模型</span>
       </div>
-      <div id="exclList"></div>
+      <div id="exclList" style="flex:1"></div>
     </div>
     <div class="panel">
       <div class="panel-hdr">
         <div class="panel-icon shrd">🔓</div>
         <span class="panel-title">共享服务</span>
       </div>
-      <div id="shrdList"></div>
+      <div id="shrdList" style="flex:1"></div>
     </div>
   </div>
 
@@ -402,6 +428,17 @@ async function load() {
   }).join('');}
 
   document.getElementById('ts').textContent=new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+
+  // Active services chips
+  const svcChips=document.getElementById('svcChips');
+  const svcs=s.active_services||[];
+  const health=s.services_health||{};
+  if(svcs.length===0){ svcChips.innerHTML='<span class="svc-empty">无活跃服务</span>'; }
+  else{ svcChips.innerHTML=svcs.map(n=>{
+    const h=health[n]||'❌';
+    const cls=h==='✅'?'svc-chip active':'svc-chip inactive';
+    return '<span class="'+cls+'"><span class="chip-dot"></span>'+n+'</span>';
+  }).join(''); }
 }
 
 async function loadModels() {
