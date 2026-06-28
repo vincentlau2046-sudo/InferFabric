@@ -457,6 +457,9 @@ async function loadModels() {
     else eh+='<div class="model-dot"></div>';
     eh+='<div class="model-info"><div class="model-name">'+m.name+'</div><div class="model-desc">'+(m.description||'')+'</div></div>';
     eh+='<span class="model-badge excl">独占</span>';
+    eh+='</div>';
+    eh+='<div class="model-actions">';
+    eh+='<button class="btn-card start"'+(a?' disabled':'')+' onclick="event.stopPropagation();doSwitch(\''+m.name+'\')">切换</button>';
     eh+='</div></div>';
   }
   eList.innerHTML=eh;
