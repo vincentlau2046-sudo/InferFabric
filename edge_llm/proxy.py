@@ -51,6 +51,7 @@ class ProxyManager:
         self._cooldown = 10
         self._switch_lock = threading.Lock()
         self._upstream_pool: dict[int, HTTPConnection] = {}
+        self._pool_lock = threading.Lock()
 
     @property
     def current(self) -> str:
@@ -62,6 +63,29 @@ class ProxyManager:
         m = self.mgr.find_model_by_served_name(model_name)
         return m.name if m else None
 
+    def _wait_healthy(self, target: str, timeout: float = 180) -> bool:
+        """Wait for a model to become healthy after switch."""
+        model = self.mgr.get_model(target)
+        if not model or not model.vllm:
+            return True  # ComfyUI etc, no health check
+        port = model.vllm.port
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                conn = HTTPConnection("127.0.0.1", port, timeout=5)
+                conn.request("GET", "/health")
+                resp = conn.getresponse()
+                resp.read()
+                conn.close()
+                if resp.status == 200:
+                    log.info("Model %s healthy on :%d", target, port)
+                    return True
+            except Exception:
+                pass
+            time.sleep(2)
+        log.warning("Model %s not healthy after %.0fs", target, timeout)
+        return False
+
     def ensure_service(self, target: str) -> bool:
         """Ensure a model is running, auto-switch if needed."""
         if target in self.mgr.active_services:
@@ -69,8 +93,8 @@ class ProxyManager:
         if self.mgr.state.is_manually_stopped(target):
             log.info("Auto-switch to %s blocked: manually stopped by user", target)
             return False
-        if not self._switch_lock.acquire(blocking=False):
-            log.warning("Switch already in progress, skipping")
+        if not self._switch_lock.acquire(timeout=30):
+            log.warning("Switch lock timeout, skipping")
             return False
         try:
             if time.time() - self._last_switch < self._cooldown:
@@ -79,7 +103,10 @@ class ProxyManager:
             log.info("Auto-switch → %s", target)
             result = self.mgr.switch(target)
             self._last_switch = time.time()
-            return result["status"] == "switched"
+            if result["status"] == "switched":
+                # Wait for model to become healthy before returning
+                return self._wait_healthy(target)
+            return result["status"] in ("switched", "already_active")
         finally:
             self._switch_lock.release()
 
@@ -90,24 +117,35 @@ class ProxyManager:
 
     def get_upstream(self, port: int) -> HTTPConnection:
         """Get or create a keep-alive HTTPConnection to upstream."""
-        conn = self._upstream_pool.get(port)
-        if conn:
-            try:
-                conn.request("GET", "/health")
-                resp = conn.getresponse()
-                resp.read()
-                if resp.status in (200, 503):
-                    return conn
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
+        with self._pool_lock:
+            conn = self._upstream_pool.get(port)
+            if conn:
+                try:
+                    conn.request("GET", "/health")
+                    resp = conn.getresponse()
+                    resp.read()
+                    if resp.status in (200, 503):
+                        return conn
+                except Exception:
+                    pass
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
-        conn = HTTPConnection("127.0.0.1", port, timeout=300)
-        self._upstream_pool[port] = conn
-        return conn
+            conn = HTTPConnection("127.0.0.1", port, timeout=300)
+            self._upstream_pool[port] = conn
+            return conn
+
+    def invalidate_upstream(self, port: int):
+        """Remove and close a stale upstream connection."""
+        with self._pool_lock:
+            conn = self._upstream_pool.pop(port, None)
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def health_check(self):
         try:
@@ -118,8 +156,23 @@ class ProxyManager:
             for svc, health in s.get("services_health", {}).items():
                 if health == "❌" and s.get("gpu_mode") != GPUMode.IDLE:
                     log.warning("%s unhealthy but GPU not idle — use `edge-llm reconcile`", svc)
+            # Clean up expired manual_stop records
+            self._clean_manual_stops()
         except Exception as e:
             log.error("Health check exception: %s", e)
+
+    def _clean_manual_stops(self):
+        """Remove expired manual_stop records from StateDB."""
+        try:
+            stops = json.loads(self.mgr.state.get("manual_stops") or "{}")
+            expired = [k for k, v in stops.items() if time.time() - v > self.mgr.state.MANUAL_STOP_TTL]
+            if expired:
+                for k in expired:
+                    del stops[k]
+                self.mgr.state.set("manual_stops", json.dumps(stops))
+                log.debug("Cleaned %d expired manual_stop records", len(expired))
+        except Exception as e:
+            log.debug("Manual stop cleanup error: %s", e)
 
 
 # ─── HTTP Handler ───────────────────────────────────────────────
@@ -245,6 +298,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             content_length = int(self.headers.get("Content-Length", 0))
             if content_length == 0:
                 return {}
+            if content_length > 10 * 1024 * 1024:  # 10MB limit
+                self._send_json({"error": "payload too large (max 10MB)"}, 413)
+                return None
             body = self.rfile.read(content_length)
             return json.loads(body)
         except (json.JSONDecodeError, ValueError) as e:
@@ -284,7 +340,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             resp = conn.getresponse()
         except Exception as e:
             log.error("Forward to :%d failed: %s", target_port, e)
-            pm._upstream_pool.pop(target_port, None)
+            pm.invalidate_upstream(target_port)
             self._send_json({"error": str(e)}, 502)
             return
 
@@ -292,8 +348,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             resp_status = resp.status
             resp_headers = dict(resp.getheaders())
             resp_ct = resp_headers.get("Content-Type", "text/plain")
+            headers_sent = False
 
             if stream:
+                headers_sent = True
                 self.send_response(resp_status)
                 self.send_header("Content-Type", resp_ct)
                 self.send_header("Access-Control-Allow-Origin", "*")
@@ -312,6 +370,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     self._safe_write(b"0\r\n\r\n")
                 except Exception as e:
                     log.debug("Stream forwarding interrupted: %s", e)
+                    # Headers already sent — just terminate chunked encoding and close
+                    try:
+                        self._safe_write(b"0\r\n\r\n")
+                    except Exception:
+                        pass
             else:
                 resp_body = resp.read()
                 self.send_response(resp_status)
@@ -328,10 +391,17 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         except Exception as e:
             log.error("Error forwarding response: %s", e)
-            try:
-                self._send_json({"error": str(e)}, 502)
-            except Exception:
-                pass
+            if not headers_sent:
+                try:
+                    self._send_json({"error": str(e)}, 502)
+                except Exception:
+                    pass
+            else:
+                # Headers already sent (streaming mode) — just close
+                try:
+                    self._safe_write(b"0\r\n\r\n")
+                except Exception:
+                    pass
 
     def _handle_switch(self, pm):
         data = self._read_body()

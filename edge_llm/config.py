@@ -160,6 +160,11 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
         raw = yaml.safe_load(yaml_file.read_text())
         model_name = yaml_file.stem
 
+        # Skip empty or invalid YAML files
+        if raw is None:
+            log.warning("Skipping empty YAML: %s", yaml_file.name)
+            continue
+
         # Validate name matches filename
         if raw.get("name") != model_name:
             raise ValueError(
