@@ -1,7 +1,7 @@
 """
 edge_llm/dashboard.py — Self-contained web dashboard for EdgeLLM.
 
-v3.1.2: Larger fonts, balanced proportions, merged profile+services row.
+v4.0: GPU mode display, dynamic services, model-based switcher.
 """
 
 import json
@@ -15,7 +15,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EdgeLLM</title>
+<title>EdgeLLM v4.0</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
@@ -55,9 +55,9 @@ body {
   padding:5px 16px; border-radius:20px; font-size:13px; font-weight:600;
   transition:all 0.3s;
 }
-.badge.healthy { background:rgba(52,211,153,0.12); color:var(--green); }
-.badge.switching { background:rgba(251,191,36,0.12); color:var(--yellow); animation:bpulse 1.5s infinite; }
 .badge.idle { background:rgba(107,114,128,0.12); color:var(--muted); }
+.badge.exclusive { background:rgba(248,113,113,0.12); color:var(--red); }
+.badge.shared { background:rgba(52,211,153,0.12); color:var(--green); }
 .badge.error { background:rgba(248,113,113,0.12); color:var(--red); }
 @keyframes bpulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
 .hdr-r { font-size:13px; color:var(--muted); }
@@ -96,7 +96,7 @@ body {
 .m-detail { font-size:14px; color:var(--text2); font-variant-numeric:tabular-nums; }
 .m-detail strong { color:var(--text); font-weight:600; }
 
-/* ── Profile + Services (merged row) ── */
+/* ── GPU Mode + Services ── */
 .profile-row { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:20px; }
 .pf-left { display:flex; flex-direction:column; justify-content:center; }
 .pf-name { font-size:26px; font-weight:700; margin-bottom:4px; letter-spacing:-0.01em; }
@@ -108,12 +108,16 @@ body {
 }
 .svc-dot.on { background:var(--green); box-shadow:0 0 10px var(--green); }
 .svc-dot.off { background:var(--muted); opacity:0.35; }
-.svc-dot.load { background:var(--yellow); box-shadow:0 0 8px var(--yellow); animation:bpulse 1.5s infinite; }
 .svc-name { font-size:15px; font-weight:500; flex:1; }
 .svc-pid { font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums; }
+.svc-mode { font-size:11px; padding:2px 8px; border-radius:8px; font-weight:600; }
+.svc-mode.excl { background:rgba(248,113,113,0.1); color:var(--red); }
+.svc-mode.shrd { background:rgba(52,211,153,0.1); color:var(--green); }
 
 /* ── Switcher ── */
-.sw-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; }
+.sw-section { margin-bottom:8px; }
+.sw-section-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); margin-bottom:8px; }
+.sw-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:12px; margin-bottom:16px; }
 .sw-btn {
   background:var(--surface); border:1px solid var(--border);
   border-radius:12px; padding:16px 12px; cursor:pointer;
@@ -135,7 +139,6 @@ body {
 .sw-btn.loading { opacity:0.4; pointer-events:none; }
 .sw-nm { font-size:14px; font-weight:600; margin-bottom:5px; }
 .sw-ds { font-size:11px; color:var(--muted); line-height:1.4; }
-.sw-ct { font-size:12px; color:var(--yellow); margin-top:7px; }
 .sw-active-dot {
   position:absolute; top:8px; right:8px; width:6px; height:6px;
   border-radius:50%; background:var(--green); box-shadow:0 0 6px var(--green);
@@ -200,7 +203,7 @@ body {
     <h1>EdgeLLM</h1>
     <span class="badge idle" id="sBadge">空闲</span>
   </div>
-  <div class="hdr-r">5s · <span id="ts">-</span></div>
+  <div class="hdr-r">v4.0 · 5s · <span id="ts">-</span></div>
 </div>
 
 <!-- Metrics -->
@@ -242,27 +245,20 @@ body {
   </div>
 </div>
 
-<!-- Profile + Services (merged) -->
+<!-- GPU Mode + Services -->
 <div class="profile-row">
   <div class="card">
     <div class="pf-left">
-      <div class="clbl">当前 Profile</div>
+      <div class="clbl">GPU 模式</div>
       <div class="pf-name" id="pN">idle</div>
       <div class="pf-desc" id="pD">GPU 空闲</div>
     </div>
   </div>
   <div class="card">
     <div class="pf-right">
-      <div class="clbl">服务状态</div>
-      <div class="svc">
-        <span class="svc-dot off" id="vD"></span>
-        <span class="svc-name">vLLM</span>
-        <span class="svc-pid" id="vP">—</span>
-      </div>
-      <div class="svc">
-        <span class="svc-dot off" id="cD"></span>
-        <span class="svc-name">ComfyUI</span>
-        <span class="svc-pid" id="cP2">—</span>
+      <div class="clbl">活跃服务</div>
+      <div id="svcList">
+        <div style="padding:8px;text-align:center;color:var(--muted);font-size:13px">无</div>
       </div>
     </div>
   </div>
@@ -270,8 +266,8 @@ body {
 
 <!-- Switcher -->
 <div class="card" style="margin-bottom:20px">
-  <div class="clbl">切换 Profile</div>
-  <div class="sw-grid" id="swG"></div>
+  <div class="clbl">切换模型</div>
+  <div id="swArea"></div>
 </div>
 
 <!-- Actions -->
@@ -289,7 +285,7 @@ body {
 <div class="toast" id="toast"></div>
 
 <script>
-const C = 2 * Math.PI * 40; // ring circumference for r=40 → 251.3
+const C = 2 * Math.PI * 40;
 let sw = false;
 
 function toast(m, t) {
@@ -314,22 +310,36 @@ async function load() {
     j('/status'), j('/system').catch(() => ({})), j('/history').catch(() => [])
   ]);
 
-  // State badge
-  const bm = { healthy:'healthy', switching:'switching', idle:'idle', error:'error' };
-  const bl = { healthy:'运行中', switching:'切换中', idle:'空闲', error:'异常' };
+  // GPU mode badge
+  const modeMap = {
+    idle: { cls:'idle', label:'⚪ idle' },
+    exclusive: { cls:'exclusive', label:'🔒 exclusive' },
+    shared: { cls:'shared', label:'🔓 shared' }
+  };
+  const gm = s.gpu_mode || 'idle';
+  const modeInfo = modeMap[gm] || { cls:'idle', label:gm };
   const b = document.getElementById('sBadge');
-  b.textContent = bl[s.state] || s.state;
-  b.className = 'badge ' + (bm[s.state] || 'idle');
+  b.textContent = modeInfo.label;
+  b.className = 'badge ' + modeInfo.cls;
 
-  // Profile
-  document.getElementById('pN').textContent = s.profile;
-  document.getElementById('pD').textContent = s.description || '';
+  // GPU mode display
+  document.getElementById('pN').textContent = gm;
+  const descMap = { idle:'GPU 空闲', exclusive:'独占模式 — 单模型锁定 GPU', shared:'共享模式 — 多服务共存' };
+  document.getElementById('pD').textContent = descMap[gm] || '';
 
-  // Services
-  document.getElementById('vD').className = dotCls(s.vllm);
-  document.getElementById('cD').className = dotCls(s.comfyui);
-  document.getElementById('vP').textContent = s.vllm === '✅' ? 'PID ' + (s.vllm_pid || '?') : '—';
-  document.getElementById('cP2').textContent = s.comfyui === '✅' ? 'PID ' + (s.comfyui_pid || '?') : '—';
+  // Services (dynamic)
+  const svcList = document.getElementById('svcList');
+  const services = s.active_services || [];
+  const health = s.services_health || {};
+  if (services.length === 0) {
+    svcList.innerHTML = '<div style="padding:8px;text-align:center;color:var(--muted);font-size:13px">无活跃服务</div>';
+  } else {
+    svcList.innerHTML = services.map(name => {
+      const h = health[name] || '❌';
+      const dot = dotCls(h);
+      return '<div class="svc"><span class="' + dot + '"></span><span class="svc-name">' + name + '</span><span class="svc-pid">' + (h === '✅' ? '运行中' : h) + '</span></div>';
+    }).join('');
+  }
 
   // GPU
   const gt = s.gpu_total_mb || 32607, gu = s.gpu_used_mb || 0;
@@ -365,29 +375,62 @@ async function load() {
       const ts = t.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
       const d = h.duration != null ? h.duration.toFixed(1)+'s' : '-';
       const st = h.status==='ok' ? '<span class="hi-ok">✓</span>' : '<span class="hi-er">✗</span>';
-      return `<div class="hi"><span class="hi-fr">${h.from||'-'}</span><span class="hi-ar">→</span><span class="hi-to">${h.to}</span><span class="hi-du">${d}</span>${st}<span class="hi-tm">${ts}</span></div>`;
+      return '<div class="hi"><span class="hi-fr">' + (h.from||'-') + '</span><span class="hi-ar">→</span><span class="hi-to">' + h.to + '</span><span class="hi-du">' + d + '</span>' + st + '<span class="hi-tm">' + ts + '</span></div>';
     }).join('');
   }
 
   document.getElementById('ts').textContent = new Date().toLocaleTimeString();
 }
 
-async function loadProfiles() {
-  const ps = await j('/profiles');
-  const g = document.getElementById('swG');
-  g.innerHTML = '';
-  for (const p of ps) {
-    const b = document.createElement('div');
-    b.className = 'sw-btn' + (p.current ? ' active' : '');
-    b.id = 'sw-' + p.name;
-    b.innerHTML =
-      (p.current ? '<div class="sw-active-dot"></div>' : '') +
-      '<div class="sw-nm">' + p.name.replace(/_/g, ' ') + '</div>' +
-      '<div class="sw-ds">' + p.description + '</div>' +
-      '<div class="sw-ct">⏱ ~' + p.switch_cost_sec + 's</div>';
-    b.onclick = () => doSwitch(p.name);
-    g.appendChild(b);
+async function loadModels() {
+  const models = await j('/models');
+  const area = document.getElementById('swArea');
+
+  // Group by mode
+  const exclusive = models.filter(m => m.mode === 'exclusive');
+  const shared = models.filter(m => m.mode === 'shared');
+
+  let html = '';
+
+  // Idle button
+  html += '<div class="sw-grid">';
+  html += '<div class="sw-btn" id="sw-idle" onclick="doSwitch(\'idle\')">';
+  html += '<div class="sw-nm">⚪ idle</div>';
+  html += '<div class="sw-ds">释放 GPU</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // Exclusive models
+  if (exclusive.length > 0) {
+    html += '<div class="sw-section-label">🔒 独占模型</div>';
+    html += '<div class="sw-grid">';
+    for (const m of exclusive) {
+      const isActive = m.active;
+      html += '<div class="sw-btn' + (isActive ? ' active' : '') + '" id="sw-' + m.name + '" onclick="doSwitch(\'' + m.name + '\')">';
+      if (isActive) html += '<div class="sw-active-dot"></div>';
+      html += '<div class="sw-nm">' + m.name + '</div>';
+      html += '<div class="sw-ds">' + (m.description || '') + '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
   }
+
+  // Shared models
+  if (shared.length > 0) {
+    html += '<div class="sw-section-label">🔓 共享服务</div>';
+    html += '<div class="sw-grid">';
+    for (const m of shared) {
+      const isActive = m.active;
+      html += '<div class="sw-btn' + (isActive ? ' active' : '') + '" id="sw-' + m.name + '" onclick="doSwitch(\'' + m.name + '\')">';
+      if (isActive) html += '<div class="sw-active-dot"></div>';
+      html += '<div class="sw-nm">' + m.name + '</div>';
+      html += '<div class="sw-ds">' + (m.description || '') + '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  area.innerHTML = html;
 }
 
 async function doSwitch(n) {
@@ -396,11 +439,11 @@ async function doSwitch(n) {
   if (b) b.classList.add('loading');
   sw = true;
   try {
-    const r = await j('/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({profile:n}) });
+    const r = await j('/switch', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:n}) });
     if (r.status === 'switched') toast('✅ ' + n + ' (' + r.elapsed_sec + 's)', 'success');
     else if (r.status === 'already_active') toast('ℹ️ 已在 ' + n, 'success');
     else toast('❌ ' + (r.message || 'failed'), 'error');
-    await Promise.all([load(), loadProfiles()]);
+    await Promise.all([load(), loadModels()]);
   } catch(e) { toast('❌ ' + e.message, 'error'); }
   sw = false;
   document.querySelectorAll('.sw-btn').forEach(b => b.classList.remove('loading'));
@@ -408,20 +451,20 @@ async function doSwitch(n) {
 
 async function doReset() {
   if (!confirm('强制重置到 idle？')) return;
-  const r = await j('/reset', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({profile:'idle'}) });
+  const r = await j('/reset', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({}) });
   toast(r.status==='reset' ? '✅ 已重置' : '❌ '+(r.message||'fail'), r.status==='reset'?'success':'error');
-  await Promise.all([load(), loadProfiles()]);
+  await Promise.all([load(), loadModels()]);
 }
 
 async function doReconcile() {
   const r = await j('/reconcile', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({}) });
   const a = r.actions || [];
   toast(a.length===0 ? '✅ 状态一致' : '🔧 '+a.join('; '), 'success');
-  await Promise.all([load(), loadProfiles()]);
+  await Promise.all([load(), loadModels()]);
 }
 
-Promise.all([load(), loadProfiles()]);
-setInterval(() => { load(); loadProfiles(); }, 5000);
+Promise.all([load(), loadModels()]);
+setInterval(() => { load(); loadModels(); }, 5000);
 </script>
 </body>
 </html>"""
