@@ -14,7 +14,10 @@ import os
 import time
 import signal
 import shlex
+import json
 import logging
+import urllib.request
+import urllib.error
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -29,6 +32,7 @@ from .config import (
     STOP_SIGTERM_TIMEOUT,
     VLLMConfig,
     ComfyUIConfig,
+    SleepModeConfig,
 )
 from .state import StateDB
 from .health import wait_http, check_http_status, wait_gpu_free, gpu_used_mb
@@ -89,7 +93,19 @@ class ProcessManager:
 
         log.info("Starting vLLM cmd: %s", " ".join(cmd[:8]) + "...")
         env = dict(os.environ)
-        env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        # KV offloading conflicts with expandable_segments (NIXL/Mooncake IB memory)
+        has_kv_offload = "--kv-offloading-size" in " ".join(cmd)
+        if not has_kv_offload:
+            env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        else:
+            log.info("KV offloading detected — skipping expandable_segments for %s", cfg.served_name)
+
+        # Enable sleep mode if configured
+        if cfg.sleep_mode and cfg.sleep_mode.enabled:
+            env["VLLM_SERVER_DEV_MODE"] = "1"
+            cmd.append("--enable-sleep-mode")
+            log.info("Sleep mode enabled (L2) for %s", cfg.served_name)
+
         conda_bin = str(CONDA_ENVS / cfg.conda_env / "bin")
         env["PATH"] = conda_bin + ":" + env.get("PATH", "")
 
@@ -173,6 +189,7 @@ class ProcessManager:
                 self._set_vllm_pid(None)
                 self._cleanup_pid_files("vllm")
                 self._reap_zombies()
+                self._wait_gpu_idle()
                 return {"status": "ok", "message": f"terminated in {i + 1}s"}
             time.sleep(1)
 
@@ -187,16 +204,29 @@ class ProcessManager:
         self._set_vllm_pid(None)
         self._cleanup_pid_files("vllm")
         self._reap_zombies()
+        self._wait_gpu_idle()
         return {"status": "ok", "message": "killed (SIGKILL)"}
 
     def _pkill_vllm_fallback(self) -> dict:
         """Fallback: stop vLLM using pkill when no PID is tracked."""
-        for port in [8000, 8001, 8002]:
+        # Try to discover vLLM ports from known models.d configs
+        vllm_ports = []
+        try:
+            from .config import load_models
+            for m in load_models().values():
+                if m.vllm:
+                    vllm_ports.append(m.vllm.port)
+        except Exception:
+            pass
+        if not vllm_ports:
+            vllm_ports = [8000, 8001, 8002]  # fallback defaults
+
+        for port in vllm_ports:
             subprocess.run(["pkill", "-f", f"vllm.*{port}"], timeout=5, check=False, capture_output=True)
 
         time.sleep(3)
 
-        for port in [8000, 8001, 8002]:
+        for port in vllm_ports:
             subprocess.run(["pkill", "-9", "-f", f"vllm.*{port}"], timeout=5, check=False)
         subprocess.run(["pkill", "-9", "-f", "vllm serve"], timeout=5, check=False)
         subprocess.run(["pkill", "-9", "-f", "VLLM::EngineCore"], timeout=5, check=False)
@@ -204,6 +234,7 @@ class ProcessManager:
         time.sleep(2)
         self._cleanup_pid_files("vllm")
         self._reap_zombies()
+        self._wait_gpu_idle()
         return {"status": "ok", "message": "pkill fallback"}
 
     # ─── ComfyUI ─────────────────────────────────────────────────
@@ -351,6 +382,7 @@ class ProcessManager:
                 log.info("ComfyUI process group %d terminated gracefully in %ds", pgid, i + 1)
                 self._set_comfyui_pid(None)
                 self._cleanup_pid_files("comfyui")
+                self._wait_gpu_idle()
                 return {"status": "ok", "message": f"terminated in {i + 1}s"}
             time.sleep(1)
 
@@ -363,6 +395,7 @@ class ProcessManager:
         time.sleep(2)
         self._set_comfyui_pid(None)
         self._cleanup_pid_files("comfyui")
+        self._wait_gpu_idle()
         return {"status": "ok", "message": "killed (SIGKILL)"}
 
     def _stop_comfyui_script(self, cfg: ComfyUIConfig) -> dict:
@@ -388,6 +421,7 @@ class ProcessManager:
         time.sleep(1)
         self._set_comfyui_pid(None)
         self._cleanup_pid_files("comfyui")
+        self._wait_gpu_idle()
         return {"status": "ok", "message": "pkill fallback"}
 
     # ─── Combined Operations ─────────────────────────────────────
@@ -436,9 +470,53 @@ class ProcessManager:
         self._cleanup_pid_files("vllm")
         self._cleanup_pid_files("comfyui")
         self._reap_zombies()
+        self._wait_gpu_idle()
         return {"status": "ok"}
 
-    # ─── Health Checks ───────────────────────────────────────────
+    # ─── Health Checks/Sleep ─────────────────────────────────────
+
+    # ─── Sleep/Wake ────────────────────────────────────────────
+
+    def sleep_vllm(self, port: int) -> dict:
+        """Put vLLM server to L2 sleep (discard weights, free VRAM)."""
+        url = f"http://localhost:{port}/sleep?level=2"
+        log.info("Sleeping vLLM at port %d (L2)", port)
+        t0 = time.time()
+        try:
+            req = urllib.request.Request(url, method="POST")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                elapsed = round(time.time() - t0, 1)
+                log.info("vLLM sleep OK (port=%d, %.1fs)", port, elapsed)
+                return {"status": "ok", "port": port, "elapsed_sec": elapsed}
+        except urllib.error.HTTPError as e:
+            elapsed = round(time.time() - t0, 1)
+            log.error("vLLM sleep HTTP %d (port=%d): %s", e.code, port, e.reason)
+            return {"status": "error", "message": f"HTTP {e.code}: {e.reason}", "elapsed_sec": elapsed}
+        except Exception as e:
+            elapsed = round(time.time() - t0, 1)
+            log.error("vLLM sleep failed (port=%d): %s", port, e)
+            return {"status": "error", "message": str(e), "elapsed_sec": elapsed}
+
+    def wake_vllm(self, port: int) -> dict:
+        """L2 wake: kill sleeping process, then cold restart via switch.
+
+        vLLM 0.23.0 L2 sleep leaves the engine in an unrecoverable state
+        (wake_up CUDA invalid argument). We kill the sleeping process
+        and let the caller handle restart.
+        """
+        log.info("Killing sleeping vLLM at port %d for restart", port)
+        self.stop_vllm()
+        return {"status": "killed_for_restart", "port": port, "elapsed_sec": 0}
+
+    def is_sleeping(self, port: int) -> bool:
+        """Check if vLLM server is currently in sleep mode."""
+        try:
+            req = urllib.request.Request(f"http://localhost:{port}/is_sleeping")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return data.get("is_sleeping", False)
+        except Exception:
+            return False
 
     def is_vllm_alive(self, port: int) -> bool:
         """Check if vLLM process is still alive (by PID or HTTP)."""
@@ -462,6 +540,22 @@ class ProcessManager:
                 return False
         health_url = f"http://localhost:{port}/system_stats"
         return check_http_status(health_url) != "❌"
+
+    # ─── GPU Cleanup ─────────────────────────────────────────────
+
+    def _wait_gpu_idle(self, timeout: int = 60) -> dict:
+        """Wait for GPU to return to idle state after process exit.
+
+        When a CUDA process exits, its GPU memory is freed by the kernel.
+        This method verifies nvidia-smi shows idle before returning.
+        """
+        for _ in range(timeout):
+            used = gpu_used_mb()
+            if used is not None and used < 2048:  # <2GB = idle (系统基线~1GB + 余量)
+                log.info("GPU returned to idle (%d MB)", used)
+                return {"status": "ok", "used_mb": used}
+            time.sleep(1)
+        return {"status": "timeout", "message": "GPU did not return to idle"}
 
     # ─── Internal Helpers ────────────────────────────────────────
 

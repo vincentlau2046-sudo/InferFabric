@@ -52,6 +52,18 @@ class ProxyManager:
         self._switch_lock = threading.Lock()
         self._upstream_pool: dict[int, HTTPConnection] = {}
         self._pool_lock = threading.Lock()
+        self._cum = self._make_cum()
+
+    @staticmethod
+    def _make_cum():
+        return {"ttft_sum": 0.0, "ttft_n": 0,
+                "tput_sum": 0.0, "tput_n": 0,
+                "pt_sum": 0.0, "pt_n": 0,
+                "gt_sum": 0.0, "gt_n": 0}
+
+    def reset_cum(self):
+        """Reset cumulative accumulators (called after switch/reset)."""
+        self._cum = self._make_cum()
 
     @property
     def current(self) -> str:
@@ -116,23 +128,15 @@ class ProxyManager:
         return m.vllm.port if m and m.vllm else None
 
     def get_upstream(self, port: int) -> HTTPConnection:
-        """Get or create a keep-alive HTTPConnection to upstream."""
+        """Get or create a keep-alive HTTPConnection to upstream.
+
+        Uses lazy invalidation: return cached connection without probing.
+        If the connection fails during use, caller should invalidate_upstream().
+        """
         with self._pool_lock:
             conn = self._upstream_pool.get(port)
             if conn:
-                try:
-                    conn.request("GET", "/health")
-                    resp = conn.getresponse()
-                    resp.read()
-                    if resp.status in (200, 503):
-                        return conn
-                except Exception:
-                    pass
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-
+                return conn
             conn = HTTPConnection("127.0.0.1", port, timeout=300)
             self._upstream_pool[port] = conn
             return conn
@@ -206,7 +210,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         pm = self.proxy
         try:
-            if self.path == "/":
+            from urllib.parse import urlparse
+            path = urlparse(self.path).path
+            if path == "/":
                 self._serve_dashboard()
             elif self.path == "/health":
                 self._send_json({"status": "ok", "gpu_mode": pm.mgr.gpu_mode})
@@ -214,10 +220,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(pm.mgr.status())
             elif self.path in ("/models", "/profiles"):  # /profiles backward compat
                 self._send_json(pm.mgr.list_models())
+            elif self.path == "/v1/models":
+                self._handle_v1_models(pm)
             elif self.path == "/system":
                 self._send_json(self._system_info())
             elif self.path == "/history":
                 self._send_json(pm.mgr.state.get_history(limit=30))
+            elif path == "/vllm_metrics":
+                self._handle_vllm_metrics(pm)
             else:
                 self._send_json({"error": "not found"}, 404)
         except (BrokenPipeError, ConnectionResetError):
@@ -228,15 +238,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         pm = self.proxy
         try:
-            if self.path in ("/v1/chat/completions", "/v1/completions"):
+            from urllib.parse import urlparse
+            path = urlparse(self.path).path
+            if path in ("/v1/chat/completions", "/v1/completions"):
                 self._handle_chat(pm)
-            elif self.path == "/switch":
+            elif path == "/switch":
                 self._handle_switch(pm)
-            elif self.path == "/stop":
+            elif path == "/stop":
                 self._handle_stop(pm)
-            elif self.path == "/reset":
+            elif path == "/sleep":
+                self._handle_sleep(pm)
+            elif path == "/wake":
+                self._handle_wake(pm)
+            elif path == "/reset":
                 self._handle_reset(pm)
-            elif self.path == "/reconcile":
+            elif path == "/reconcile":
                 self._handle_reconcile(pm)
             else:
                 self._send_json({"error": "not found"}, 404)
@@ -267,6 +283,199 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self._safe_write(body)
+
+    def _handle_v1_models(self, pm):
+        """Forward /v1/models to active upstream vLLM.
+
+        In shared mode with multiple vLLM instances, aggregate models from all.
+        """
+        active = list(pm.mgr.active_services)
+        if not active:
+            models_d = pm.mgr.list_models()
+            self._send_json(models_d)
+            return
+
+        # Collect models from all active vLLM services
+        all_models = []
+        for svc in active:
+            model = pm.mgr.get_model(svc)
+            if not model or not model.vllm:
+                continue
+            port = model.vllm.port
+            try:
+                conn = HTTPConnection("127.0.0.1", port, timeout=10)
+                conn.request("GET", "/v1/models")
+                resp = conn.getresponse()
+                body = resp.read()
+                conn.close()
+                if resp.status == 200:
+                    data = json.loads(body)
+                    all_models.extend(data.get("data", []))
+            except Exception as e:
+                log.error("/v1/models forward failed for %s (port %d): %s", svc, port, e)
+
+        if all_models:
+            self._send_json({"object": "list", "data": all_models})
+        else:
+            self._send_json({"error": "no upstream available"}, 503)
+
+    def _handle_vllm_metrics(self, pm):
+        """Fetch and parse vLLM Prometheus /metrics endpoint."""
+        import urllib.request
+        import math
+        from urllib.parse import urlparse, parse_qs
+
+        qs = parse_qs(urlparse(self.path).query)
+        try:
+            port = int(qs.get("port", ["8000"])[0])
+        except (ValueError, IndexError):
+            self._send_json({"error": "invalid port"}, 400)
+            return
+
+        url = f"http://127.0.0.1:{port}/metrics"
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                text = resp.read().decode("utf-8")
+        except Exception as e:
+            self._send_json({"error": str(e)}, 502)
+            return
+
+        # Parse Prometheus text format
+        gauges, counters, histos = {}, {}, {}
+
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # Extract name and value
+            bracket = line.find("{")
+            if bracket >= 0:
+                name = line[:bracket]
+                close = line.rfind("}")
+                val_str = line[close+1:].strip() if close > bracket else ""
+            else:
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                name, val_str = parts[0], parts[1]
+
+            try:
+                val = float(val_str)
+            except ValueError:
+                continue
+
+            # Classify
+            if name.endswith("_bucket"):
+                base = name[:-7]
+                le_start = line.find('le="', bracket) if bracket >= 0 else -1
+                le_end = line.find('"', le_start + 4) if le_start >= 0 else -1
+                le_val = float(line[le_start+4:le_end]) if le_start >= 0 else math.inf
+                if base not in histos:
+                    histos[base] = {"buckets": [], "sum": 0.0, "count": 0}
+                histos[base]["buckets"].append((le_val, int(val)))
+            elif name.endswith("_sum"):
+                base = name[:-4]
+                if base not in histos:
+                    histos[base] = {"buckets": [], "sum": 0.0, "count": 0}
+                histos[base]["sum"] = val
+            elif name.endswith("_count"):
+                base = name[:-6]
+                if base not in histos:
+                    histos[base] = {"buckets": [], "sum": 0.0, "count": 0}
+                histos[base]["count"] = int(val)
+            elif "_total" in name:
+                counters[name.rsplit("_total", 1)[0]] = val
+            else:
+                gauges[name] = val
+
+        def _quantile(buckets, count, q):
+            if count == 0 or not buckets:
+                return None
+            target = count * q
+            sorted_bk = sorted(buckets, key=lambda x: x[0])
+            cum = 0
+            for i, (le, c) in enumerate(sorted_bk):
+                cum = c
+                if cum >= target:
+                    if i == 0:
+                        return le / 2
+                    prev_le, prev_c = sorted_bk[i - 1]
+                    if math.isfinite(le) and c > prev_c:
+                        return prev_le + (le - prev_le) * (target - prev_c) / (c - prev_c)
+                    return prev_le
+            return sorted_bk[-1][0]
+
+        result = {}
+
+        # Gauges
+        gauge_map = {
+            "vllm:kv_cache_usage_perc": ("kv_cache_usage_perc", lambda v: round(v * 100, 1)),
+            "vllm:num_requests_waiting": ("num_requests_waiting", int),
+            "vllm:num_requests_running": ("num_requests_running", int),
+            "vllm:engine_sleep_state": ("sleep_state", int),
+        }
+        for prom, (key, fn) in gauge_map.items():
+            v = gauges.get(prom)
+            if v is not None:
+                result[key] = fn(v)
+
+        # Counters
+        counter_map = {
+            "vllm:num_preemptions": "num_preemptions",
+            "vllm:prompt_tokens": "prompt_tokens",
+            "vllm:generation_tokens": "generation_tokens",
+        }
+        for prom, key in counter_map.items():
+            v = counters.get(prom)
+            if v is not None:
+                result[key] = int(v)
+
+        # TTFT histogram (cumulative since start)
+        # TTFT — running average of non-zero samples
+        h = histos.get("vllm:time_to_first_token_seconds")
+        if h and h["count"] > 0:
+            result["ttft_seconds"] = {
+                "p50": round(_quantile(h["buckets"], h["count"], 0.50), 3),
+                "p95": round(_quantile(h["buckets"], h["count"], 0.95), 3),
+                "mean": round(h["sum"] / h["count"], 3),
+                "count": h["count"],
+            }
+
+        # Running accumulators for cumulative averages (stored on pm)
+        if not hasattr(pm, "_cum"):
+            pm._cum = pm._make_cum()
+
+        cum = pm._cum
+        # TTFT cumulative average (use p50 as sample)
+        if h and h["count"] > 0:
+            sample = h["sum"] / h["count"]  # mean TTFT this snapshot
+            if sample > 0:
+                cum["ttft_sum"] += sample
+                cum["ttft_n"] += 1
+
+        # Throughput cumulative average
+        pt = result.get("prompt_tokens", 0)
+        gt = result.get("generation_tokens", 0)
+        if gt > 0:  # generation tokens > 0 means work is being done
+            # Calculate instant throughput from gauge values
+            total = pt + gt
+            cum["tput_sum"] += total
+            cum["tput_n"] += 1
+            cum["pt_sum"] += pt
+            cum["pt_n"] += 1
+            cum["gt_sum"] += gt
+            cum["gt_n"] += 1
+
+        if cum["tput_n"] > 0:
+            result["throughput_cum"] = round(cum["tput_sum"] / cum["tput_n"], 1)
+            result["prompt_tokens_cum"] = round(cum["pt_sum"] / cum["pt_n"], 1)
+            result["generation_tokens_cum"] = round(cum["gt_sum"] / cum["gt_n"], 1)
+            result["cum_n"] = cum["tput_n"]
+        if cum["ttft_n"] > 0:
+            result["ttft_cum_mean"] = round(cum["ttft_sum"] / cum["ttft_n"], 3)
+            result["ttft_cum_n"] = cum["ttft_n"]
+
+        self._send_json(result)
 
     def _system_info(self):
         info = {"cpu_percent": 0, "cpu_cores": os.cpu_count() or 1,
@@ -312,6 +521,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if data is None:
             return
 
+        # Enable Qwen3 thinking/reasoning mode by default.
+        # The --reasoning-parser qwen3 correctly splits output into
+        # reasoning + content fields when thinking is enabled.
+        # Only override when the caller explicitly sets enable_thinking.
+        if "chat_template_kwargs" not in data:
+            data["chat_template_kwargs"] = {}
+        if "enable_thinking" not in data.get("chat_template_kwargs", {}):
+            data["chat_template_kwargs"]["enable_thinking"] = True
+
         model = data.get("model", "vllm_qwen27b")
         stream = data.get("stream", False)
 
@@ -346,8 +564,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         try:
             resp_status = resp.status
-            resp_headers = dict(resp.getheaders())
-            resp_ct = resp_headers.get("Content-Type", "text/plain")
+            resp_headers = {k.lower(): v for k, v in resp.getheaders()}
+            resp_ct = resp_headers.get("content-type", "application/json")
             headers_sent = False
 
             if stream:
@@ -419,6 +637,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # Clear manual stop for target (user explicitly wants it)
             pm.mgr.state.clear_manual_stop(target)
         result = pm.mgr.switch(target)
+        # Reset cumulative accumulators after switch
+        pm.reset_cum()
         self._send_json(result)
 
     def _handle_stop(self, pm):
@@ -438,7 +658,30 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         for svc in list(pm.mgr.active_services):
             pm.mgr.state.record_manual_stop(svc)
         pm.mgr.force_reset()
+        pm.reset_cum()
         self._send_json({"status": "reset", "gpu_mode": GPUMode.IDLE})
+
+    def _handle_sleep(self, pm):
+        data = self._read_body()
+        if data is None:
+            return
+        target = data.get("model")
+        if not target:
+            self._send_json({"error": "Missing model"}, 400)
+            return
+        result = pm.mgr.sleep_model(target)
+        self._send_json(result)
+
+    def _handle_wake(self, pm):
+        data = self._read_body()
+        if data is None:
+            return
+        target = data.get("model")
+        if not target:
+            self._send_json({"error": "Missing model"}, 400)
+            return
+        result = pm.mgr.wake_model(target)
+        self._send_json(result)
 
     def _handle_reconcile(self, pm):
         result = pm.mgr.reconcile()

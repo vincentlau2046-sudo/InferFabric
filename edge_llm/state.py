@@ -117,6 +117,7 @@ class StateDB:
             c.execute("INSERT OR IGNORE INTO state VALUES ('active_services', '[]')")
             c.execute("INSERT OR IGNORE INTO state VALUES ('vllm_pid', '')")
             c.execute("INSERT OR IGNORE INTO state VALUES ('comfyui_pid', '')")
+            c.execute("INSERT OR IGNORE INTO state VALUES ('sleep_state', '{}')")
             c.commit()
             c.close()
 
@@ -216,6 +217,42 @@ class StateDB:
     def gpu_mode(self, mode: str):
         assert GPUMode.is_valid(mode), f"Invalid GPU mode: {mode}"
         self.set("gpu_mode", mode)
+
+    # ─── Sleep State ────────────────────────────────────────────
+
+    def get_sleep_state(self, model_name: str) -> Optional[str]:
+        """Get sleep state for a model: None=awake/untracked, 'l1', 'l2'."""
+        raw = self.get("sleep_state")
+        if not raw:
+            return None
+        try:
+            states = json.loads(raw)
+            return states.get(model_name)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    def set_sleep_state(self, model_name: str, level: Optional[int]):
+        """Set sleep state for a model. level=None clears sleep state (awake)."""
+        raw = self.get("sleep_state") or "{}"
+        try:
+            states = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            states = {}
+        if level is None:
+            states.pop(model_name, None)
+        else:
+            states[model_name] = f"l{level}"
+        self.set("sleep_state", json.dumps(states))
+
+    def get_all_sleep_states(self) -> dict[str, str]:
+        """Get all model sleep states."""
+        raw = self.get("sleep_state")
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
 
     # ─── History ────────────────────────────────────────────────
 

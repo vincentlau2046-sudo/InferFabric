@@ -16,7 +16,8 @@ echo "[$(date '+%H:%M:%S')] Starting recovery..."
 echo "[1/6] Stopping via edge-llm..."
 edge-llm reset idle 2>/dev/null || {
     # Fallback to old scripts if edge-llm not installed
-    ~/edge_llm/scripts/switch_vllm.sh stop 2>/dev/null || true
+    # switch_vllm.sh 已废弃
+    edge-llm switch idle 2>/dev/null || true
     ~/edge_llm/scripts/switch_comfyui.sh stop 2>/dev/null || true
 }
 sleep 2
@@ -102,4 +103,4 @@ echo ""
 echo "Available commands:"
 echo "  edge-llm switch qw36_full    # Start Qwen3.6"
 echo "  edge-llm reconcile           # Fix DB vs reality"
-echo "  ~/edge_llm/scripts/switch_vllm.sh qw36  # Bash fallback"
+echo "  edge-llm switch qwen36-27b  # edge-llm CLI"

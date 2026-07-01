@@ -10,7 +10,9 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import yaml
+import logging
 
+log = logging.getLogger("edge_llm")
 
 # ─── Path Constants ──────────────────────────────────────────────
 
@@ -40,6 +42,15 @@ GPU_FREE_THRESHOLD_MB = 2048    # MB below which GPU is considered "free"
 # ─── Data Classes ────────────────────────────────────────────────
 
 @dataclass
+class SleepModeConfig:
+    """vLLM sleep mode (L2 only: discard weights, wake needs reload 3-6s).
+
+    Requires VLLM_SERVER_DEV_MODE=1 + --enable-sleep-mode at startup.
+    """
+    enabled: bool = False
+
+
+@dataclass
 class VLLMConfig:
     model_dir: str
     served_name: str
@@ -51,6 +62,7 @@ class VLLMConfig:
     kv_cache_dtype: str
     speculative_config: Optional[str] = None
     extra_flags: str = ""
+    sleep_mode: Optional[SleepModeConfig] = None
 
     def build_cmd(self) -> list[str]:
         """Build vLLM command. JSON args stay as single elements."""
@@ -178,7 +190,15 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
         # Parse vllm config if present
         vllm_cfg = None
         if raw.get("vllm"):
-            vllm_cfg = VLLMConfig(**raw["vllm"])
+            vllm_raw = dict(raw["vllm"])
+            # Extract sleep_mode sub-config before passing to VLLMConfig
+            sleep_cfg = None
+            if "sleep_mode" in vllm_raw:
+                sleep_raw = vllm_raw.pop("sleep_mode")
+                if sleep_raw and sleep_raw.get("enabled"):
+                    sleep_cfg = SleepModeConfig(**sleep_raw)
+            vllm_cfg = VLLMConfig(**vllm_raw)
+            vllm_cfg.sleep_mode = sleep_cfg
 
         # Parse comfyui config if present
         comfy_cfg = None

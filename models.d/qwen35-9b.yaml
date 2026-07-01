@@ -8,7 +8,7 @@ vllm:
   port: 8002
   conda_env: qw35-9b-vllm
   max_model_len: 128000
-  gpu_memory_utilization: 0.4
+  gpu_memory_utilization: 0.40
   max_num_seqs: 4
   kv_cache_dtype: fp8
   extra_flags: >-

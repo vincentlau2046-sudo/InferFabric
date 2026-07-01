@@ -20,9 +20,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <style>
 :root {
   --blue:    #0A84FF; --blue-s:  rgba(10,132,255,.10); --blue-g: linear-gradient(135deg,#5AC8FA,#0A84FF);
-  --green:   #30D158; --green-s: rgba(48,209,88,.10);  --green-g: linear-gradient(135deg,#63E6BE,#30D158);
-  --red:     #FF453A; --red-s:   rgba(255,69,58,.10);  --red-g:  linear-gradient(135deg,#FF6B6B,#FF453A);
-  --orange:  #FF9F0A; --orange-s:rgba(255,159,10,.10); --orange-g:linear-gradient(135deg,#FFD60A,#FF9F0A);
+  --green:   #30D158; --green-s: rgba(48,209,88,.15);  --green-g: linear-gradient(135deg,#63E6BE,#30D158);
+  --red:     #FF453A; --red-s:   rgba(255,69,58,.15);  --red-g:  linear-gradient(135deg,#FF6B6B,#FF453A);
+  --orange:  #FF9F0A; --orange-s:rgba(255,159,10,.15); --orange-g:linear-gradient(135deg,#FFD60A,#FF9F0A);
   --purple:  #BF5AF2; --purple-s:rgba(191,90,242,.10); --purple-g:linear-gradient(135deg,#DA8FFF,#BF5AF2);
   --teal:    #64D2FF;
   --text1:   #1C1C1E; --text2: #48484A; --text3: #8E8E93; --text4: #C7C7CC;
@@ -207,6 +207,55 @@ body {
 .idle-card-icon { font-size:18px; }
 .idle-card-text { font-size:14px; font-weight:500; color:var(--text3); }
 
+/* ── vLLM Perf Panel ── */
+.perf-panel {
+  background:var(--card); border-radius:var(--radius);
+  border:1px solid var(--border); box-shadow:var(--shadow);
+  padding:18px 20px; margin-bottom:18px; transition:box-shadow .2s;
+}
+.perf-panel:hover { box-shadow:0 4px 16px rgba(0,0,0,.06); }
+.perf-panel.sleeping { opacity:.5; }
+.perf-hdr {
+  display:flex; align-items:center; gap:10px; margin-bottom:14px;
+}
+.perf-refresh { font-size:11px; color:var(--text3); margin-left:auto; }
+.perf-sleep-badge {
+  padding:3px 10px; border-radius:8px;
+  font-size:11px; font-weight:600; color:var(--purple);
+  background:var(--purple-s); display:none;
+}
+.perf-cards {
+  display:grid; grid-template-columns:repeat(5,1fr); gap:10px;
+}
+.perf-card {
+  background:var(--green-s); border-radius:10px; padding:12px 14px;
+  display:flex; flex-direction:column; gap:6px;
+  transition:all .3s; position:relative;
+}
+.perf-card.warn { background:rgba(255,159,10,.15); }
+.perf-card.crit { background:var(--red-s); }
+.perf-label { font-size:15px; font-weight:700; color:var(--text2); letter-spacing:.02em; text-transform:uppercase; }
+.perf-card.crit .perf-label { color:var(--red); }
+.perf-main { font-size:28px; font-weight:700; letter-spacing:-.03em; color:var(--green); line-height:1; }
+.perf-card.crit .perf-main { color:var(--red); }
+.perf-card.warn .perf-main { color:var(--orange); }
+.perf-sub { font-size:13px; color:var(--text2); font-weight:500; }
+.perf-tip { display:none; position:absolute; bottom:calc(100% + 6px); left:0; right:0;
+  background:var(--text1); color:var(--card); font-size:11px; line-height:1.4;
+  padding:6px 10px; border-radius:8px; z-index:10; pointer-events:none;
+  box-shadow:0 4px 12px rgba(0,0,0,.15); text-align:center;
+  text-transform:none; letter-spacing:0; }
+.perf-card:hover .perf-tip { display:block; }
+.perf-bar { height:4px; border-radius:2px; background:rgba(0,0,0,.08); overflow:hidden; margin-top:2px; }
+.perf-bar-f {
+  height:100%; border-radius:2px; background:var(--green);
+  transition:width .6s cubic-bezier(.4,0,.2,1), background .4s;
+}
+.perf-bar-f.warn { background:var(--orange); }
+.perf-bar-f.crit { background:var(--red); }
+@media (max-width:900px) { .perf-cards { grid-template-columns:repeat(3,1fr); } }
+@media (max-width:600px) { .perf-cards { grid-template-columns:repeat(2,1fr); } }
+
 /* ── Action Row ── */
 .act-row { display:flex; gap:8px; margin-bottom:18px; }
 .act-btn {
@@ -327,14 +376,50 @@ body {
     </div>
   </div>
 
-  <!-- Active Services -->
-  <div class="panel" id="svcCard" style="margin-bottom:18px;padding:16px 20px">
-    <div style="display:flex;align-items:center;gap:10px">
-      <div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(10,132,255,.2)">📡</div>
-      <span class="panel-title">活跃服务</span>
-      <div id="svcChips" style="display:flex;gap:8px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end"></div>
+  <!-- vLLM Perf Panel -->
+  <div class="perf-panel" id="perfPanel" style="display:none">
+    <div class="perf-hdr">
+      <div class="panel-icon" style="background:var(--teal);box-shadow:0 2px 6px rgba(100,210,255,.2)">📊</div>
+      <span class="panel-title" id="perfTitle">vLLM 性能</span>
+      <span class="perf-sleep-badge" id="sleepBadge">休眠中</span>
+      <span class="perf-refresh">刷新 60s</span>
+    </div>
+    <div class="perf-cards">
+      <div class="perf-card" id="pcKv">
+        <span class="perf-label">KV Cache</span>
+        <span class="perf-tip">GPU KV 缓存占用率。>90% 容易触发抢占，导致延迟飙升</span>
+        <span class="perf-main" id="kvVal">—</span>
+        <div class="perf-bar"><div class="perf-bar-f" id="kvBar" style="width:0"></div></div>
+      </div>
+      <div class="perf-card" id="pcWait">
+        <span class="perf-label">Waiting</span>
+        <span class="perf-tip">排队中的请求数。0 表示无积压</span>
+        <span class="perf-main" id="wVal">—</span>
+        <span class="perf-sub" id="wSub"></span>
+      </div>
+      <div class="perf-card" id="pcPreempt">
+        <span class="perf-label">Preempt</span>
+        <span class="perf-tip">显存不足时强制驱逐已加载请求的次数（累计）。0 表示显存充足，>0 说明显存压力大</span>
+        <span class="perf-main" id="pVal">—</span>
+        <span class="perf-sub">cumulative</span>
+      </div>
+      <div class="perf-card" id="pcTtft">
+        <span class="perf-label">TTFT</span>
+        <span class="perf-tip">Time to First Token。从发送请求到收到第一个字的延迟（秒）。<1s 优秀</span>
+        <span class="perf-main" id="tfVal">—</span>
+        <span class="perf-sub" id="tfSub"></span>
+      </div>
+      <div class="perf-card" id="pcTput">
+        <span class="perf-label">Throughput</span>
+        <span class="perf-tip">每秒处理的总 Token 数（Prompt + Generation）。越高越好，反映 GPU 整体吞吐</span>
+        <span class="perf-main" id="tpVal">—</span>
+        <span class="perf-sub" id="tpSub"></span>
+      </div>
     </div>
   </div>
+
+  <!-- Active Services -->
+  <div class="panel" id="svcCard" style="margin-bottom:18px;padding:16px 20px;min-height:40px"></div>
 
   <!-- Model Panels -->
   <div class="panels">
@@ -354,7 +439,7 @@ body {
     </div>
   </div>
 
-  <!-- Actions -->
+  </div>
   <div class="act-row">
     <button class="act-btn pri" onclick="doSwitch('idle')">释放 GPU</button>
     <button class="act-btn sec" onclick="doReconcile()">Reconcile</button>
@@ -377,7 +462,13 @@ body {
 <div class="toast" id="toast"></div>
 
 <script>
-let sw = false;
+let sw = false, swT = 0;
+function swLock() {
+  // Safety: force-unlock after 30s to prevent permanent deadlock
+  if(sw && Date.now()-swT>30000) { console.warn('sw lock forced unlock after 30s'); sw=false; }
+  if(sw) return false;
+  sw=true; swT=Date.now(); return true;
+}
 function toast(m,t) {
   const e=document.getElementById('toast');
   e.textContent=m; e.className='toast '+t+' show';
@@ -429,81 +520,215 @@ async function load() {
 
   document.getElementById('ts').textContent=new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
 
-  // Active services chips
-  const svcChips=document.getElementById('svcChips');
+  // vLLM metrics: detect active vLLM service from services_info
+  const svcInfo=s.services_info||{};
+  let vPort=null, vName=null;
+  for(const n of (s.active_services||[])){
+    const info=svcInfo[n]||{};
+    if(info.type==='vllm'&&info.port){ vPort=info.port; vName=n; break; }
+  }
+  if(vPort){
+    clearInterval(vllmTimer);
+    loadVllmMetrics(vPort,vName);
+    vllmTimer=setInterval(()=>loadVllmMetrics(vPort,vName),60000);
+  }else{
+    document.getElementById('perfPanel').style.display='none';
+    clearInterval(vllmTimer);
+    vllmTimer=null;
+  }
+
+  // Active services row layout
   const svcs=s.active_services||[];
   const health=s.services_health||{};
-  if(svcs.length===0){ svcChips.innerHTML='<span class="svc-empty">无活跃服务</span>'; }
-  else{ svcChips.innerHTML=svcs.map(n=>{
-    const h=health[n]||'❌';
-    const cls=h==='✅'?'svc-chip active':'svc-chip inactive';
-    return '<span class="'+cls+'"><span class="chip-dot"></span>'+n+'</span>';
-  }).join(''); }
+  const sInfo=s.services_info||{};
+  const svcCard=document.getElementById('svcCard');
+  let svcHtml='<div style="display:flex;align-items:center;gap:10px;margin-bottom:'+(svcs.length?12:0)+'px"><div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(10,132,255,.2)">📡</div><span class="panel-title">活跃服务</span></div>';
+  if(svcs.length===0){
+    svcHtml+='<span class="svc-empty">无活跃服务</span>';
+  }else{
+    for(const n of svcs){
+      const h=health[n]||"❌";
+      const ok=h==='✅';
+      const info=sInfo[n]||{};
+      const port=info.port||'—';
+      const mode=info.mode||'?';
+      const modeTag=mode==='exclusive'?'<span class="model-badge excl" style="padding:2px 8px;font-size:10px">独占</span>':'<span class="model-badge shrd" style="padding:2px 8px;font-size:10px">共享</span>';
+      const sleepMatch=h.match(/sleeping [A-Z0-9]+/);
+      const sleepLabel=sleepMatch?' <span style="color:var(--purple);font-size:11px;font-weight:500">⏸ '+sleepMatch[0]+'</span>':'';
+      svcHtml+='<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--bg)">';
+      svcHtml+='<span style="color:'+(ok?'var(--green)':'var(--red)')+';font-size:16px">'+(ok?'✓':'✗')+'</span>';
+      svcHtml+='<span style="flex:1;font-size:14px;font-weight:600;color:var(--text1)">'+n+'</span>';
+      svcHtml+='<span style="font-size:12px;color:var(--text3);font-variant-numeric:tabular-nums">:'+port+'</span>';
+      svcHtml+=modeTag+sleepLabel+'</div>';
+    }
+  }
+  svcCard.innerHTML=svcHtml;
+}
+
+// ── vLLM Performance ──
+let _tput={pt:0,gt:0,ts:0};
+let vllmTimer=null;
+
+async function loadVllmMetrics(port,modelName) {
+  const panel=document.getElementById('perfPanel');
+  try {
+    const m=await j('/vllm_metrics?port='+port);
+    if(m.error){ panel.style.display='none'; return; }
+    panel.style.display='';
+    document.getElementById('perfTitle').textContent=modelName+' 性能';
+
+    const sleeping=m.sleep_state===1;
+    panel.className='perf-panel'+(sleeping?' sleeping':'');
+    document.getElementById('sleepBadge').style.display=sleeping?'inline-block':'none';
+
+    // KV Cache
+    const kv=m.kv_cache_usage_perc??0;
+    const kvCls=kv>90?'crit':kv>70?'warn':'';
+    document.getElementById('kvVal').textContent=kv.toFixed(1)+'%';
+    document.getElementById('kvBar').style.width=kv.toFixed(1)+'%';
+    document.getElementById('kvBar').className='perf-bar-f'+(kvCls?' '+kvCls:'');
+    document.getElementById('pcKv').className='perf-card'+(kvCls?' '+kvCls:'');
+
+    // Waiting
+    const w=m.num_requests_waiting??0;
+    const r=m.num_requests_running??0;
+    document.getElementById('wVal').textContent=w;
+    document.getElementById('wSub').textContent=r+' 执行中';
+    document.getElementById('pcWait').className='perf-card'+(w>0?' warn':'');
+
+    // Preemptions
+    const pre=m.num_preemptions??0;
+    document.getElementById('pVal').textContent=pre;
+    document.getElementById('pcPreempt').className='perf-card'+(pre>0?' crit':'');
+
+    // TTFT — 运行期间平均值 (排除零值)
+    const tf=m.ttft_seconds||{};
+    if(m.ttft_cum_mean!=null) {
+      document.getElementById('tfVal').textContent=m.ttft_cum_mean.toFixed(2)+'s';
+      document.getElementById('tfSub').textContent='累计 '+m.ttft_cum_n+' 次 | P50 '+tf.p50?.toFixed(2)+'s | P95 '+tf.p95?.toFixed(2)+'s';
+    } else if(tf.mean!=null) {
+      document.getElementById('tfVal').textContent=tf.mean.toFixed(2)+'s';
+      document.getElementById('tfSub').textContent='P50 '+tf.p50?.toFixed(2)+'s | P95 '+tf.p95?.toFixed(2)+'s | '+tf.count+' 次';
+    } else {
+      document.getElementById('tfVal').textContent='—';
+      document.getElementById('tfSub').textContent='';
+    }
+
+    // Throughput — 运行期间平均值 (排除零值)
+    if(m.throughput_cum!=null) {
+      document.getElementById('tpVal').textContent=m.throughput_cum.toLocaleString();
+      document.getElementById('tpSub').textContent='P '+m.prompt_tokens_cum?.toLocaleString()+' G '+m.generation_tokens_cum?.toLocaleString()+' t/s (累计 '+m.cum_n+' 次)';
+    } else {
+      document.getElementById('tpVal').textContent='—';
+      document.getElementById('tpSub').textContent='';
+    }
+  }catch(e){ panel.style.display='none'; }
 }
 
 async function loadModels() {
-  const models=await j('/models');
+  const [models, st] = await Promise.all([j('/models'), j('/status')]);
   const excl=models.filter(m=>m.mode==='exclusive');
   const shrd=models.filter(m=>m.mode==='shared');
+  const sleepSt=st.sleep_states||{};
+  const svcInfo=st.services_info||{};
 
-  // Exclusive
-  const eList=document.getElementById('exclList');
-  let eh='';
-  for(const m of excl){
-    const a=m.active;
-    eh+='<div class="model-card'+(a?' active':'')+'" id="sw-'+m.name+'" onclick="doSwitch(\''+m.name+'\')">';
-    eh+='<div class="model-top">';
-    if(a) eh+='<div class="model-dot"></div>';
-    else eh+='<div class="model-dot"></div>';
-    eh+='<div class="model-info"><div class="model-name">'+m.name+'</div><div class="model-desc">'+(m.description||'')+'</div></div>';
-    eh+='<span class="model-badge excl">独占</span>';
-    eh+='</div>';
-    eh+='<div class="model-actions">';
-    eh+='<button class="btn-card start"'+(a?' disabled':'')+' onclick="event.stopPropagation();doSwitch(\''+m.name+'\')">切换</button>';
-    eh+='</div></div>';
-  }
-  eList.innerHTML=eh;
+  function renderCard(m, modeBadge) {
+    const isVllm=m.type==='vllm';
+    const info=svcInfo[m.name]||{};
+    const port=info.port||'—';
+    const sleeping=!!sleepSt[m.name];
+    const active=m.active&&!sleeping;
+    const cls='model-card'+(active?' active':'');
 
-  // Shared
-  const sList=document.getElementById('shrdList');
-  let sh='';
-  for(const m of shrd){
-    const a=m.active;
-    sh+='<div class="model-card'+(a?' active':'')+'" id="sw-'+m.name+'">';
-    sh+='<div class="model-top">';
-    sh+='<div class="model-dot"></div>';
-    sh+='<div class="model-info"><div class="model-name">'+m.name+'</div><div class="model-desc">'+(m.description||'')+'</div></div>';
-    sh+='<span class="model-badge shrd">共享</span>';
-    sh+='</div>';
-    sh+='<div class="model-actions">';
-    sh+='<button class="btn-card stop"'+(a?'':' disabled')+' onclick="event.stopPropagation();doStop(\''+m.name+'\')">停止</button>';
-    sh+='<button class="btn-card start"'+(a?' disabled':'')+' onclick="event.stopPropagation();doSwitch(\''+m.name+'\')">启动</button>';
-    sh+='</div></div>';
+    let statusLine='<span style="color:var(--text4);font-size:12px">○ stopped</span>';
+    if(active) statusLine='<span style="color:var(--green);font-size:12px;font-weight:600">✅ running</span>';
+    else if(sleeping) statusLine='<span style="color:var(--purple);font-size:12px;font-weight:600">⏸ sleeping</span>';
+
+    let btns='';
+    if(active){
+      btns+='<button class="btn-card stop" onclick="event.stopPropagation();doRelease(\''+m.name+'\','+(m.mode==='exclusive')+')">释放</button>';
+      if(isVllm) btns+='<button class="btn-card start" onclick="event.stopPropagation();doSleep(\''+m.name+'\')">休眠</button>';
+    }else if(sleeping){
+      btns+='<button class="btn-card stop" onclick="event.stopPropagation();doRelease(\''+m.name+'\','+(m.mode==='exclusive')+')">释放</button>';
+      if(isVllm) btns+='<button class="btn-card start" onclick="event.stopPropagation();doWake(\''+m.name+'\')">唤醒</button>';
+    }else{
+      btns+='<button class="btn-card start" onclick="event.stopPropagation();doSwitch(\''+m.name+'\')">启动</button>';
+    }
+
+    return '<div class="'+cls+'" id="sw-'+m.name+'">'+
+      '<div class="model-top">'+
+        '<div class="model-dot"></div>'+
+        '<div class="model-info"><div class="model-name">'+m.name+'</div>'+
+          '<div style="font-size:11px;color:var(--text3);margin-top:3px">'+statusLine+' <span style="margin-left:6px;font-variant-numeric:tabular-nums;color:var(--text4)">:'+port+'</span></div>'+
+        '</div>'+
+        '<span class="model-badge '+modeBadge+'">'+modeBadge+'</span>'+
+      '</div>'+
+      '<div class="model-actions">'+btns+'</div>'+
+    '</div>';
   }
-  sList.innerHTML=sh;
+
+  document.getElementById('exclList').innerHTML=excl.map(m=>renderCard(m,'excl')).join('');
+  document.getElementById('shrdList').innerHTML=shrd.map(m=>renderCard(m,'shrd')).join('');
+}
+
+async function doRelease(n,isExcl) {
+  if(!swLock())return;
+  try{
+    const r=isExcl
+      ? await j('/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'idle'})})
+      : await j('/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:n})});
+    if(r.status==='switched'||r.status==='stopped') toast(n+' 已释放','ok');
+    else toast(r.message||'失败','err');
+  }catch(e){toast(e.message,'err');}
+  finally{sw=false;}
+  await Promise.all([load(),loadModels()]);
+}
+
+async function doSleep(n) {
+  if(!swLock())return;
+  try{
+    const r=await j('/sleep',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:n})});
+    if(r.status==='ok') toast(n+' 休眠 ✓','ok');
+    else if(r.status==='already_sleeping') toast(n+' 已在休眠','info');
+    else toast(r.message||'失败','err');
+  }catch(e){toast(e.message,'err');}
+  finally{sw=false;}
+  await Promise.all([load(),loadModels()]);
+}
+
+async function doWake(n) {
+  if(!swLock())return;
+  try{
+    const r=await j('/wake',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:n})});
+    if(r.status==='ok') toast(n+' 已唤醒 ✓','ok');
+    else if(r.status==='already_awake') toast(n+' 未休眠','info');
+    else toast(r.message||'失败','err');
+  }catch(e){toast(e.message,'err');}
+  finally{sw=false;}
+  await Promise.all([load(),loadModels()]);
 }
 
 async function doSwitch(n) {
-  if(sw)return; sw=true;
+  if(!swLock())return;
   try{
     const r=await j('/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:n})});
     if(r.status==='switched') toast(n+' ✓ '+r.elapsed_sec+'s','ok');
     else if(r.status==='already_active') toast('已在 '+n,'info');
     else toast(r.message||'失败','err');
   }catch(e){toast(e.message,'err');}
-  sw=false;
+  finally{sw=false;}
   await Promise.all([load(),loadModels()]);
 }
 
 async function doStop(n) {
-  if(sw)return; sw=true;
+  if(!swLock())return;
   try{
     const r=await j('/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:n})});
     if(r.status==='stopped') toast(n+' 已停止','ok');
     else if(r.status==='already_stopped') toast(n+' 未运行','info');
     else toast(r.message||'停止失败','err');
   }catch(e){toast(e.message,'err');}
-  sw=false;
+  finally{sw=false;}
   await Promise.all([load(),loadModels()]);
 }
 

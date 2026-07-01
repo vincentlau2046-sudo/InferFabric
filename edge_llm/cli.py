@@ -7,6 +7,8 @@ Usage:
   edge-llm models              List available models from models.d/
   edge-llm switch <model>      Switch to a model (enforces tri-state rules)
   edge-llm stop <model>        Stop a single shared service
+  edge-llm sleep <model>           Put a running vLLM model to L2 sleep
+  edge-llm wake <model>                Wake a sleeping vLLM model
   edge-llm history             Show switch history
   edge-llm reset               Force reset to idle
   edge-llm reconcile           Fix DB vs actual state inconsistencies
@@ -206,6 +208,64 @@ def cmd_reconcile(args):
         print("  ✓ State is consistent")
 
 
+def cmd_sleep(args):
+    if not args:
+        print("Usage: edge-llm sleep <model_name>")
+        print("\nPut a running vLLM model to sleep (L2: discard weights, wake ~3-6s).")
+        sys.exit(1)
+
+    target = args[0]
+    mgr = ModelManager()
+    model = mgr.get_model(target)
+    if not model:
+        print(f"❌ Unknown model: {target}")
+        sys.exit(1)
+
+    print(f"Sleeping '{target}'...")
+
+    result = mgr.sleep_model(target)
+
+    if result["status"] == "ok":
+        elapsed = result.get("elapsed_sec", 0)
+        # Check GPU mode change
+        gpu_info = ""
+        if result.get("gpu_mode"):
+            gpu_info = f", GPU={result['gpu_mode']}"
+        print(f"✅ '{target}' sleeping ({elapsed:.1f}s)" + gpu_info)
+    elif result["status"] == "already_sleeping":
+        print(f"Already sleeping: {target}")
+    else:
+        print(f"❌ {result['message']}")
+        sys.exit(1)
+
+
+def cmd_wake(args):
+    if not args:
+        print("Usage: edge-llm wake <model_name>")
+        print("\nWake a sleeping vLLM model. Exclusive models require GPU=idle.")
+        sys.exit(1)
+
+    target = args[0]
+    mgr = ModelManager()
+    model = mgr.get_model(target)
+    if not model:
+        print(f"❌ Unknown model: {target}")
+        sys.exit(1)
+
+    print(f"Waking '{target}'...")
+
+    result = mgr.wake_model(target)
+
+    if result["status"] == "ok":
+        elapsed = result.get("elapsed_sec", 0)
+        print(f"✅ '{target}' awake ({elapsed:.1f}s)")
+    elif result["status"] == "already_awake":
+        print(f"Already awake: {target}")
+    else:
+        print(f"❌ {result['message']}")
+        sys.exit(1)
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__.strip())
@@ -222,6 +282,10 @@ def main():
         cmd_switch(rest)
     elif cmd == "stop":
         cmd_stop(rest)
+    elif cmd == "sleep":
+        cmd_sleep(rest)
+    elif cmd == "wake":
+        cmd_wake(rest)
     elif cmd == "history":
         cmd_history(rest)
     elif cmd == "reset":
@@ -230,7 +294,7 @@ def main():
         cmd_reconcile(rest)
     else:
         print(f"Unknown command: {cmd}")
-        print("Available: status, models, switch, stop, history, reset, reconcile")
+        print("Available: status, models, switch, stop, sleep, wake, history, reset, reconcile")
         sys.exit(1)
 
 

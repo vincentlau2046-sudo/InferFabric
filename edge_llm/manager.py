@@ -281,8 +281,14 @@ class ModelManager:
         log.info("Switch to idle from %s (gpu_mode=%s)", from_services, current_mode)
 
         try:
-            # Stop all services
-            self._proc.stop_all()
+            # Stop all services (pass ComfyUI config for proper native stop)
+            comfyui_cfg = None
+            for svc_name in from_services:
+                m = self._models.get(svc_name)
+                if m and m.is_comfyui:
+                    comfyui_cfg = m.comfyui
+                    break
+            self._proc.stop_all(comfyui_cfg=comfyui_cfg)
             if not wait_gpu_free():
                 self._proc.force_kill_all()
                 if not wait_gpu_free(timeout=15):
@@ -381,8 +387,14 @@ class ModelManager:
 
         log.info("Shared add: %s → %s", current_services, target_services)
 
-        # V1: stop all, then start all
-        self._proc.stop_all()
+        # V1: stop all, then start all (pass ComfyUI config for proper native stop)
+        comfyui_cfg = None
+        for svc_name in current_services:
+            m = self._models.get(svc_name)
+            if m and m.is_comfyui:
+                comfyui_cfg = m.comfyui
+                break
+        self._proc.stop_all(comfyui_cfg=comfyui_cfg)
         if not wait_gpu_free(timeout=15):
             self._proc.force_kill_all()
             wait_gpu_free(timeout=10)
@@ -449,7 +461,7 @@ class ModelManager:
         if model.is_vllm:
             self._proc.stop_vllm()
         elif model.is_comfyui:
-            self._proc.stop_comfyui()
+            self._proc.stop_comfyui_with_config(model.comfyui)
 
         # Update active services
         remaining = [s for s in self.active_services if s != name]
@@ -475,25 +487,164 @@ class ModelManager:
             "remaining": remaining,
         }
 
+    # ── Sleep / Wake (L2 only) ─────────────────────────────────
+
+    def sleep_model(self, name: str) -> dict:
+        """Put a running vLLM model to L2 sleep.
+
+        Rules:
+        - Only one model may sleep at a time.
+        - Exclusive model sleeping → GPU transitions to idle (VRAM freed).
+        - Shared model sleeping → GPU stays shared (other services unaffected).
+        """
+        if name not in self.active_services:
+            return {"status": "error", "message": f"Model '{name}' is not running"}
+
+        model = self._models.get(name)
+        if not model:
+            return {"status": "error", "message": f"Unknown model: {name}"}
+        if not model.is_vllm:
+            return {"status": "error", "message": f"Model '{name}' is not a vLLM model"}
+
+        sleep_cfg = model.vllm.sleep_mode
+        if not sleep_cfg or not sleep_cfg.enabled:
+            return {"status": "error", "message": f"Sleep mode not enabled for '{name}'"}
+
+        # Check if already sleeping
+        if self.state.get_sleep_state(name):
+            return {"status": "already_sleeping", "model": name}
+
+        # Mutex: only one model sleeping at a time
+        all_sleep = self.state.get_all_sleep_states()
+        if all_sleep:
+            existing = list(all_sleep.keys())[0]
+            return {"status": "error",
+                    "message": f"Model '{existing}' is already sleeping. Wake or stop it first."}
+
+        log.info("Sleeping model '%s' (L2)", name)
+        result = self._proc.sleep_vllm(model.vllm.port)
+
+        if result["status"] == "ok":
+            self.state.set_sleep_state(name, 2)
+
+            # Exclusive sleeping → GPU → idle (VRAM freed)
+            if model.is_exclusive:
+                self.state.set_multi({
+                    "gpu_mode": GPUMode.IDLE,
+                    "profile_state": ProfileState.IDLE,
+                })
+
+            log.info("Model '%s' is now sleeping (L2), GPU=%s", name,
+                     "idle" if model.is_exclusive else "shared")
+        else:
+            self.state.set_sleep_state(name, None)
+
+        return {**result, "model": name}
+
+    def wake_model(self, name: str) -> dict:
+        """Wake a sleeping vLLM model.
+
+        Rules:
+        - Exclusive model: GPU must be idle → wake → GPU → exclusive.
+        - Shared model: GPU must be idle or shared → wake → GPU → shared.
+        """
+        model = self._models.get(name)
+        if not model:
+            return {"status": "error", "message": f"Unknown model: {name}"}
+        if not model.is_vllm:
+            return {"status": "error", "message": f"Model '{name}' is not a vLLM model"}
+
+        sleep_state = self.state.get_sleep_state(name)
+        if not sleep_state:
+            # Double-check actual server state
+            if self._proc.is_sleeping(model.vllm.port):
+                self.state.set_sleep_state(name, 2)
+            else:
+                return {"status": "already_awake", "model": name, "message": "Model is not sleeping"}
+
+        # Validate GPU mode for wake
+        current_gpu = self.gpu_mode
+        if model.is_exclusive:
+            if current_gpu != GPUMode.IDLE:
+                return {"status": "error",
+                        "message": f"Cannot wake exclusive model '{name}': GPU is {current_gpu}, must be idle"}
+        else:
+            if current_gpu not in (GPUMode.IDLE, GPUMode.SHARED):
+                return {"status": "error",
+                        "message": f"Cannot wake shared model '{name}': GPU is {current_gpu}, must be idle or shared"}
+
+        log.info("Waking model '%s' (L2)", name)
+        result = self._proc.wake_vllm(model.vllm.port)
+
+        if result["status"] == "ok" or result["status"] == "killed_for_restart":
+            self.state.set_sleep_state(name, None)
+
+            if model.is_exclusive:
+                self.state.set_multi({
+                    "gpu_mode": GPUMode.EXCLUSIVE,
+                    "profile_state": ProfileState.HEALTHY,
+                })
+                current_services = self.active_services
+                if name not in current_services:
+                    self.state.add_active_service(name)
+            else:
+                # Shared model: process was killed, restart via switch
+                return self.switch(name)
+
+            log.info("Model '%s' is now awake", name)
+
+        return {**result, "model": name}
+
     # ── Status ────────────────────────────────────────────────────
 
     def status(self) -> dict:
-        active = self.active_services
+        active = list(self.active_services)
+        sleep_states = self.state.get_all_sleep_states()
         services_status = {}
+        services_info = {}
+        dead_services = []
         for svc_name in active:
             m = self._models.get(svc_name)
             if not m:
+                dead_services.append(svc_name)
                 continue
+            info = {"mode": m.mode, "type": m.type}
             if m.is_vllm:
-                services_status[svc_name] = self.check_vllm_health(m.vllm.port)
+                info["port"] = m.vllm.port
+                health = self.check_vllm_health(m.vllm.port)
             elif m.is_comfyui:
+                info["port"] = m.comfyui.port
                 health_url = m.comfyui.health_url or f"http://localhost:{m.comfyui.port}/system_stats"
-                services_status[svc_name] = self.check_comfyui_health(health_url)
+                health = self.check_comfyui_health(health_url)
+            else:
+                health = "?"
+            # Append sleep state if applicable
+            sleep_label = sleep_states.get(svc_name, "")
+            if sleep_label:
+                health = f"{health} (sleeping {sleep_label.upper()})"
+            services_status[svc_name] = health
+            services_info[svc_name] = info
+            # Track dead services for auto-cleanup
+            if health == "❌":
+                dead_services.append(svc_name)
+
+        # Auto-cleanup: remove dead services from state to avoid stale dashboard state
+        if dead_services:
+            log.warning("Auto-cleanup: removing dead services %s from state", dead_services)
+            remaining = [s for s in active if s not in dead_services]
+            self.state.set_active_services(remaining)
+            active = remaining
+            # If no services left, also reset GPU mode to idle
+            if not active and self.gpu_mode != GPUMode.IDLE:
+                log.info("No active services — resetting gpu_mode to idle")
+                self.state.gpu_mode = GPUMode.IDLE
 
         return {
             "gpu_mode": self.gpu_mode,
             "active_services": active,
             "services_health": services_status,
+            "services_info": services_info,
+            "sleep_states": sleep_states,
             "gpu_used_mb": gpu_used_mb(),
             "gpu_total_mb": gpu_total_mb(),
             "vllm_pid": self._proc.vllm_pid,
@@ -506,7 +657,14 @@ class ModelManager:
         """Nuclear reset: kill everything, verify GPU, clean state."""
         log.info("Force reset")
 
-        self._proc.stop_all()
+        # Collect ComfyUI config for proper stop
+        comfyui_cfg = None
+        for svc_name in self.active_services:
+            m = self._models.get(svc_name)
+            if m and m.is_comfyui:
+                comfyui_cfg = m.comfyui
+                break
+        self._proc.stop_all(comfyui_cfg=comfyui_cfg)
         self._proc.force_kill_all()
 
         if not wait_gpu_free(timeout=20):
@@ -525,6 +683,7 @@ class ModelManager:
             "profile_state": ProfileState.IDLE,
             "vllm_pid": "",
             "comfyui_pid": "",
+            "sleep_state": "{}",
         })
 
         return {
