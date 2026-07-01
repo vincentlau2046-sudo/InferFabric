@@ -760,6 +760,14 @@ def main():
             if not shutdown_event.is_set():
                 mgr.health_check()
 
+    # Auto-reconcile on startup: sync state with actual running services
+    try:
+        rec = mgr.mgr.reconcile()
+        if rec.get("actions"):
+            log.info("Startup reconcile: %s", rec["actions"])
+    except Exception as e:
+        log.warning("Startup reconcile failed: %s", e)
+
     threading.Thread(target=health_loop, daemon=True, name="health").start()
 
     sd_notify("READY=1")
