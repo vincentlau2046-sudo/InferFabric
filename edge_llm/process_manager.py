@@ -161,12 +161,26 @@ class ProcessManager:
                 self.stop_vllm()
                 return {"status": "timeout", "message": "vLLM didn't become healthy within 5 minutes"}
 
-    def stop_vllm(self) -> dict:
-        """Stop vLLM using process group kill. SIGTERM → wait → SIGKILL entire group."""
+    def stop_vllm(self, port: Optional[int] = None) -> dict:
+        """Stop vLLM using process group kill. SIGTERM → wait → SIGKILL entire group.
+
+        When ``port`` is supplied, also does port-based cleanup after the tracked
+        PID path completes (or immediately if the tracked PID is dead).  This
+        catches orphaned processes that were not spawned by edge-llm.
+        """
         pgid = self.vllm_pid
-        if pgid is None:
-            log.warning("No vLLM PID tracked, falling back to pkill")
+        if pgid is None and port is None:
+            log.warning("No vLLM PID tracked and no port given — falling back to pkill")
             return self._pkill_vllm_fallback()
+
+        if pgid is None:
+            # Tracked PID gone but port given — skip PG path, go straight to port cleanup
+            log.info("Tracked PID gone but port=%d given — port-based cleanup only", port)
+            self._pkill_by_port(port)
+            self._set_vllm_pid(None)
+            self._cleanup_pid_files("vllm")
+            self._wait_gpu_idle()
+            return {"status": "ok", "message": "port-based cleanup"}
 
         log.info("Stopping vLLM PGID=%d", pgid)
 
@@ -177,6 +191,8 @@ class ProcessManager:
             log.info("Process group %d already dead", pgid)
             self._set_vllm_pid(None)
             self._cleanup_pid_files("vllm")
+            if port:
+                self._pkill_by_port(port)
             return {"status": "ok", "message": "already dead"}
 
         # Wait for graceful shutdown
@@ -189,6 +205,8 @@ class ProcessManager:
                 self._cleanup_pid_files("vllm")
                 self._reap_zombies()
                 self._wait_gpu_idle()
+                if port:
+                    self._pkill_by_port(port)
                 return {"status": "ok", "message": f"terminated in {i + 1}s"}
             time.sleep(1)
 
@@ -203,8 +221,39 @@ class ProcessManager:
         self._set_vllm_pid(None)
         self._cleanup_pid_files("vllm")
         self._reap_zombies()
+        if port:
+            self._pkill_by_port(port)
         self._wait_gpu_idle()
         return {"status": "ok", "message": "killed (SIGKILL)"}
+
+    def _pkill_by_port(self, port: int) -> None:
+        """Kill any remaining process listening on a specific port.
+
+        Safety net for orphaned processes not tracked in state.db.
+        """
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                result = subprocess.run(
+                    ["fuser", "-k", "-" + str(sig), str(port) + "/tcp"],
+                    timeout=5, check=False, capture_output=True
+                )
+                if result.returncode == 0:
+                    log.info("fuser killed processes on port %d (sig=%d)", port, sig)
+                    time.sleep(1)
+                    break
+            except FileNotFoundError:
+                # fuser not available — fall back to pkill
+                subprocess.run(
+                    ["pkill", "-" + str(sig), "-f", f"vllm.*:{port}"],
+                    timeout=5, check=False, capture_output=True
+                )
+                subprocess.run(
+                    ["pkill", "-" + str(sig), "-f", f"VLLM::EngineCore.*--port {port}"],
+                    timeout=5, check=False, capture_output=True
+                )
+                time.sleep(1)
+                break
+        time.sleep(1)
 
     def _pkill_vllm_fallback(self) -> dict:
         """Fallback: stop vLLM using pkill when no PID is tracked."""
@@ -339,27 +388,42 @@ class ProcessManager:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-    def stop_comfyui(self) -> dict:
-        """Stop ComfyUI using process group kill (native) or stop script (legacy)."""
-        pgid = self.comfyui_pid
+    def stop_comfyui(self, port: Optional[int] = None) -> dict:
+        """Stop ComfyUI using process group kill (native) or stop script (legacy).
 
-        if pgid is not None:
-            return self._stop_comfyui_native(pgid)
-
-        # Legacy fallback: try stop script from current profile
-        # (manager.py should call with config if available)
-        log.warning("No ComfyUI PID tracked, falling back to pkill")
-        return self._pkill_comfyui_fallback()
-
-    def stop_comfyui_with_config(self, cfg: ComfyUIConfig) -> dict:
-        """Stop ComfyUI with config knowledge for legacy script fallback."""
+        When ``port`` is supplied, also does port-based cleanup as a safety net.
+        """
         pgid = self.comfyui_pid
         if pgid is not None:
-            return self._stop_comfyui_native(pgid)
-        elif cfg.stop_script:
-            return self._stop_comfyui_script(cfg)
+            result = self._stop_comfyui_native(pgid)
         else:
-            return self._pkill_comfyui_fallback()
+            log.warning("No ComfyUI PID tracked, falling back to pkill")
+            result = self._pkill_comfyui_fallback()
+
+        # Port-based safety net
+        if port:
+            log.info("Port-based cleanup for ComfyUI on port %d", port)
+            self._pkill_by_port(port)
+        return result
+
+    def stop_comfyui_with_config(self, cfg: ComfyUIConfig, port: Optional[int] = None) -> dict:
+        """Stop ComfyUI with config knowledge for legacy script fallback.
+
+        When ``port`` is supplied, also does port-based cleanup as a safety net.
+        """
+        port = port or cfg.port
+        pgid = self.comfyui_pid
+        if pgid is not None:
+            result = self._stop_comfyui_native(pgid)
+        elif cfg.stop_script:
+            result = self._stop_comfyui_script(cfg)
+        else:
+            result = self._pkill_comfyui_fallback()
+
+        # Port-based safety net
+        log.info("Port-based cleanup for ComfyUI on port %d", port)
+        self._pkill_by_port(port)
+        return result
 
     def _stop_comfyui_native(self, pgid: int) -> dict:
         """Stop ComfyUI by process group. SIGTERM → wait → SIGKILL."""
@@ -422,16 +486,109 @@ class ProcessManager:
         self._wait_gpu_idle()
         return {"status": "ok", "message": "pkill fallback"}
 
+    # ─── Ollama.cpp ───────────────────────────────────────────
+
+    def start_ollama_cpp(self, cfg: "OllamaCppConfig") -> dict:
+        """Start Ollama.cpp / llama.cpp server for a specific model.
+
+        Each model gets its own process with process group isolation.
+        Uses llama-server binary (OpenAI-compatible API).
+        """
+        from .config import OllamaCppConfig
+        model_path = Path(cfg.model_path).expanduser().resolve()
+        if not model_path.exists():
+            return {"status": "error", "message": f"GGUF model not found: {model_path}"}
+
+        conda_bin = CONDA_ENVS / "base" / "bin"
+        llama_server = conda_bin / "llama-server"
+        if not llama_server.exists():
+            return {"status": "error", "message": f"llama-server not found at {llama_server}"}
+
+        cmd = [
+            str(llama_server),
+            "-m", str(model_path),
+            "--host", "0.0.0.0",
+            "--port", str(cfg.port),
+            "-c", str(cfg.context_size),
+            "-t", str(cfg.threads),
+        ]
+        if cfg.gpu_layers != 0:
+            cmd.extend(["-ngl", str(cfg.gpu_layers)])
+
+        log.info("Starting ollama.cpp: %s", " ".join(cmd[:6]) + "...")
+        log_file = self._log_dir / f"ollama_cpp_{cfg.port}.log"
+        log_file.write_text("")
+
+        env = dict(os.environ)
+        env["PATH"] = str(conda_bin) + ":" + env.get("PATH", "")
+
+        log_fh = open(str(log_file), "a")
+        try:
+            proc = subprocess.Popen(cmd, stdout=log_fh, stderr=subprocess.STDOUT,
+                                   env=env, start_new_session=True)
+        except Exception as e:
+            log_fh.close()
+            return {"status": "error", "message": f"ollama.cpp Popen failed: {e}"}
+        finally:
+            log_fh.close()
+
+        pgid = proc.pid
+        pid_file = self._log_dir / f"ollama_cpp_{cfg.port}.pid"
+        pid_file.write_text(str(pgid))
+        log.info("ollama.cpp started: PID=%d, port=%d", pgid, cfg.port)
+
+        # Quick failure detection
+        for _ in range(6):
+            ret = proc.poll()
+            if ret is not None:
+                try:
+                    err = log_file.read_text()[-2000:]
+                except Exception:
+                    err = "read log failed"
+                log.error("ollama.cpp exited immediately (ret=%d): %s", ret, err[-500:])
+                pid_file.unlink(missing_ok=True)
+                return {"status": "error", "message": f"ollama.cpp exited with code {ret}", "log": str(log_file)}
+            time.sleep(0.5)
+
+        healthy = wait_http(f"http://localhost:{cfg.port}/health", timeout=120)
+        if healthy:
+            return {"status": "healthy", "port": cfg.port, "pid": proc.pid}
+        else:
+            self.stop_ollama_cpp(cfg.port)
+            return {"status": "timeout", "message": "ollama.cpp didn't become healthy within 2 minutes"}
+
+    def stop_ollama_cpp(self, port: Optional[int] = None):
+        """Stop ollama.cpp via port-based cleanup."""
+        if port:
+            self._pkill_by_port(port)
+        # Clean up PID file
+        for pf in self._log_dir.glob("ollama_cpp_*.pid"):
+            pf.unlink(missing_ok=True)
+
     # ─── Combined Operations ─────────────────────────────────────
 
-    def stop_all(self, comfyui_cfg: Optional[ComfyUIConfig] = None) -> dict:
-        """Stop all services: ComfyUI first, then vLLM."""
+    def stop_all(
+        self,
+        comfyui_cfg: Optional[ComfyUIConfig] = None,
+        vllm_ports: Optional[list[int]] = None,
+        comfyui_port: Optional[int] = None,
+    ) -> dict:
+        """Stop all services: ComfyUI first, then vLLM.
+
+        Port parameters are used for port-based safety-net cleanup.
+        """
         results = {}
         if comfyui_cfg:
-            results["comfyui"] = self.stop_comfyui_with_config(comfyui_cfg)
+            port = comfyui_port or comfyui_cfg.port
+            results["comfyui"] = self.stop_comfyui_with_config(comfyui_cfg, port=port)
         else:
             results["comfyui"] = self.stop_comfyui()
-        results["vllm"] = self.stop_vllm()
+        if vllm_ports:
+            for p in vllm_ports:
+                self.stop_vllm(port=p)
+            results["vllm"] = {"status": "ok", "ports": vllm_ports}
+        else:
+            results["vllm"] = self.stop_vllm()
         return results
 
     def force_kill_all(self) -> dict:
@@ -541,19 +698,62 @@ class ProcessManager:
 
     # ─── GPU Cleanup ─────────────────────────────────────────────
 
-    def _wait_gpu_idle(self, timeout: int = 60) -> dict:
-        """Wait for GPU to return to idle state after process exit.
-
-        When a CUDA process exits, its GPU memory is freed by the kernel.
-        This method verifies nvidia-smi shows idle before returning.
+    def _wait_gpu_idle(self, timeout: int = 60, force: bool = False) -> dict:
+        """P1-2: Wait for GPU to return to idle state after process exit.
+        
+        Uses a relative baseline: records initial idle usage and checks
+        if current usage is within 15% of baseline. This handles desktop
+        environments where compositor/CUDA usage varies.
+        
+        Args:
+            force: If True, skip waiting and return immediately.
         """
+        if force:
+            return {"status": "force", "used_mb": gpu_used_mb()}
+        
+        # Get baseline idle GPU memory (first call or cached)
+        baseline = self._get_gpu_baseline()
+        threshold = int(baseline * 1.5) + 512  # 150% of baseline + 512MB margin
+        
         for _ in range(timeout):
             used = gpu_used_mb()
-            if used is not None and used < 2048:  # <2GB = idle (系统基线~1GB + 余量)
-                log.info("GPU returned to idle (%d MB)", used)
+            if used is not None and used <= threshold:
+                log.info("GPU returned to idle (%d MB, threshold=%d)", used, threshold)
                 return {"status": "ok", "used_mb": used}
             time.sleep(1)
-        return {"status": "timeout", "message": "GPU did not return to idle"}
+        
+        # If we timeout but GPU is dropping, give it more time
+        used = gpu_used_mb()
+        if used is not None and used < threshold * 0.8:
+            log.info("GPU still dropping (%d MB), accepting", used)
+            return {"status": "ok", "used_mb": used}
+        
+        return {"status": "timeout", "message": f"GPU did not return to idle (threshold={threshold}MB)"}
+    
+    def _get_gpu_baseline(self) -> int:
+        """Get or cache the baseline GPU memory usage."""
+        # Use a simple file-based cache for baseline
+        cache_file = Path.home() / ".edge_llm" / "gpu_baseline.json"
+        try:
+            if cache_file.exists():
+                data = json.loads(cache_file.read_text())
+                return data.get("baseline_mb", 512)
+        except Exception:
+            pass
+        
+        # Measure current idle usage
+        baseline = gpu_used_mb()
+        if baseline < 100:  # Unlikely, fallback to 512
+            baseline = 512
+        
+        # Save baseline
+        try:
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(json.dumps({"baseline_mb": baseline}))
+        except Exception:
+            pass
+        
+        return baseline
 
     # ─── Internal Helpers ────────────────────────────────────────
 

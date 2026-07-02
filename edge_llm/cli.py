@@ -266,6 +266,92 @@ def cmd_wake(args):
         sys.exit(1)
 
 
+def cmd_pull(args):
+    """Pre-download model files: ollama pull / huggingface-cli download."""
+    if not args:
+        print("Usage: edge-llm pull <model_name>")
+        print("\nPre-download model files for offline switch.")
+        sys.exit(1)
+
+    target = args[0]
+    mgr = ModelManager()
+    model = mgr.get_model(target)
+    if not model:
+        print(f"❌ Unknown model: {target}")
+        sys.exit(1)
+
+    if model.is_ollama:
+        import subprocess
+        ref = model.ollama.model_ref
+        print(f"⬇  Pulling {ref} via ollama...")
+        result = subprocess.run(
+            ["ollama", "pull", ref],
+            capture_output=False, timeout=600
+        )
+        if result.returncode == 0:
+            print(f"✅ Model pulled: {ref}")
+        else:
+            print(f"❌ Pull failed with code {result.returncode}")
+            sys.exit(1)
+    elif model.is_ollama_cpp:
+        from pathlib import Path
+        model_path = Path(model.ollama_cpp.model_path).expanduser()
+        if model_path.exists():
+            print(f"✅ Model already downloaded: {model_path}")
+        else:
+            print(f"❌ GGUF model not found: {model_path}")
+            print(f"   Download from HuggingFace and place at: {model_path.parent}")
+            sys.exit(1)
+    elif model.is_vllm:
+        model_dir = Path.home() / "models" / model.vllm.model_dir
+        if model_dir.exists():
+            print(f"✅ Model already downloaded: {model_dir}")
+        else:
+            print(f"❌ Model not found: {model_dir}")
+            print(f"   Use huggingface-cli download or modelscope to download.")
+            sys.exit(1)
+    else:
+        print(f"Pull not supported for {model.type} models")
+
+
+def cmd_list_downloaded(args):
+    """List pre-downloaded models on disk."""
+    mgr = ModelManager()
+    models = mgr.list_models()
+    ollama_models = []
+    local_models = []
+
+    for m in models:
+        if m["type"] == "ollama":
+            import subprocess
+            try:
+                result = subprocess.run(
+                    ["ollama", "list"],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    ollama_models.extend(
+                        [l.split()[0] for l in result.stdout.strip().splitlines()[1:] if l.strip()]
+                    )
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
+            break
+
+    print(f"\nOllama models (via 'ollama list'):")
+    if ollama_models:
+        for m in ollama_models:
+            print(f"  {m}")
+    else:
+        print("  (ollama not installed or no models pulled)")
+
+    models_base = Path.home() / "models"
+    if models_base.exists():
+        dirs = [d.name for d in models_base.iterdir() if d.is_dir()]
+        print(f"\nvLLM models (~/models/):")
+        for d in sorted(dirs):
+            print(f"  {d}/")
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__.strip())
@@ -292,9 +378,13 @@ def main():
         cmd_reset(rest)
     elif cmd == "reconcile":
         cmd_reconcile(rest)
+    elif cmd == "pull":
+        cmd_pull(rest)
+    elif cmd == "list-downloaded":
+        cmd_list_downloaded(rest)
     else:
         print(f"Unknown command: {cmd}")
-        print("Available: status, models, switch, stop, sleep, wake, history, reset, reconcile")
+        print("Available: status, models, switch, stop, pull, list-downloaded, sleep, wake, history, reset, reconcile")
         sys.exit(1)
 
 

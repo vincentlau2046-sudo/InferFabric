@@ -1,0 +1,8 @@
+name: phi3-mini
+description: "Phi-3 Mini 3.8B (Ollama)"
+type: ollama
+mode: shared
+cpu_only: false
+ollama:
+  model_ref: "phi3:mini"
+  keep_alive: "5m"

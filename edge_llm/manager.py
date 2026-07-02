@@ -116,6 +116,14 @@ class ModelManager:
     def check_comfyui_health(self, url: str) -> str:
         return check_http_status(url)
 
+    def check_http_health(self, port: int, path: str = "/health") -> str:
+        """Generic HTTP health check for any backend."""
+        return check_http_status(f"http://localhost:{port}{path}")
+
+    def check_ollama_health(self, port: int = 11434) -> str:
+        """Check if Ollama daemon is running."""
+        return check_http_status(f"http://localhost:{port}/api/tags")
+
     # ── Reconciliation ──────────────────────────────────────────
 
     def reconcile(self) -> dict:
@@ -135,6 +143,15 @@ class ModelManager:
                 status = self.check_comfyui_health(health_url)
                 if status in ("✅", "⏳"):
                     actual_services.append(name)
+            elif m.is_ollama_daemon:
+                status = self.check_ollama_health(m.ollama_daemon.port)
+                if status in ("✅", "⏳"):
+                    actual_services.append(name)
+            elif m.is_ollama_cpp:
+                status = self.check_http_health(m.ollama_cpp.port, "/health")
+                if status in ("✅", "⏳"):
+                    actual_services.append(name)
+            # Note: ollama model type doesn't have its own process — it's served by ollama-daemon
 
         actions: list[str] = []
 
@@ -442,9 +459,22 @@ class ModelManager:
 
         # Start the model
         if model.is_vllm:
-            results["vllm"] = self._proc.start_vllm(model.vllm)
+            results[model.name] = self._proc.start_vllm(model.vllm)
         elif model.is_comfyui:
-            results["comfyui"] = self._proc.start_comfyui(model.comfyui)
+            results[model.name] = self._proc.start_comfyui(model.comfyui)
+        elif model.is_ollama_daemon:
+            results[model.name] = {"status": "ok", "message": "Ollama daemon external — verify with 'ollama serve'"}
+        elif model.is_ollama:
+            # Ollama models are served by daemon — just verify daemon is running
+            daemon_healthy = self.check_ollama_health(11434)
+            if daemon_healthy == "✅":
+                results[model.name] = {"status": "ok", "message": f"Model {model.ollama.model_ref} available via Ollama daemon"}
+            else:
+                results[model.name] = {"status": "error", "message": "Ollama daemon not running. Start with: ollama serve"}
+        elif model.is_ollama_cpp:
+            results[model.name] = self._proc.start_ollama_cpp(model.ollama_cpp)
+        else:
+            return {"status": "error", "message": f"Unknown model type: {model.type}"}
 
         # Validate
         failed = False
@@ -584,12 +614,20 @@ class ModelManager:
             self._proc.stop_vllm(port=model.vllm.port)
         elif model.is_comfyui:
             self._proc.stop_comfyui_with_config(model.comfyui, port=model.comfyui.port)
+        elif model.is_ollama:
+            # Ollama models are served by daemon — just unregister
+            log.info("Unregistering Ollama model %s", name)
+        elif model.is_ollama_daemon:
+            log.info("Ollama daemon stop: use 'ollama serve' externally")
+        elif model.is_ollama_cpp:
+            self._proc.stop_ollama_cpp(port=model.ollama_cpp.port)
 
-        # Verify GPU actually freed — catch orphaned processes
-        if not wait_gpu_free(timeout=20):
-            log.warning("GPU not freed after stop %s — force kill remaining processes", name)
-            self._proc.force_kill_all()
-            wait_gpu_free(timeout=15)
+        # Verify GPU actually freed — catch orphaned processes (skip CPU-only models)
+        if model.needs_gpu:
+            if not wait_gpu_free(timeout=20):
+                log.warning("GPU not freed after stop %s — force kill remaining processes", name)
+                self._proc.force_kill_all()
+                wait_gpu_free(timeout=15)
 
         # Update active services
         remaining = [s for s in self.active_services if s != name]
@@ -744,6 +782,17 @@ class ModelManager:
                 info["port"] = m.comfyui.port
                 health_url = m.comfyui.health_url or f"http://localhost:{m.comfyui.port}/system_stats"
                 health = self.check_comfyui_health(health_url)
+            elif m.is_ollama_daemon:
+                info["port"] = m.ollama_daemon.port
+                health = self.check_ollama_health(m.ollama_daemon.port)
+            elif m.is_ollama:
+                # Ollama models use daemon port; check if model loaded
+                info["port"] = 11434
+                info["model_ref"] = m.ollama.model_ref
+                health = self.check_ollama_health(11434)
+            elif m.is_ollama_cpp:
+                info["port"] = m.ollama_cpp.port
+                health = self.check_http_health(m.ollama_cpp.port, "/health")
             else:
                 health = "?"
             # Append sleep state if applicable
