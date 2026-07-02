@@ -109,6 +109,31 @@ class ComfyUIConfig:
 
 
 @dataclass
+class OllamaModelConfig:
+    """Ollama 模型引用 — 不管理 daemon，只声明模型名."""
+    model_ref: str  # "llama3.1:8b"
+    keep_alive: str = "5m"
+
+
+@dataclass
+class OllamaCppConfig:
+    """Ollama.cpp / llama.cpp 独立推理进程."""
+    model_path: str     # GGUF 文件路径
+    port: int = 11435
+    threads: int = 8
+    context_size: int = 8192
+    gpu_layers: int = 0  # 0=CPU only, -1=all GPU, N=部分
+
+
+@dataclass
+class OllamaDaemonConfig:
+    """Ollama 守护进程 — 基础设施服务."""
+    port: int = 11434
+    health_url: str = "http://localhost:11434"
+    data_dir: str = ""
+
+
+@dataclass
 class ModelConfig:
     """A deployable model/service — one per YAML in models.d/.
 
@@ -116,16 +141,54 @@ class ModelConfig:
       name:        Unique identifier (must match YAML filename stem)
       description: Human-readable description
       mode:        'exclusive' (GPU fully locked) or 'shared' (coexists with other shared services)
-      type:        'vllm' or 'comfyui'
-      vllm:        VLLMConfig if type='vllm', else None
-      comfyui:     ComfyUIConfig if type='comfyui', else None
+      type:        'vllm' | 'comfyui' | 'ollama' | 'ollama_cpp' | 'ollama_daemon'
+      vllm:        VLLMConfig if type='vllm'
+      comfyui:     ComfyUIConfig if type='comfyui'
+      ollama:      OllamaModelConfig if type='ollama'
+      ollama_cpp:  OllamaCppConfig if type='ollama_cpp'
+      ollama_daemon: OllamaDaemonConfig if type='ollama_daemon'
     """
     name: str
     description: str
     mode: str  # 'exclusive' | 'shared'
-    type: str = "vllm"  # 'vllm' | 'comfyui'
+    type: str = "vllm"  # 'vllm' | 'comfyui' | 'ollama' | 'ollama_cpp' | 'ollama_daemon'
     vllm: Optional[VLLMConfig] = None
     comfyui: Optional[ComfyUIConfig] = None
+    ollama: Optional[OllamaModelConfig] = None
+    ollama_cpp: Optional[OllamaCppConfig] = None
+    ollama_daemon: Optional[OllamaDaemonConfig] = None
+    cpu_only: bool = False
+    typical_vram_pct: float = 0.0
+
+    @property
+    def port(self) -> Optional[int]:
+        """Unified port accessor — eliminates per-backend if/else in proxy."""
+        if self.vllm:
+            return self.vllm.port
+        if self.ollama_daemon:
+            return self.ollama_daemon.port
+        if self.ollama:
+            return 11434  # Ollama daemon fixed port
+        if self.ollama_cpp:
+            return self.ollama_cpp.port
+        if self.comfyui:
+            return self.comfyui.port
+        return None
+
+    @property
+    def served_name(self) -> Optional[str]:
+        """Unified served_name for proxy routing."""
+        if self.vllm:
+            return self.vllm.served_name
+        if self.ollama:
+            return self.ollama.model_ref
+        if self.ollama_cpp:
+            return self.name
+        return self.name
+
+    @property
+    def needs_gpu(self) -> bool:
+        return not self.cpu_only
 
     @property
     def is_exclusive(self) -> bool:
@@ -142,6 +205,18 @@ class ModelConfig:
     @property
     def is_comfyui(self) -> bool:
         return self.type == "comfyui" and self.comfyui is not None
+
+    @property
+    def is_ollama(self) -> bool:
+        return self.type == "ollama" and self.ollama is not None
+
+    @property
+    def is_ollama_cpp(self) -> bool:
+        return self.type == "ollama_cpp" and self.ollama_cpp is not None
+
+    @property
+    def is_ollama_daemon(self) -> bool:
+        return self.type == "ollama_daemon" and self.ollama_daemon is not None
 
 
 # ─── Legacy Profile class (backward compat, will be removed in Phase 7) ──
@@ -214,6 +289,48 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             if comfy_fields:
                 comfy_cfg = ComfyUIConfig(**comfy_fields)
 
+        # Parse ollama config if present
+        ollama_cfg = None
+        if raw.get("ollama"):
+            ollama_cfg = OllamaModelConfig(**raw["ollama"])
+
+        # Parse ollama_cpp config if present
+        ollama_cpp_cfg = None
+        if raw.get("ollama_cpp"):
+            ollama_cpp_cfg = OllamaCppConfig(**raw["ollama_cpp"])
+
+        # Parse ollama_daemon config if present
+        ollama_daemon_cfg = None
+        if raw.get("ollama_daemon"):
+            ollama_daemon_cfg = OllamaDaemonConfig(**raw["ollama_daemon"])
+
+        # For type=ollama, parse top-level ollama fields
+        if model_type == "ollama" and not ollama_cfg:
+            ollama_fields = {}
+            for f in ("model_ref", "keep_alive"):
+                if f in raw:
+                    ollama_fields[f] = raw[f]
+            if ollama_fields:
+                ollama_cfg = OllamaModelConfig(**ollama_fields)
+
+        # For type=ollama_cpp, parse top-level ollama_cpp fields
+        if model_type == "ollama_cpp" and not ollama_cpp_cfg:
+            cpp_fields = {}
+            for f in ("model_path", "port", "threads", "context_size", "gpu_layers"):
+                if f in raw:
+                    cpp_fields[f] = raw[f]
+            if cpp_fields:
+                ollama_cpp_cfg = OllamaCppConfig(**cpp_fields)
+
+        # For type=ollama_daemon, parse top-level ollama_daemon fields
+        if model_type == "ollama_daemon" and not ollama_daemon_cfg:
+            daemon_fields = {}
+            for f in ("port", "health_url", "data_dir"):
+                if f in raw:
+                    daemon_fields[f] = raw[f]
+            if daemon_fields:
+                ollama_daemon_cfg = OllamaDaemonConfig(**daemon_fields)
+
         result[model_name] = ModelConfig(
             name=model_name,
             description=raw.get("description", model_name),
@@ -221,6 +338,11 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             type=model_type,
             vllm=vllm_cfg,
             comfyui=comfy_cfg,
+            ollama=ollama_cfg,
+            ollama_cpp=ollama_cpp_cfg,
+            ollama_daemon=ollama_daemon_cfg,
+            cpu_only=bool(raw.get("cpu_only", False)),
+            typical_vram_pct=float(raw.get("typical_vram_pct", 0)),
         )
 
     return result

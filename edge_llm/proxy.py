@@ -76,11 +76,13 @@ class ProxyManager:
         return m.name if m else None
 
     def _wait_healthy(self, target: str, timeout: float = 180) -> bool:
-        """Wait for a model to become healthy after switch."""
+        """Wait for a model to become healthy after switch. Works across all backend types."""
         model = self.mgr.get_model(target)
-        if not model or not model.vllm:
-            return True  # ComfyUI etc, no health check
-        port = model.vllm.port
+        if not model:
+            return False
+        port = model.port
+        if not port:
+            return False
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
@@ -123,9 +125,9 @@ class ProxyManager:
             self._switch_lock.release()
 
     def get_target_port(self, model_name: str):
-        """Get vLLM port for a served_model_name. Dynamic lookup from models.d/."""
+        """Get port for a served_model_name. Works across all backend types."""
         m = self.mgr.find_model_by_served_name(model_name)
-        return m.vllm.port if m and m.vllm else None
+        return m.port if m else None
 
     def get_upstream(self, port: int) -> HTTPConnection:
         """Get or create a keep-alive HTTPConnection to upstream.
@@ -285,9 +287,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self._safe_write(body)
 
     def _handle_v1_models(self, pm):
-        """Forward /v1/models to active upstream vLLM.
+        """Forward /v1/models to active upstream services.
 
-        In shared mode with multiple vLLM instances, aggregate models from all.
+        Aggregates model lists from all active backends (vLLM, Ollama, etc.).
         """
         active = list(pm.mgr.active_services)
         if not active:
@@ -295,13 +297,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(models_d)
             return
 
-        # Collect models from all active vLLM services
+        # Collect models from all active services across all backend types
         all_models = []
         for svc in active:
             model = pm.mgr.get_model(svc)
-            if not model or not model.vllm:
+            if not model or not model.port:
                 continue
-            port = model.vllm.port
+            port = model.port
             try:
                 conn = HTTPConnection("127.0.0.1", port, timeout=10)
                 conn.request("GET", "/v1/models")
@@ -521,14 +523,17 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if data is None:
             return
 
-        # Enable Qwen3 thinking/reasoning mode by default.
+        # Enable Qwen3 thinking/reasoning mode by default (vLLM only).
         # The --reasoning-parser qwen3 correctly splits output into
         # reasoning + content fields when thinking is enabled.
         # Only override when the caller explicitly sets enable_thinking.
-        if "chat_template_kwargs" not in data:
-            data["chat_template_kwargs"] = {}
-        if "enable_thinking" not in data.get("chat_template_kwargs", {}):
-            data["chat_template_kwargs"]["enable_thinking"] = True
+        svc_name = pm.model_to_service(model)
+        model_obj = pm.mgr.get_model(svc_name) if svc_name else None
+        if model_obj and model_obj.is_vllm:
+            if "chat_template_kwargs" not in data:
+                data["chat_template_kwargs"] = {}
+            if "enable_thinking" not in data.get("chat_template_kwargs", {}):
+                data["chat_template_kwargs"]["enable_thinking"] = True
 
         model = data.get("model", "vllm_qwen27b")
         stream = data.get("stream", False)
@@ -551,6 +556,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
 
         body = json.dumps(data).encode("utf-8")
+        # P1-1: Connection health check — invalidate if stale
         try:
             conn = pm.get_upstream(target_port)
             conn.request("POST", self.path, body=body,
@@ -559,8 +565,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             log.error("Forward to :%d failed: %s", target_port, e)
             pm.invalidate_upstream(target_port)
-            self._send_json({"error": str(e)}, 502)
-            return
+            # P1-1: Retry once with fresh connection
+            try:
+                conn = pm.get_upstream(target_port)
+                conn.request("POST", self.path, body=body,
+                             headers={"Content-Type": "application/json"})
+                resp = conn.getresponse()
+            except Exception as e2:
+                log.error("Retry also failed: %s", e2)
+                self._send_json({"error": str(e2)}, 502)
+                return
 
         try:
             resp_status = resp.status
@@ -718,7 +732,7 @@ def main():
         format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
     )
     # Rotating file handler for persistent logs
-    log_dir = DEFAULT_LOG_DIR
+    log_dir = Path.home() / ".edge_llm" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     from logging.handlers import RotatingFileHandler
     fh = RotatingFileHandler(log_dir / "proxy.log", maxBytes=10_000_000, backupCount=3)

@@ -98,9 +98,13 @@ class ModelManager:
         ]
 
     def find_model_by_served_name(self, served_name: str) -> Optional[ModelConfig]:
-        """Find vLLM model by its served_model_name (for proxy routing)."""
+        """Find model by its served_name across all backend types (for proxy routing)."""
         for m in self._models.values():
-            if m.vllm and m.vllm.served_name == served_name:
+            if m.served_name == served_name:
+                return m
+        # Fallback: match by model name
+        for m in self._models.values():
+            if m.name == served_name:
                 return m
         return None
 
