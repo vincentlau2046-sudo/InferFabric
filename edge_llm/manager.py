@@ -7,6 +7,7 @@ Switch rules enforced by validate_transition().
 """
 
 import os
+import sys
 import json
 import time
 import logging
@@ -163,14 +164,55 @@ class ModelManager:
             actions.append(f"profile_state was '{db_profile_state}', no services → idle")
             self.state.set("profile_state", ProfileState.IDLE)
 
-        # Check orphan PIDs
+        # P0-4: Fix orphan PID detection — check if PID process actually exists and owns a running port
         if self._proc.vllm_pid:
             try:
                 os.killpg(self._proc.vllm_pid, 0)
             except (ProcessLookupError, PermissionError):
-                if not any(s in actual_services for s in actual_services if self._models.get(s, ModelConfig(name="", description="", mode="", type="vllm")).is_vllm):
+                # PID doesn't exist — check if any vLLM service is actually running
+                # P0-4 fix: check if port has a live process via fuser
+                import subprocess
+                has_live_vllm = False
+                for svc_name in actual_services:
+                    m = self._models.get(svc_name)
+                    if m and m.is_vllm:
+                        result = subprocess.run(
+                            ["fuser", "-v", str(m.vllm.port) + "/tcp"],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        if result.returncode == 0:
+                            has_live_vllm = True
+                            break
+                if not has_live_vllm:
                     actions.append(f"Orphan vllm_pid={self._proc.vllm_pid} dead — clearing")
                     self.state.set("vllm_pid", "")
+
+        # P0-5: Check if PID exists but no services running — stale
+        if self._proc.vllm_pid and not actual_services:
+            actions.append(f"Stale vllm_pid={self._proc.vllm_pid} with no active services — clearing")
+            self.state.set("vllm_pid", "")
+
+        # P0-5: If a vLLM is actually running but PID is not tracked, recover via fuser
+        if not self._proc.vllm_pid:
+            import subprocess
+            for svc_name in actual_services:
+                m = self._models.get(svc_name)
+                if m and m.is_vllm:
+                    try:
+                        result = subprocess.run(
+                            ["fuser", "-v", str(m.vllm.port) + "/tcp"],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        if result.returncode == 0:
+                            import re
+                            pid_match = re.search(r'\s+(\d+)\s', result.stdout)
+                            if pid_match:
+                                recovered_pid = int(pid_match.group(1))
+                                self.state.set("vllm_pid", str(recovered_pid))
+                                actions.append(f"Recovered vllm_pid={recovered_pid} for {svc_name} via fuser")
+                                break
+                    except Exception:
+                        pass
 
         return {
             "db_gpu_mode": db_gpu_mode,
@@ -206,11 +248,17 @@ class ModelManager:
         target_mode = model.mode  # 'exclusive' or 'shared'
         current_mode = self.gpu_mode
 
-        # Already running?
+        # Already running? (P0-1: check config drift before skipping)
         if target in self.active_services:
-            # Check if this model is healthy
-            is_healthy = self._check_model_health(model)
-            if is_healthy:
+            if model.is_vllm and model.vllm:
+                changed = self._check_model_config_changed(model)
+                if changed:
+                    log.info("Config changed for %s — restarting", target)
+                    self._switch_to_idle()
+                    current_mode = self.gpu_mode  # Now idle
+                else:
+                    return {"status": "already_active", "model": target}
+            else:
                 return {"status": "already_active", "model": target}
 
         # Validate transition
@@ -267,11 +315,60 @@ class ModelManager:
         finally:
             self._lock.release()
 
+    # P0-1: Check if model config has changed since it was started
+    def _check_model_config_changed(self, model: ModelConfig) -> bool:
+        """Compare vLLM process cmdline against YAML config. Returns True if drifted."""
+        import subprocess
+        import re
+        try:
+            port = model.vllm.port
+            result = subprocess.run(
+                ["fuser", "-v", str(port) + "/tcp"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode != 0:
+                return True  # Port not in use — config definitely changed
+            
+            pid_match = re.search(r'\s+(\d+)\s', result.stdout)
+            if not pid_match:
+                return True
+            
+            pid = int(pid_match.group(1))
+            cmdline_path = f"/proc/{pid}/cmdline"
+            if not Path(cmdline_path).exists():
+                return True
+            
+            with open(cmdline_path, 'r') as f:
+                combined = f.read().replace('\x00', ' ')
+            
+            # Check critical params: gpu_memory_utilization, max_model_len, max_num_seqs
+            critical_keys = ['gpu-memory-utilization', 'max-model-len', 'max-num-seqs']
+            for key in critical_keys:
+                yaml_val = getattr(model.vllm, key.replace('-', '_'), None)
+                if yaml_val is not None:
+                    target = str(yaml_val)
+                    # Check --key=value or --key value patterns
+                    if f'--{key}={target}' not in combined and f'--{key} {target}' not in combined:
+                        # Key exists in cmdline but value differs, or key missing entirely
+                        if f'--{key}' in combined:
+                            return True  # Value mismatch
+                        # Key not found — also a mismatch for critical params
+                        return True
+            
+            return False
+        except Exception:
+            log.debug("Config drift check failed for %s: %s", model.name, sys.exc_info()[1])
+            return False
+    
     def _switch_to_idle(self) -> dict:
         """Stop all services and transition to idle."""
         current_mode = self.gpu_mode
         if current_mode == GPUMode.IDLE and not self.active_services:
             return {"status": "already_active", "model": "idle"}
+
+        # P0-2: reconcile first to sync state before stopping
+        log.info("Reconciling state before idle switch")
+        self.reconcile()
 
         if not self._lock.acquire():
             return {"status": "error", "message": "GPU switch in progress (lock held)"}
@@ -281,14 +378,22 @@ class ModelManager:
         log.info("Switch to idle from %s (gpu_mode=%s)", from_services, current_mode)
 
         try:
-            # Stop all services (pass ComfyUI config for proper native stop)
+            # Stop all services with port-based cleanup
+            ports = []
             comfyui_cfg = None
             for svc_name in from_services:
                 m = self._models.get(svc_name)
-                if m and m.is_comfyui:
-                    comfyui_cfg = m.comfyui
-                    break
-            self._proc.stop_all(comfyui_cfg=comfyui_cfg)
+                if m:
+                    if m.is_vllm:
+                        ports.append(("vllm", m.vllm.port))
+                    elif m.is_comfyui:
+                        ports.append(("comfyui", m.comfyui.port))
+                        comfyui_cfg = m.comfyui
+            self._proc.stop_all(
+                comfyui_cfg=comfyui_cfg,
+                vllm_ports=[p for t, p in ports if t == "vllm"],
+                comfyui_port=ports[-1][1] if ports and ports[-1][0] == "comfyui" else None,
+            )
             if not wait_gpu_free():
                 self._proc.force_kill_all()
                 if not wait_gpu_free(timeout=15):
@@ -346,8 +451,17 @@ class ModelManager:
 
         if failed:
             self.state.set("profile_state", ProfileState.ERROR)
-            # Clean up partial start
-            self._proc.stop_all()
+            # Clean up partial start with port-based cleanup
+            ports = []
+            if model.is_vllm:
+                ports.append(model.vllm.port)
+            elif model.is_comfyui:
+                ports.append(model.comfyui.port)
+            self._proc.stop_all(
+                comfyui_cfg=model.comfyui if model.is_comfyui else None,
+                vllm_ports=ports if model.is_vllm else [],
+                comfyui_port=ports[-1] if model.is_comfyui and ports else None,
+            )
             self.state.set_multi({
                 "gpu_mode": GPUMode.IDLE,
                 "active_services": json.dumps([]),
@@ -377,66 +491,69 @@ class ModelManager:
             "results": results,
         }
 
+    def _get_current_vram_pct(self) -> float:
+        """Get current GPU VRAM usage as a percentage of total."""
+        try:
+            from .health import gpu_used_mb, gpu_total_mb
+            return gpu_used_mb() / max(gpu_total_mb(), 1) * 100
+        except Exception:
+            return 0.0
+
     def _shared_add_service(self, model: ModelConfig) -> dict:
-        """Add a shared service to existing shared mode. V1: full restart."""
+        """Add a shared service without touching existing ones.
+
+        Only starts the new model. Existing shared services remain running.
+        Checks typical VRAM headroom before starting.
+        """
         t0 = time.time()
 
-        # Get current running shared services
-        current_services = list(self.active_services)
-        target_services = current_services + [model.name]
-
-        log.info("Shared add: %s → %s", current_services, target_services)
-
-        # V1: stop all, then start all (pass ComfyUI config for proper native stop)
-        comfyui_cfg = None
-        for svc_name in current_services:
-            m = self._models.get(svc_name)
-            if m and m.is_comfyui:
-                comfyui_cfg = m.comfyui
-                break
-        self._proc.stop_all(comfyui_cfg=comfyui_cfg)
-        if not wait_gpu_free(timeout=15):
-            self._proc.force_kill_all()
-            wait_gpu_free(timeout=10)
-
-        # Start all target services
-        results = {}
-        for svc_name in target_services:
-            svc = self._models.get(svc_name)
-            if not svc:
-                continue
-            if svc.is_vllm:
-                results[f"vllm_{svc_name}"] = self._proc.start_vllm(svc.vllm)
-            elif svc.is_comfyui:
-                results[f"comfyui_{svc_name}"] = self._proc.start_comfyui(svc.comfyui)
-
-        # Validate all
-        failed = []
-        for key, res in results.items():
-            if res.get("status") not in ("healthy", "started"):
-                failed.append(key)
-
-        if failed:
-            self.state.set("profile_state", ProfileState.ERROR)
+        if model.name in self.active_services:
             return {
-                "status": "error",
-                "message": f"Failed services: {failed}",
-                "results": results,
+                "status": "already_active",
+                "model": model.name,
+                "gpu_mode": GPUMode.SHARED,
             }
 
-        elapsed = round(time.time() - t0, 1)
-        self.state.set_multi({
-            "gpu_mode": GPUMode.SHARED,
-            "active_services": json.dumps(target_services),
-            "profile_state": ProfileState.HEALTHY,
-        })
+        # ── VRAM headroom check ──
+        if model.typical_vram_pct > 0:
+            current_pct = self._get_current_vram_pct()
+            if current_pct + model.typical_vram_pct > 95:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Insufficient GPU memory: current ~{current_pct:.0f}%, "
+                        f"{model.name} needs ~{model.typical_vram_pct}%, "
+                        f"total would be ~{current_pct + model.typical_vram_pct:.0f}% (limit 95%)."
+                    ),
+                }
 
+        # ── Start only the new service ──
+        log.info("Shared add (incremental): %s", model.name)
+        results = {}
+        if model.is_vllm:
+            results[model.name] = self._proc.start_vllm(model.vllm)
+        elif model.is_comfyui:
+            results[model.name] = self._proc.start_comfyui(model.comfyui)
+
+        # Validate
+        failed = [k for k, r in results.items() if r.get("status") not in ("healthy", "started")]
+        if failed:
+            self.state.set("profile_state", ProfileState.ERROR)
+            return {"status": "error", "message": f"Failed to start: {failed}", "results": results}
+
+        # Update state: add to active services
+        remaining = list(self.active_services)
+        remaining.append(model.name)
+        self.state.set_active_services(remaining)
+        self.state.set("profile_state", ProfileState.HEALTHY)
+
+        elapsed = round(time.time() - t0, 1)
         return {
             "status": "switched",
             "model": model.name,
             "gpu_mode": GPUMode.SHARED,
             "elapsed_sec": elapsed,
-            "active_services": target_services,
+            "active_services": remaining,
             "results": results,
         }
 
@@ -446,6 +563,7 @@ class ModelManager:
         """Stop a single shared service. Other shared services remain.
 
         If this is the last shared service, auto-transition to idle.
+        Verifies GPU memory is actually freed (catches orphaned processes).
         """
         if name not in self.active_services:
             return {"status": "error", "message": f"Service '{name}' is not running"}
@@ -457,11 +575,17 @@ class ModelManager:
         if not model:
             return {"status": "error", "message": f"Unknown model: {name}"}
 
-        # Stop the specific service
+        # Stop the specific service (pass port for port-based cleanup)
         if model.is_vllm:
-            self._proc.stop_vllm()
+            self._proc.stop_vllm(port=model.vllm.port)
         elif model.is_comfyui:
-            self._proc.stop_comfyui_with_config(model.comfyui)
+            self._proc.stop_comfyui_with_config(model.comfyui, port=model.comfyui.port)
+
+        # Verify GPU actually freed — catch orphaned processes
+        if not wait_gpu_free(timeout=20):
+            log.warning("GPU not freed after stop %s — force kill remaining processes", name)
+            self._proc.force_kill_all()
+            wait_gpu_free(timeout=15)
 
         # Update active services
         remaining = [s for s in self.active_services if s != name]
