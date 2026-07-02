@@ -123,7 +123,7 @@ def cmd_switch(args):
         if result.get("active_services"):
             print(f"  Active services: {result['active_services']}")
         for key, res in result.get("results", {}).items():
-            status = "✅" if res.get("status") in ("healthy", "started") else "❌"
+            status = "✅" if res.get("status") in ("healthy", "started", "ok") else "❌"
             print(f"  {status} {key}: {res.get('status', '?')}")
     else:
         print(f"❌ {result['message']}")

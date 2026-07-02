@@ -141,7 +141,11 @@ class ProxyManager:
 
     def get_target_port(self, model_name: str):
         """Get port for a served_model_name. Works across all backend types."""
-        m = self.mgr.find_model_by_served_name(model_name)
+        # Resolve alias first
+        resolved = self._aliases.get(model_name, model_name)
+        m = self.mgr.find_model_by_served_name(resolved)
+        if not m and resolved != model_name:
+            m = self.mgr.find_model_by_served_name(model_name)
         return m.port if m else None
 
     def get_upstream(self, port: int) -> HTTPConnection:
@@ -542,6 +546,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if data is None:
             return
 
+        model = data.get("model", "vllm_qwen27b")
+        stream = data.get("stream", False)
+
         # Enable Qwen3 thinking/reasoning mode by default (vLLM only).
         # The --reasoning-parser qwen3 correctly splits output into
         # reasoning + content fields when thinking is enabled.
@@ -553,9 +560,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 data["chat_template_kwargs"] = {}
             if "enable_thinking" not in data.get("chat_template_kwargs", {}):
                 data["chat_template_kwargs"]["enable_thinking"] = True
-
-        model = data.get("model", "vllm_qwen27b")
-        stream = data.get("stream", False)
 
         # Dynamic model lookup
         service_name = pm.model_to_service(model)
@@ -572,6 +576,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         target_port = pm.get_target_port(model)
         if not target_port:
             self._send_json({"error": f"Unknown model: {model}"}, 404)
+            return
+
+        # Rewrite model name to upstream's served_name (alias → served_name)
+        ollama_model_obj = None
+        if service_name:
+            model_obj = pm.mgr.get_model(service_name)
+            if model_obj and model_obj.served_name:
+                data["model"] = model_obj.served_name
+            if model_obj and model_obj.is_ollama:
+                ollama_model_obj = model_obj
+
+        # Ollama with num_gpu: use native /api/chat API to pass options
+        if ollama_model_obj and ollama_model_obj.ollama and ollama_model_obj.ollama.num_gpu >= 0:
+            self._handle_chat_ollama_native(pm, data, target_port, stream, ollama_model_obj)
             return
 
         body = json.dumps(data).encode("utf-8")
@@ -653,6 +671,130 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     self._safe_write(b"0\r\n\r\n")
                 except Exception:
                     pass
+
+    def _handle_chat_ollama_native(self, pm, data, target_port, stream, model_obj):
+        """Handle chat completion for Ollama backends using native /api/chat API.
+
+        This allows passing Ollama-specific options like num_gpu which the
+        OpenAI-compatible endpoint ignores.
+        """
+        # Convert OpenAI messages to Ollama native format
+        ollama_req = {
+            "model": data["model"],
+            "messages": data.get("messages", []),
+            "stream": stream,
+            "options": {},
+        }
+        if model_obj.ollama.num_gpu >= 0:
+            ollama_req["options"]["num_gpu"] = model_obj.ollama.num_gpu
+        if data.get("max_tokens"):
+            ollama_req["options"]["num_predict"] = data["max_tokens"]
+        if model_obj.ollama.keep_alive:
+            ollama_req["keep_alive"] = model_obj.ollama.keep_alive
+
+        body = json.dumps(ollama_req).encode("utf-8")
+
+        try:
+            conn = pm.get_upstream(target_port)
+            conn.request("POST", "/api/chat", body=body,
+                         headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
+        except Exception as e:
+            log.error("Ollama native forward to :%d failed: %s", target_port, e)
+            pm.invalidate_upstream(target_port)
+            self._send_json({"error": str(e)}, 502)
+            return
+
+        try:
+            resp_status = resp.status
+            if resp_status != 200:
+                err_body = resp.read().decode("utf-8", errors="replace")
+                self._send_json({"error": f"Ollama error: {err_body[:500]}"}, resp_status)
+                return
+
+            if stream:
+                # Ollama native streaming: each line is a JSON object
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                import uuid
+                chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+                full_content = ""
+                try:
+                    buffer = b""
+                    while True:
+                        chunk = resp.read(4096)
+                        if not chunk:
+                            break
+                        buffer += chunk
+                        while b"\n" in buffer:
+                            line, buffer = buffer.split(b"\n", 1)
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                obj = json.loads(line)
+                                content = obj.get("message", {}).get("content", "")
+                                if content:
+                                    full_content += content
+                                    sse_data = json.dumps({
+                                        "id": chat_id,
+                                        "object": "chat.completion.chunk",
+                                        "created": int(time.time()),
+                                        "model": data["model"],
+                                        "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]
+                                    })
+                                    self._safe_write(f"data: {sse_data}\n\n".encode())
+                            except json.JSONDecodeError:
+                                pass
+                    # Send final chunk with finish_reason
+                    sse_done = json.dumps({
+                        "id": chat_id,
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": data["model"],
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+                    })
+                    self._safe_write(f"data: {sse_done}\n\n".encode())
+                    self._safe_write(b"data: [DONE]\n\n")
+                except Exception as e:
+                    log.error("Ollama native stream error: %s", e)
+            else:
+                # Non-streaming: Ollama returns single JSON object
+                resp_body = resp.read()
+                try:
+                    obj = json.loads(resp_body)
+                    full_content = obj.get("message", {}).get("content", "")
+                    total_input = obj.get("prompt_eval_count", 0) or 0
+                    total_output = obj.get("eval_count", 0) or 0
+                except json.JSONDecodeError:
+                    full_content = resp_body.decode("utf-8", errors="replace")
+                    total_input = 0
+                    total_output = 0
+                # Return OpenAI-compatible response
+                import uuid
+                self._send_json({
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": data["model"],
+                    "system_fingerprint": "fp_ollama",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": full_content},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": total_input,
+                        "completion_tokens": total_output,
+                        "total_tokens": total_input + total_output
+                    }
+                })
+        except Exception as e:
+            log.error("Ollama native response error: %s", e)
+            self._send_json({"error": str(e)}, 500)
 
     def _handle_switch(self, pm):
         data = self._read_body()

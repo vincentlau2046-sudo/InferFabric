@@ -113,6 +113,7 @@ class OllamaModelConfig:
     """Ollama 模型引用 — 不管理 daemon，只声明模型名."""
     model_ref: str  # "llama3.1:8b"
     keep_alive: str = "5m"
+    num_gpu: int = -1  # -1=auto, 0=CPU only, N=GPU layers
 
 
 @dataclass

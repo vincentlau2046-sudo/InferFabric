@@ -480,7 +480,7 @@ class ModelManager:
         # Validate
         failed = False
         for svc, res in results.items():
-            if res.get("status") not in ("healthy", "started"):
+            if res.get("status") not in ("healthy", "started", "ok"):
                 failed = True
                 break
 

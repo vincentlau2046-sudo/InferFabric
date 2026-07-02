@@ -499,10 +499,18 @@ class ProcessManager:
         if not model_path.exists():
             return {"status": "error", "message": f"GGUF model not found: {model_path}"}
 
-        conda_bin = CONDA_ENVS / "base" / "bin"
+        # Conda base env is at ~/miniconda3/ (not ~/miniconda3/envs/base/)
+        conda_base = Path.home() / "miniconda3"
+        conda_bin = conda_base / "bin"
         llama_server = conda_bin / "llama-server"
         if not llama_server.exists():
-            return {"status": "error", "message": f"llama-server not found at {llama_server}"}
+            # Fallback to PATH lookup
+            import shutil
+            llama_server_path = shutil.which("llama-server")
+            if llama_server_path:
+                llama_server = Path(llama_server_path)
+            else:
+                return {"status": "error", "message": f"llama-server not found at {llama_server} or in PATH"}
 
         cmd = [
             str(llama_server),
