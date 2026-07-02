@@ -39,27 +39,17 @@
 |---|---|---|
 | **Config 扩展** — 4 种后端类型 (vllm/comfyui/ollama/ollama_cpp) | ✅ | `1cf2a8e` |
 | **Proxy 通用化** — get_target_port/_wait_healthy/_handle_chat/_v1_models | ✅ | `1cf2a8e` |
-| **Ollama YAML** — llama3-8b, phi3-mini, ollama-daemon | ✅ | `3f27ade` |
+| **Ollama YAML** — llama3-1b, phi3-mini, ollama-daemon | ✅ | `3f27ade` |
 | **Ollama.cpp YAML** — gemma-cpu + process_manager 启停 | ✅ | `3f27ade` |
 | **CLI 扩展** — pull / list-downloaded 命令 | ✅ | `3f27ade` |
 | **模型别名** — fast/powerful/cheap/code/balanced → 具体模型 | ✅ | `b6d2319` |
 | **P0/P1 回归测试** — 23/23 全部通过 | ✅ | — |
-
-### 🔄 进行中
-
-| 组件 | 状态 | 执行者 |
-|---|---|---|
-| **Dashboard 本地模型发现** — GET /local-models, POST /deploy, UI | 🔄 | Claude Code |
-
-### ⏳ 待完成
-
-| 组件 | 优先级 | 依赖 |
-|---|---|---|
-| **Ollama 安装** — `curl -fsSL https://ollama.com/install.sh \| sudo sh` | 🔴 高 | sudo 权限 |
-| **Ollama 模型拉取** — `ollama pull llama3.1:8b; ollama pull phi3:mini` | 🔴 高 | Ollama 安装 |
-| **Ollama.cpp 编译** — llama.cpp/server 二进制 | 🟡 中 | conda/源码 |
-| **GGUF 模型下载** — gemma-2-9b-it-Q8_0.gguf | 🟡 中 | Ollama.cpp |
-| **全链路测试** — 8 模型 switch + chat 端到端 | 🟢 低 | 以上全部 |
+| **Dashboard 本地模型发现** — GET /local-models, POST /deploy, UI | ✅ | `c6d2f19` |
+| **Ollama 安装** — v0.17.5 运行中 | ✅ | — |
+| **Ollama 模型拉取** — llama3.2:1b (1.3GB), phi3:mini (2.2GB) | ✅ | — |
+| **Ollama.cpp 编译** — llama-server v9820 from gitee mirror | ✅ | — |
+| **GGUF 模型下载** — gemma-2-9b-it-Q8_0.gguf (9.8GB) | ✅ | — |
+| **全链路端到端测试** — 8 模型 switch + chat | ✅ | `2b90b4a` |
 
 ## 四后端矩阵
 
