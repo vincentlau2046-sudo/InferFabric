@@ -873,16 +873,24 @@ class ModelManager:
     # ── Internal Helpers ─────────────────────────────────────────
 
     def discover_local_models(self) -> dict:
-        """Scan ~/models/ and ~/ComfyUI/models/ for unconfigured model directories."""
+        """Scan ~/models/, ~/ComfyUI/models/, and Ollama for unconfigured models.
+
+        Returns models grouped by framework: vllm, ollama, ollama_cpp, comfyui.
+        Each model has a 'framework' field for frontend grouping.
+        """
         discovered = []
         configured = sorted(self._models.keys())
         configured_dirs = set()
+        configured_ollama_refs = set()
 
-        # Build set of known model directories from configured YAMLs
+        # Build set of known model directories and ollama refs from configured YAMLs
         for m in self._models.values():
             if m.is_vllm and m.vllm.model_dir:
                 configured_dirs.add(m.vllm.model_dir)
+            if m.is_ollama and m.ollama:
+                configured_ollama_refs.add(m.ollama.model_ref)
 
+        # ── vLLM models (~/models/ with config.json) ──
         models_base = Path.home() / "models"
         if models_base.exists():
             for d in sorted(models_base.iterdir()):
@@ -891,7 +899,6 @@ class ModelManager:
                 if d.name in configured_dirs:
                     continue
                 config_json = d / "config.json"
-                safetensors = list(d.glob("*.safetensors"))
                 gguf_files = list(d.glob("*.gguf"))
                 if config_json.exists():
                     try:
@@ -900,17 +907,50 @@ class ModelManager:
                         size_mb = 0
                     discovered.append({
                         "name": d.name, "path": str(d),
-                        "type": "vllm", "size_mb": size_mb,
+                        "type": "vllm", "framework": "vllm", "size_mb": size_mb,
                         "files": [f.name for f in sorted(d.iterdir()) if f.is_file()][:20],
                     })
                 elif gguf_files:
+                    # ── ollama.cpp GGUF models ──
                     size_mb = sum(f.stat().st_size for f in gguf_files) // (1024*1024)
                     discovered.append({
                         "name": d.name, "path": str(d),
-                        "type": "ollama_cpp_gguf", "size_mb": size_mb,
+                        "type": "ollama_cpp", "framework": "ollama_cpp", "size_mb": size_mb,
                         "files": [f.name for f in gguf_files],
                     })
 
+        # ── Ollama pulled models (ollama list) ──
+        try:
+            import subprocess
+            result = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                for line in result.stdout.strip().split("\n"):
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[0] not in ("NAME", ""):
+                        model_ref = parts[0]  # e.g. "llama3.2:1b"
+                        # Parse size from column 3+4 (e.g. "2.2" "GB")
+                        size_mb = 0
+                        for si in range(2, len(parts)):
+                            if parts[si].upper() in ("GB", "G", "MB", "M", "KB", "K"):
+                                try:
+                                    val = float(parts[si-1])
+                                    unit = parts[si].upper()
+                                    if unit.startswith("G"): size_mb = int(val * 1024)
+                                    elif unit.startswith("M"): size_mb = int(val)
+                                    elif unit.startswith("K"): size_mb = int(val / 1024)
+                                except Exception:
+                                    pass
+                                break
+                        if model_ref not in configured_ollama_refs:
+                            discovered.append({
+                                "name": model_ref, "path": "ollama://" + model_ref,
+                                "type": "ollama", "framework": "ollama", "size_mb": size_mb,
+                                "files": [],
+                            })
+        except Exception:
+            pass  # Ollama not available, skip
+
+        # ── ComfyUI models (~/ComfyUI/models/) ──
         comfyui_models = Path.home() / "ComfyUI" / "models"
         if comfyui_models.exists():
             for sub in ["checkpoints", "loras", "diffusion_models", "vae", "ipadapter"]:
@@ -922,7 +962,7 @@ class ModelManager:
                     size_mb = f.stat().st_size // (1024*1024)
                     discovered.append({
                         "name": name, "path": str(f),
-                        "type": f"comfyui_{sub.rstrip('s')}", "size_mb": size_mb,
+                        "type": f"comfyui_{sub.rstrip('s')}", "framework": "comfyui", "size_mb": size_mb,
                         "files": [f.name],
                     })
 

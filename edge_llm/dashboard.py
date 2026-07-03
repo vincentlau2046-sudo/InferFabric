@@ -314,6 +314,56 @@ body {
 .toast.err  { background:var(--red-s);   color:var(--red);   border:1px solid rgba(255,69,58,.2); }
 .toast.info { background:var(--blue-s);  color:var(--blue);  border:1px solid rgba(10,132,255,.2); }
 
+/* ── Framework Groups ── */
+.fw-group { margin-bottom: 16px; }
+.fw-group:last-child { margin-bottom: 0; }
+.fw-hdr {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; margin-bottom: 8px;
+  background: var(--bg); border-radius: 10px;
+}
+.fw-icon {
+  width: 24px; height: 24px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; color: #fff; flex-shrink: 0;
+}
+.fw-icon.vllm      { background: linear-gradient(135deg,#FF6B6B,#FF453A); }
+.fw-icon.ollama     { background: linear-gradient(135deg,#63E6BE,#30D158); }
+.fw-icon.ollama_cpp { background: linear-gradient(135deg,#5AC8FA,#0A84FF); }
+.fw-icon.comfyui   { background: linear-gradient(135deg,#DA8FFF,#BF5AF2); }
+.fw-icon.webui     { background: linear-gradient(135deg,#FFD60A,#FF9F0A); }
+.fw-label { font-size: 14px; font-weight: 600; color: var(--text1); }
+.fw-count { font-size: 12px; color: var(--text3); margin-left: 4px; }
+.fw-deploy-tag {
+  margin-left: auto; font-size: 11px; font-weight: 500;
+  padding: 2px 8px; border-radius: 6px;
+}
+.fw-deploy-tag.yes { background: var(--green-s); color: var(--green); }
+.fw-deploy-tag.no  { background: var(--bg); color: var(--text4); }
+
+/* ── Discovered Model Card ── */
+.disc-card {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; margin-bottom: 6px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 10px; transition: all .15s;
+}
+.disc-card:hover {
+  border-color: var(--blue); background: rgba(10,132,255,.03);
+  transform: translateY(-1px); box-shadow: 0 2px 6px rgba(10,132,255,.06);
+}
+.disc-card:last-child { margin-bottom: 0; }
+.disc-info { flex: 1; min-width: 0; }
+.disc-name { font-size: 14px; font-weight: 600; color: var(--text1); }
+.disc-meta { font-size: 11px; color: var(--text3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.disc-deploy {
+  padding: 5px 14px; border: none; border-radius: 8px;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  background: var(--green-s); color: var(--green);
+  transition: all .15s; flex-shrink: 0; margin-left: 10px;
+}
+.disc-deploy:hover { background: rgba(48,209,88,.18); }
+
 @media (max-width:700px) {
   .panels { grid-template-columns:1fr; }
   .status-bar { grid-template-columns:1fr; }
@@ -421,12 +471,6 @@ body {
   <!-- Active Services -->
   <div class="panel" id="svcCard" style="margin-bottom:18px;padding:16px 20px;min-height:40px"></div>
 
-  <!-- Discovered Local Models -->
-  <div class="panel" id="localModels" style="margin-bottom:18px;padding:16px 20px;display:none">
-    <div style="font-size:14px;font-weight:600;color:var(--text2);margin-bottom:12px">📦 本地未配置模型</div>
-    <div id="localModelsList"></div>
-  </div>
-
   <!-- Model Panels -->
   <div class="panels">
     <div class="panel">
@@ -443,6 +487,12 @@ body {
       </div>
       <div id="shrdList" style="flex:1"></div>
     </div>
+  </div>
+
+  <!-- Discovered Local Models (by framework) -->
+  <div class="panel" id="localModels" style="margin-bottom:18px;padding:16px 20px;display:none">
+    <div style="font-size:14px;font-weight:600;color:var(--text2);margin-bottom:14px">📦 本地未配置模型</div>
+    <div id="localModelsList"></div>
   </div>
 
   </div>
@@ -765,23 +815,66 @@ async function loadLocalModels() {
       return;
     }
     el.style.display = 'block';
-    let html = '';
+
+    // Framework metadata
+    const fwMeta = {
+      vllm:      { icon: '\uD83D\uDD25', label: 'vLLM',        canDeploy: true  },
+      ollama:     { icon: '\uD83E\uDD99', label: 'Ollama',      canDeploy: true  },
+      ollama_cpp: { icon: '\uD83D\uDCE6', label: 'ollama.cpp',   canDeploy: true  },
+      comfyui:    { icon: '\uD83C\uDFA8', label: 'ComfyUI',     canDeploy: false },
+      webui:      { icon: '\uD83C\uDF10', label: 'Web UI',      canDeploy: false },
+    };
+
+    // Group by framework
+    const groups = {};
     for (const m of list) {
-      const gb = m.size_mb >= 1024 ? (m.size_mb/1024).toFixed(1)+' GB' : m.size_mb+' MB';
-      html += '<div class="model-card" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">';
-      html += '<div><div class="model-name" style="font-size:14px">'+m.name+'</div>';
-      html += '<div style="font-size:11px;color:var(--text3);margin-top:2px">'+m.path+' · '+gb+' · '+m.type+'</div></div>';
-      html += '<button class="btn-card start" onclick="event.stopPropagation();doDeploy(\''+m.name+'\',\''+m.type+'\')">Deploy</button>';
+      const fw = m.framework || 'other';
+      if (!groups[fw]) groups[fw] = [];
+      groups[fw].push(m);
+    }
+
+    // Render in fixed order
+    const fwOrder = ['vllm', 'ollama', 'ollama_cpp', 'comfyui', 'webui'];
+    let html = '';
+    for (const fw of fwOrder) {
+      const models = groups[fw];
+      if (!models || models.length === 0) continue;
+      const meta = fwMeta[fw] || { icon: '\uD83D\uDCE6', label: fw, canDeploy: false };
+
+      html += '<div class="fw-group">';
+      html += '<div class="fw-hdr">';
+      html += '<div class="fw-icon ' + fw + '">' + meta.icon + '</div>';
+      html += '<span class="fw-label">' + meta.label + '</span>';
+      html += '<span class="fw-count">(' + models.length + ')</span>';
+      html += '<span class="fw-deploy-tag ' + (meta.canDeploy ? 'yes' : 'no') + '">' + (meta.canDeploy ? '可部署' : '仅列举') + '</span>';
+      html += '</div>';
+
+      for (const m of models) {
+        const gb = m.size_mb >= 1024 ? (m.size_mb/1024).toFixed(1)+' GB' : m.size_mb+' MB';
+        const shortPath = m.path.length > 50 ? '...' + m.path.slice(-47) : m.path;
+        html += '<div class="disc-card">';
+        html += '<div class="disc-info">';
+        html += '<div class="disc-name">' + m.name + '</div>';
+        html += '<div class="disc-meta">' + meta.label + ' · ' + gb + ' · ' + shortPath + '</div>';
+        html += '</div>';
+        if (meta.canDeploy) {
+          html += '<button class="disc-deploy" onclick="event.stopPropagation();doDeploy(\''+m.name+'\',\''+fw+'\')">Deploy</button>';
+        }
+        html += '</div>';
+      }
       html += '</div>';
     }
     listEl.innerHTML = html;
   } catch(e) { /* ignore */ }
 }
 
-async function doDeploy(name, type) {
+async function doDeploy(name, framework) {
   if (!swLock()) return;
   try {
-    const r = await j('/deploy', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:name,type:type})});
+    // Map framework to backend model_type
+    const typeMap = { vllm: 'vllm', ollama: 'ollama', ollama_cpp: 'ollama_cpp' };
+    const modelType = typeMap[framework] || framework;
+    const r = await j('/deploy', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:name,type:modelType})});
     if (r.status === 'switched' || r.status === 'already_active') {
       toast(name+' 已部署 ✓', 'ok');
     } else {
