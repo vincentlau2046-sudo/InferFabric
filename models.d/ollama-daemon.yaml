@@ -2,7 +2,7 @@ name: ollama-daemon
 description: "Ollama 守护进程 (基础设施)"
 type: ollama_daemon
 mode: shared
-cpu_only: false
+cpu_only: true
 ollama_daemon:
   port: 11434
   health_url: http://localhost:11434

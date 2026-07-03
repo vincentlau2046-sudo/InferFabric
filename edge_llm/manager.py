@@ -156,9 +156,10 @@ class ModelManager:
 
         actions: list[str] = []
 
-        # Determine actual gpu_mode from running services
+        # Determine actual gpu_mode from running services (cpu_only services don't count)
         actual_gpu_mode = GPUMode.IDLE
-        if actual_services:
+        gpu_services = [s for s in actual_services if not (self._models.get(s) and self._models[s].cpu_only)]
+        if gpu_services:
             # Check if any exclusive model is running
             for svc_name in actual_services:
                 m = self._models.get(svc_name)
