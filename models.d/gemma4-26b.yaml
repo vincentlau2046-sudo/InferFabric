@@ -1,6 +1,8 @@
 name: gemma4-26b
 description: "Gemma4-26B A4B NVFP4"
 mode: exclusive
+model_type: llm
+quantization: NVFP4
 
 vllm:
   model_dir: gemma-4-26b-a4b-nvfp4

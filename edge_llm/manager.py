@@ -85,7 +85,15 @@ class ModelManager:
         return self._models.get(name)
 
     def list_models(self) -> list[dict]:
-        """List all available models from models.d/. Skips alias_map entries."""
+        """List all available models from models.d/. Skips alias_map and ollama_daemon entries."""
+        def _get_context(m):
+            """Get context window in K units."""
+            if m.vllm:
+                return m.vllm.max_model_len
+            if m.ollama_cpp:
+                return m.ollama_cpp.context_size
+            return None
+
         return [
             {
                 "name": m.name,
@@ -93,9 +101,12 @@ class ModelManager:
                 "mode": m.mode,
                 "type": m.type,
                 "active": m.name in self.active_services,
+                "model_type": getattr(m, "model_type", "llm"),
+                "quantization": getattr(m, "quantization", ""),
+                "context_window": _get_context(m),
             }
             for m in self._models.values()
-            if m.type != "alias_map"
+            if m.type not in ("alias_map", "ollama_daemon")
         ]
 
     def find_model_by_served_name(self, served_name: str) -> Optional[ModelConfig]:

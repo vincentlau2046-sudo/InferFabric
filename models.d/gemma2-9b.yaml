@@ -1,7 +1,9 @@
-name: gemma-cpu
-description: "Gemma 2 9B Q8 — Ollama.cpp CPU 推理"
+name: gemma2-9b
+description: "Gemma 2 9B Q8_0 — Ollama.cpp CPU 推理"
 type: ollama_cpp
 mode: shared
+model_type: llm
+quantization: Q8_0
 cpu_only: true
 ollama_cpp:
   model_path: ~/models/gguf/gemma-2-9b-it-GGUF/gemma-2-9b-it-Q8_0.gguf

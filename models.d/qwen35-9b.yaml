@@ -1,7 +1,8 @@
 name: qwen35-9b
 description: "Qwen3.5-9B GPTQ-4bit"
 mode: shared
-typical_vram_pct: 38
+model_type: vl
+quantization: GPTQ-4bit
 
 vllm:
   model_dir: Qwen3.5-9B-GPTQ-4bit/Qwen3.5-9B-GPTQ-4bit

@@ -107,14 +107,23 @@ body {
 .stat-sub { font-size:12px; color:var(--text4); margin-top:5px; font-variant-numeric:tabular-nums; }
 .stat-sub b { color:var(--text2); font-weight:600; }
 
-/* ── Two-column panels ── */
-.panels { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:18px; }
+/* ── Stacked panels (vertical layout) ── */
+.panels { display:flex; flex-direction:column; gap:14px; margin-bottom:18px; }
 .panel {
   background:var(--card); border-radius:var(--radius);
   border:1px solid var(--border); box-shadow:var(--shadow);
   padding:20px; transition:box-shadow .2s;
   display:flex; flex-direction:column;
 }
+/* ── Model grid: 3 columns per row ── */
+.model-grid {
+  display:grid;
+  grid-template-columns:repeat(3, 1fr);
+  gap:10px;
+  min-height:80px;
+}
+@media (max-width:900px) { .model-grid { grid-template-columns:repeat(2, 1fr); } }
+@media (max-width:600px) { .model-grid { grid-template-columns:1fr; } }
 .panel:hover { box-shadow:0 4px 16px rgba(0,0,0,.06); }
 .panel-hdr {
   display:flex; align-items:center; gap:8px; margin-bottom:16px;
@@ -173,6 +182,18 @@ body {
 .model-info { flex:1; min-width:0; }
 .model-name { font-size:15px; font-weight:600; color:var(--text1); letter-spacing:-.01em; }
 .model-desc { font-size:12px; color:var(--text3); margin-top:2px; }
+
+/* ── Model Specs Row ── */
+.model-specs {
+  display:flex; gap:6px; margin-top:5px;
+  font-size:11px; color:var(--text3); flex-wrap:wrap;
+}
+.model-specs .spec-tag {
+  display:inline-flex; align-items:center; gap:3px;
+  padding:2px 6px; border-radius:4px;
+  background:var(--bg); font-size:11px;
+}
+
 .model-badge {
   padding:3px 10px; border-radius:8px;
   font-size:11px; font-weight:600; letter-spacing:.02em;
@@ -495,14 +516,14 @@ body {
         <div class="panel-icon excl">🔒</div>
         <span class="panel-title">独占模型</span>
       </div>
-      <div id="exclList" style="flex:1"></div>
+      <div id="exclList" class="model-grid"></div>
     </div>
     <div class="panel">
       <div class="panel-hdr">
         <div class="panel-icon shrd">🔓</div>
         <span class="panel-title">共享服务</span>
       </div>
-      <div id="shrdList" style="flex:1"></div>
+      <div id="shrdList" class="model-grid"></div>
     </div>
   </div>
 
@@ -728,6 +749,19 @@ async function loadModels() {
       btns+='<button class="btn-card start" onclick="event.stopPropagation();doSwitch(\''+m.name+'\')">启动</button>';
     }
 
+    // Specs row: framework + model type + context window + quantization
+    const fwIcons = { vllm:'🔥', ollama:'🦙', ollama_cpp:'📦', comfyui:'🎨' };
+    const fwLabels = { vllm:'vLLM', ollama:'Ollama', ollama_cpp:'ollama.cpp', comfyui:'ComfyUI' };
+    const framework = fwLabels[m.type] || m.type;
+    const fwIcon = fwIcons[m.type] || '📦';
+    const ctxStr = m.context_window ? (m.context_window >= 1024 ? (m.context_window/1024).toFixed(0)+'K ctx' : m.context_window+' ctx') : '';
+    const typeIcon = { llm:'📝', vl:'👁', omni:'🌐' };
+    const typeLabel = { llm:'LLM', vl:'VL', omni:'Omni' };
+    let specs = '<span class="spec-tag">'+fwIcon+' '+framework+'</span>';
+    if(typeIcon[m.model_type]) specs += '<span class="spec-tag">'+typeIcon[m.model_type]+' '+(typeLabel[m.model_type]||m.model_type)+'</span>';
+    if(ctxStr) specs += '<span class="spec-tag">📐 '+ctxStr+'</span>';
+    if(m.quantization) specs += '<span class="spec-tag">⚡ '+m.quantization+'</span>';
+
     return '<div class="'+cls+'" id="sw-'+m.name+'">'+
       '<div class="model-top">'+
         '<div class="model-dot"></div>'+
@@ -736,6 +770,7 @@ async function loadModels() {
         '</div>'+
         '<span class="model-badge '+modeBadge+'">'+modeBadge+'</span>'+
       '</div>'+
+      '<div class="model-specs">'+specs+'</div>'+
       '<div class="model-actions">'+btns+'</div>'+
     '</div>';
   }

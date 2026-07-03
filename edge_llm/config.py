@@ -148,6 +148,8 @@ class ModelConfig:
       ollama:      OllamaModelConfig if type='ollama'
       ollama_cpp:  OllamaCppConfig if type='ollama_cpp'
       ollama_daemon: OllamaDaemonConfig if type='ollama_daemon'
+      model_type:  'llm' | 'vl' | 'omni' — capability classification
+      quantization: quantization format string (e.g. 'NVFP4', 'GPTQ-4bit', 'Q8_0')
     """
     name: str
     description: str
@@ -160,6 +162,8 @@ class ModelConfig:
     ollama_daemon: Optional[OllamaDaemonConfig] = None
     cpu_only: bool = False
     typical_vram_pct: float = 0.0
+    model_type: str = "llm"  # 'llm' | 'vl' | 'omni'
+    quantization: str = ""  # quantization format: 'NVFP4', 'GPTQ-4bit', 'Q8_0', etc.
 
     @property
     def port(self) -> Optional[int]:
@@ -344,6 +348,8 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             ollama_daemon=ollama_daemon_cfg,
             cpu_only=bool(raw.get("cpu_only", False)),
             typical_vram_pct=float(raw.get("typical_vram_pct", 0)),
+            model_type=raw.get("model_type", "llm"),
+            quantization=raw.get("quantization", ""),
         )
 
     return result

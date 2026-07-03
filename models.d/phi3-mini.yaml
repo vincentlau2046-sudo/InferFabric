@@ -2,6 +2,8 @@ name: phi3-mini
 description: "Phi-3 Mini 3.8B (Ollama)"
 type: ollama
 mode: shared
+model_type: llm
+quantization: Q4_0
 cpu_only: true
 ollama:
   model_ref: "phi3:mini"
