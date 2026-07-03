@@ -75,11 +75,11 @@ def cmd_models(args):
         models = [m for m in models if m["mode"] == mode_filter]
 
     print(f"\nAvailable Models ({len(models)}):")
-    print(f"{'name':<20} {'mode':<12} {'type':<10} {'description'}")
-    print("-" * 70)
+    print(f"{'name':<20} {'mode':<12} {'type':<10} {'model_type':<10} {'description'}")
+    print("-" * 80)
     for m in models:
         active = " ← active" if m["active"] else ""
-        print(f"{m['name']:<20} {m['mode']:<12} {m['type']:<10} {m['description']}{active}")
+        print(f"{m['name']:<20} {m['mode']:<12} {m['type']:<10} {m.get('model_type','llm'):<10} {m['description']}{active}")
 
 
 def cmd_switch(args):
@@ -88,7 +88,7 @@ def cmd_switch(args):
         print("\nAvailable models:")
         mgr = ModelManager()
         for m in mgr.list_models():
-            print(f"  {m['name']:<20} ({m['mode']}, {m['type']})")
+            print(f"  {m['name']:<20} ({m['mode']}, {m['type']}, {m.get('model_type','llm')})")
         print("  idle                  (release GPU)")
         sys.exit(1)
 
@@ -106,7 +106,7 @@ def cmd_switch(args):
             print(f"❌ Unknown model: {target}")
             print("\nAvailable models:")
             for m in mgr.list_models():
-                print(f"  {m['name']:<20} ({m['mode']}, {m['type']})")
+                print(f"  {m['name']:<20} ({m['mode']}, {m['type']}, {m.get('model_type','llm')})")
             sys.exit(1)
         # Clear manual stop for target (user explicitly wants it)
         mgr.state.clear_manual_stop(target)

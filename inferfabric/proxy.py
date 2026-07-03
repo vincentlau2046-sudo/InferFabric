@@ -1,15 +1,7 @@
 """
-inferfabric/proxy.py — Robust auto-routing proxy + web dashboard.
+inferfabric/proxy.py — Auto-routing proxy + web dashboard.
 
-v4.0: Model-plugin architecture. No more Profile concept.
-      Dynamic model lookup from models.d/ via find_model_by_served_name().
-
-v3.2 fixes preserved:
-  - shutdown deadlock: handle_request() loop + Event flag
-  - BrokenPipeError: silently caught in all response paths
-  - streaming proxy: robust chunk forwarding
-  - systemd watchdog: independent thread
-  - connection reuse: HTTPConnection per upstream
+v4.0: Model-plugin architecture. Forwarding logic extracted to forwarder.py.
 """
 
 import sys
@@ -32,6 +24,7 @@ from inferfabric.config import load_aliases
 
 log = logging.getLogger("inferfabric.proxy")
 
+
 # ─── Config ──────────────────────────────────────────────────────
 
 PROXY_HOST = os.environ.get("EDGE_PROXY_HOST", "127.0.0.1")
@@ -52,10 +45,7 @@ class ProxyManager:
         self._last_switch = 0.0
         self._cooldown = 10
         self._switch_lock = threading.Lock()
-        self._upstream_pool: dict[int, HTTPConnection] = {}
-        self._pool_lock = threading.Lock()
-        if self._aliases:
-            log.info("Loaded %d model aliases: %s", len(self._aliases), list(self._aliases.keys()))
+        log.info("Loaded %d model aliases: %s", len(self._aliases), list(self._aliases.keys()))
 
     @property
     def current(self) -> str:
@@ -64,14 +54,11 @@ class ProxyManager:
 
     def model_to_service(self, model_name: str):
         """Map served_model_name to model config name. Resolves aliases first."""
-        # Step 1: resolve aliases (fast → llama3-8b)
         resolved = self._aliases.get(model_name, model_name)
-        # Step 2: find by served_name
         m = self.mgr.find_model_by_served_name(resolved)
         if m:
             log.debug("model_to_service: %s → %s (served=%s)", model_name, resolved, m.name)
             return m.name
-        # Step 3: fallback — also try original name
         if resolved != model_name:
             m2 = self.mgr.find_model_by_served_name(model_name)
             if m2:
@@ -79,7 +66,7 @@ class ProxyManager:
         return None
 
     def _wait_healthy(self, target: str, timeout: float = 180) -> bool:
-        """Wait for a model to become healthy after switch. Works across all backend types."""
+        """Wait for a model to become healthy after switch."""
         model = self.mgr.get_model(target)
         if not model:
             return False
@@ -88,17 +75,25 @@ class ProxyManager:
             return False
         deadline = time.time() + timeout
         while time.time() < deadline:
+            conn = None
             try:
                 conn = HTTPConnection("127.0.0.1", port, timeout=5)
                 conn.request("GET", "/health")
                 resp = conn.getresponse()
                 resp.read()
-                conn.close()
                 if resp.status == 200:
+                    conn.close()
                     log.info("Model %s healthy on :%d", target, port)
                     return True
+                resp.close()
             except Exception:
                 pass
+            finally:
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
             time.sleep(2)
         log.warning("Model %s not healthy after %.0fs", target, timeout)
         return False
@@ -121,55 +116,35 @@ class ProxyManager:
             result = self.mgr.switch(target)
             self._last_switch = time.time()
             if result["status"] == "switched":
-                # Wait for model to become healthy before returning
                 return self._wait_healthy(target)
             return result["status"] in ("switched", "already_active")
         finally:
             self._switch_lock.release()
 
     def get_target_port(self, model_name: str):
-        """Get port for a served_model_name. Works across all backend types."""
-        # Resolve alias first
+        """Get port for a served_model_name."""
         resolved = self._aliases.get(model_name, model_name)
         m = self.mgr.find_model_by_served_name(resolved)
         if not m and resolved != model_name:
             m = self.mgr.find_model_by_served_name(model_name)
         return m.port if m else None
 
-    def get_upstream(self, port: int) -> HTTPConnection:
-        """Get or create a keep-alive HTTPConnection to upstream.
+    def make_conn(self, port: int, timeout: int = 300) -> HTTPConnection:
+        """Create new HTTP connection per request — no pool (thread-safe).
 
-        Uses lazy invalidation: return cached connection without probing.
-        If the connection fails during use, caller should invalidate_upstream().
+        Each thread gets its own connection to vLLM, avoiding race conditions.
+        vLLM handles concurrent connections natively.
         """
-        with self._pool_lock:
-            conn = self._upstream_pool.get(port)
-            if conn:
-                return conn
-            conn = HTTPConnection("127.0.0.1", port, timeout=300)
-            self._upstream_pool[port] = conn
-            return conn
-
-    def invalidate_upstream(self, port: int):
-        """Remove and close a stale upstream connection."""
-        with self._pool_lock:
-            conn = self._upstream_pool.pop(port, None)
-            if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+        return HTTPConnection("127.0.0.1", port, timeout=timeout)
 
     def health_check(self):
         try:
             s = self.mgr.status()
             log.info("Health check: gpu_mode=%s services=%s",
                      s.get("gpu_mode"), s.get("active_services"))
-            # Check for unhealthy services in healthy state
             for svc, health in s.get("services_health", {}).items():
                 if health == "❌" and s.get("gpu_mode") != GPUMode.IDLE:
                     log.warning("%s unhealthy but GPU not idle — use `iff reconcile`", svc)
-            # Clean up expired manual_stop records
             self._clean_manual_stops()
         except Exception as e:
             log.error("Health check exception: %s", e)
@@ -189,6 +164,9 @@ class ProxyManager:
 
 
 # ─── HTTP Handler ───────────────────────────────────────────────
+
+from inferfabric import forwarder
+
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
@@ -227,7 +205,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"status": "ok", "gpu_mode": pm.mgr.gpu_mode})
             elif self.path == "/status":
                 self._send_json(pm.mgr.status())
-            elif self.path in ("/models", "/profiles"):  # /profiles backward compat
+            elif self.path in ("/models", "/profiles"):
                 self._send_json(pm.mgr.list_models())
             elif self.path == "/local-models":
                 self._send_json(pm.mgr.discover_local_models())
@@ -253,6 +231,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             path = urlparse(self.path).path
             if path in ("/v1/chat/completions", "/v1/completions"):
                 self._handle_chat(pm)
+            elif path == "/v1/messages":
+                self._handle_messages(pm)
             elif path == "/switch":
                 self._handle_switch(pm)
             elif path == "/stop":
@@ -297,35 +277,321 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self._safe_write(body)
 
-    def _handle_v1_models(self, pm):
-        """Forward /v1/models to active upstream services.
+    # ── Anthropic Messages handler (/v1/messages) ──
 
-        Aggregates model lists from all active backends (vLLM, Ollama, etc.).
+    def _handle_messages(self, pm):
+        """Handle Anthropic Messages API requests.
+
+        Fallback chain:
+          1. Active local LLM/VL model(s) — dynamic lookup
+          2. Baidu Coding Plan — cloud fallback
+          3. 503 if both fail
         """
+        data = self._read_body()
+        if data is None:
+            return
+
+        original_model = data.get("model", "")
+        auth_header = self.headers.get("Authorization", "") or self.headers.get("x-api-key", "")
+
+        log.info("/v1/messages body: max_tokens=%s, model=%s, messages_count=%d, tools_count=%d, body_size=%d",
+                 data.get("max_tokens"), data.get("model"),
+                 len(data.get("messages", [])),
+                 len(data.get("tools", [])),
+                 len(json.dumps(data)))
+
+        # Find active local LLM/VL services
+        active_llm = None
+        for svc in pm.mgr.active_services:
+            model_obj = pm.mgr.get_model(svc)
+            if model_obj and model_obj.model_type in forwarder.LOCAL_LLM_TYPES:
+                if model_obj.port:
+                    active_llm = model_obj
+                    break
+
+        if active_llm:
+            log.info("/v1/messages → LOCAL %s (port %d)", active_llm.name, active_llm.port)
+            forwarder.forward_anthropic_local(self, pm, data, auth_header, active_llm, original_model)
+        else:
+            log.info("/v1/messages → BAIDU fallback")
+            forwarder.forward_to_baidu(self, data, auth_header, original_model)
+
+    # ── OpenAI chat handler ──
+
+    def _handle_chat(self, pm):
+        data = self._read_body()
+        if data is None:
+            return
+
+        model = data.get("model", "vllm_qwen27b")
+        stream = data.get("stream", False)
+
+        # Enable Qwen3 thinking/reasoning mode by default (vLLM only)
+        svc_name = pm.model_to_service(model)
+        model_obj = pm.mgr.get_model(svc_name) if svc_name else None
+        if model_obj and model_obj.is_vllm:
+            if "chat_template_kwargs" not in data:
+                data["chat_template_kwargs"] = {}
+            if "enable_thinking" not in data.get("chat_template_kwargs", {}):
+                data["chat_template_kwargs"]["enable_thinking"] = True
+
+        # Dynamic model lookup
+        service_name = pm.model_to_service(model)
+        if service_name and AUTO_SWITCH:
+            switched = pm.ensure_service(service_name)
+            if not switched and service_name not in pm.mgr.active_services:
+                if pm.mgr.state.is_manually_stopped(service_name):
+                    reason = f"{service_name} was manually stopped — auto-switch blocked for {pm.mgr.state.MANUAL_STOP_TTL}s"
+                else:
+                    reason = "tri-state rule violation or switch in progress"
+                self._send_json({"error": f"Cannot switch to {reason}"}, 503)
+                return
+
+        target_port = pm.get_target_port(model)
+        if not target_port:
+            self._send_json({"error": f"Unknown model: {model}"}, 404)
+            return
+
+        # Rewrite model name to upstream's served_name
+        ollama_model_obj = None
+        if service_name:
+            model_obj = pm.mgr.get_model(service_name)
+            if model_obj and model_obj.served_name:
+                data["model"] = model_obj.served_name
+            if model_obj and model_obj.is_ollama:
+                ollama_model_obj = model_obj
+
+        if ollama_model_obj and ollama_model_obj.ollama and ollama_model_obj.ollama.num_gpu >= 0:
+            self._handle_chat_ollama_native(pm, data, target_port, stream, ollama_model_obj)
+            return
+
+        body = json.dumps(data).encode("utf-8")
+        try:
+            conn = pm.make_conn(target_port)
+            conn.request("POST", self.path, body=body,
+                         headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
+        except Exception as e:
+            log.error("Forward to :%d failed: %s", target_port, e)
+            try:
+                conn = pm.make_conn(target_port)
+                conn.request("POST", self.path, body=body,
+                             headers={"Content-Type": "application/json"})
+                resp = conn.getresponse()
+            except Exception as e2:
+                log.error("Retry also failed: %s", e2)
+                self._send_json({"error": str(e2)}, 502)
+                return
+
+        try:
+            resp_status = resp.status
+            resp_headers = {k.lower(): v for k, v in resp.getheaders()}
+            resp_ct = resp_headers.get("content-type", "application/json")
+            headers_sent = False
+
+            if stream:
+                headers_sent = True
+                self.send_response(resp_status)
+                self.send_header("Content-Type", resp_ct)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                try:
+                    while True:
+                        chunk = resp.read(8192)
+                        if not chunk:
+                            break
+                        size = f"{len(chunk):x}\r\n".encode()
+                        self._safe_write(size)
+                        self._safe_write(chunk)
+                        self._safe_write(b"\r\n")
+                    self._safe_write(b"0\r\n\r\n")
+                except Exception as e:
+                    log.debug("Stream forwarding interrupted: %s", e)
+                    try:
+                        self._safe_write(b"0\r\n\r\n")
+                    except Exception:
+                        pass
+                finally:
+                    resp.close()
+            else:
+                try:
+                    resp_body = resp.read()
+                    self.send_response(resp_status)
+                    self.send_header("Content-Type", resp_ct)
+                    self.send_header("Content-Length", str(len(resp_body)))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self._safe_write(resp_body)
+                finally:
+                    resp.close()
+
+        except Exception as e:
+            log.error("Error forwarding response: %s", e)
+            if not headers_sent:
+                try:
+                    self._send_json({"error": str(e)}, 502)
+                except Exception:
+                    pass
+            else:
+                try:
+                    self._safe_write(b"0\r\n\r\n")
+                except Exception:
+                    pass
+
+    def _handle_chat_ollama_native(self, pm, data, target_port, stream, model_obj):
+        """Handle chat for Ollama backends using native /api/chat API."""
+        ollama_req = {
+            "model": data["model"],
+            "messages": data.get("messages", []),
+            "stream": stream,
+            "options": {},
+        }
+        if model_obj.ollama.num_gpu >= 0:
+            ollama_req["options"]["num_gpu"] = model_obj.ollama.num_gpu
+        if data.get("max_tokens"):
+            ollama_req["options"]["num_predict"] = data["max_tokens"]
+        if model_obj.ollama.keep_alive:
+            ollama_req["keep_alive"] = model_obj.ollama.keep_alive
+
+        body = json.dumps(ollama_req).encode("utf-8")
+
+        try:
+            conn = pm.make_conn(target_port)
+            conn.request("POST", "/api/chat", body=body,
+                         headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
+        except Exception as e:
+            log.error("Ollama native forward to :%d failed: %s", target_port, e)
+            self._send_json({"error": str(e)}, 502)
+            return
+
+        try:
+            resp_status = resp.status
+            if resp_status != 200:
+                err_body = resp.read().decode("utf-8", errors="replace")
+                self._send_json({"error": f"Ollama error: {err_body[:500]}"}, resp_status)
+                return
+
+            if stream:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                import uuid
+                chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+                full_content = ""
+                try:
+                    buffer = b""
+                    while True:
+                        chunk = resp.read(4096)
+                        if not chunk:
+                            break
+                        buffer += chunk
+                        while b"\n" in buffer:
+                            line, buffer = buffer.split(b"\n", 1)
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                obj = json.loads(line)
+                                content = obj.get("message", {}).get("content", "")
+                                if content:
+                                    full_content += content
+                                    sse_data = json.dumps({
+                                        "id": chat_id,
+                                        "object": "chat.completion.chunk",
+                                        "created": int(time.time()),
+                                        "model": data["model"],
+                                        "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]
+                                    })
+                                    self._safe_write(f"data: {sse_data}\n\n".encode())
+                            except json.JSONDecodeError:
+                                pass
+                    sse_done = json.dumps({
+                        "id": chat_id,
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": data["model"],
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+                    })
+                    self._safe_write(f"data: {sse_done}\n\n".encode())
+                    self._safe_write(b"data: [DONE]\n\n")
+                except Exception as e:
+                    log.error("Ollama native stream error: %s", e)
+            else:
+                resp_body = resp.read()
+                try:
+                    obj = json.loads(resp_body)
+                    full_content = obj.get("message", {}).get("content", "")
+                    total_input = obj.get("prompt_eval_count", 0) or 0
+                    total_output = obj.get("eval_count", 0) or 0
+                except json.JSONDecodeError:
+                    full_content = resp_body.decode("utf-8", errors="replace")
+                    total_input = 0
+                    total_output = 0
+                import uuid
+                self._send_json({
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": data["model"],
+                    "system_fingerprint": "fp_ollama",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": full_content},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": total_input,
+                        "completion_tokens": total_output,
+                        "total_tokens": total_input + total_output
+                    }
+                })
+        except Exception as e:
+            log.error("Ollama native response error: %s", e)
+            self._send_json({"error": str(e)}, 500)
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+
+    def _handle_v1_models(self, pm):
+        """Forward /v1/models to active upstream services."""
         active = list(pm.mgr.active_services)
         if not active:
             models_d = pm.mgr.list_models()
             self._send_json(models_d)
             return
 
-        # Collect models from all active services across all backend types
         all_models = []
         for svc in active:
             model = pm.mgr.get_model(svc)
             if not model or not model.port:
                 continue
             port = model.port
+            conn = None
             try:
                 conn = HTTPConnection("127.0.0.1", port, timeout=10)
                 conn.request("GET", "/v1/models")
                 resp = conn.getresponse()
                 body = resp.read()
-                conn.close()
                 if resp.status == 200:
                     data = json.loads(body)
                     all_models.extend(data.get("data", []))
             except Exception as e:
                 log.error("/v1/models forward failed for %s (port %d): %s", svc, port, e)
+            finally:
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+        all_models.append({"id": "qianfan-code-latest", "object": "model", "owned_by": "proxy", "permission": []})
 
         if all_models:
             self._send_json({"object": "list", "data": all_models})
@@ -353,14 +619,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": str(e)}, 502)
             return
 
-        # Parse Prometheus text format
         gauges, counters, histos = {}, {}, {}
 
         for line in text.splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            # Extract name and value
             bracket = line.find("{")
             if bracket >= 0:
                 name = line[:bracket]
@@ -377,7 +641,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             except ValueError:
                 continue
 
-            # Classify
             if name.endswith("_bucket"):
                 base = name[:-7]
                 le_start = line.find('le="', bracket) if bracket >= 0 else -1
@@ -420,12 +683,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         result = {}
 
-        # ── KV Cache (gauge) ──
         kv = gauges.get("vllm:kv_cache_usage_perc")
         if kv is not None:
             result["kv_cache_usage_perc"] = round(kv * 100, 1)
 
-        # ── TTFT (histogram) ──
         ttft = histos.get("vllm:time_to_first_token_seconds")
         if ttft and ttft["count"] > 0:
             result["ttft_seconds"] = {
@@ -437,7 +698,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             result["ttft_cum_mean"] = round(ttft["sum"] / ttft["count"], 3)
             result["ttft_cum_n"] = ttft["count"]
 
-        # ── TPOT (histogram: request_time_per_output_token_seconds) ──
         tpot = histos.get("vllm:request_time_per_output_token_seconds")
         if tpot and tpot["count"] > 0:
             result["tpot_seconds"] = {
@@ -449,7 +709,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             result["tpot_cum_mean"] = round(tpot["sum"] / tpot["count"], 4)
             result["tpot_cum_n"] = tpot["count"]
 
-        # ── Seq Length (avg prompt + generation tokens per request) ──
         prompt_h = histos.get("vllm:request_prompt_tokens")
         gen_h = histos.get("vllm:request_generation_tokens")
         total_reqs = 0
@@ -463,8 +722,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             result["seq_generation"] = avg_gen
             result["seq_count"] = total_reqs
 
-        # ── Throughput (tokens/s) ──
-        # throughput = 1 / avg_inter_token_latency_seconds
         inter = histos.get("vllm:inter_token_latency_seconds")
         if inter and inter["count"] > 0:
             avg_inter = inter["sum"] / inter["count"]
@@ -476,7 +733,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def _system_info(self):
         info = {"cpu_percent": 0, "cpu_cores": os.cpu_count() or 1,
-                "ram_total_gb": 0, "ram_used_gb": 0, "uptime_seconds": 0}
+                "ram_total_gb": 0, "ram_used_gb": 0, "uptime_seconds": 0,
+                "gpu_util_pct": 0, "gpu_clock_mhz": 0, "gpu_power_w": 0}
         try:
             with open("/proc/meminfo") as f:
                 mem = f.read()
@@ -497,6 +755,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 info["uptime_seconds"] = int(float(f.read().split()[0]))
         except Exception:
             pass
+        try:
+            import subprocess as _sub
+            r = _sub.run(
+                ["nvidia-smi", "--query-gpu=utilization.gpu,clocks.current.graphics,power.draw",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                vals = r.stdout.strip().splitlines()[0].split(",")
+                info["gpu_util_pct"] = round(float(vals[0].strip().replace(" ", "")), 1)
+                info["gpu_clock_mhz"] = int(vals[1].strip().replace(" ", ""))
+                info["gpu_power_w"] = round(float(vals[2].strip().replace(" ", "")), 1)
+        except Exception:
+            pass
         return info
 
     def _read_body(self):
@@ -504,7 +776,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             content_length = int(self.headers.get("Content-Length", 0))
             if content_length == 0:
                 return {}
-            if content_length > 10 * 1024 * 1024:  # 10MB limit
+            if content_length > 10 * 1024 * 1024:
                 self._send_json({"error": "payload too large (max 10MB)"}, 413)
                 return None
             body = self.rfile.read(content_length)
@@ -513,275 +785,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": f"Invalid JSON: {e}"}, 400)
             return None
 
-    def _handle_chat(self, pm):
-        data = self._read_body()
-        if data is None:
-            return
-
-        model = data.get("model", "vllm_qwen27b")
-        stream = data.get("stream", False)
-
-        # Enable Qwen3 thinking/reasoning mode by default (vLLM only).
-        # The --reasoning-parser qwen3 correctly splits output into
-        # reasoning + content fields when thinking is enabled.
-        # Only override when the caller explicitly sets enable_thinking.
-        svc_name = pm.model_to_service(model)
-        model_obj = pm.mgr.get_model(svc_name) if svc_name else None
-        if model_obj and model_obj.is_vllm:
-            if "chat_template_kwargs" not in data:
-                data["chat_template_kwargs"] = {}
-            if "enable_thinking" not in data.get("chat_template_kwargs", {}):
-                data["chat_template_kwargs"]["enable_thinking"] = True
-
-        # Dynamic model lookup
-        service_name = pm.model_to_service(model)
-        if service_name and AUTO_SWITCH:
-            switched = pm.ensure_service(service_name)
-            if not switched and service_name not in pm.mgr.active_services:
-                if pm.mgr.state.is_manually_stopped(service_name):
-                    reason = f"{service_name} was manually stopped — auto-switch blocked for {pm.mgr.state.MANUAL_STOP_TTL}s"
-                else:
-                    reason = f"tri-state rule violation or switch in progress"
-                self._send_json({"error": f"Cannot switch to {reason}"}, 503)
-                return
-
-        target_port = pm.get_target_port(model)
-        if not target_port:
-            self._send_json({"error": f"Unknown model: {model}"}, 404)
-            return
-
-        # Rewrite model name to upstream's served_name (alias → served_name)
-        ollama_model_obj = None
-        if service_name:
-            model_obj = pm.mgr.get_model(service_name)
-            if model_obj and model_obj.served_name:
-                data["model"] = model_obj.served_name
-            if model_obj and model_obj.is_ollama:
-                ollama_model_obj = model_obj
-
-        # Ollama with num_gpu: use native /api/chat API to pass options
-        if ollama_model_obj and ollama_model_obj.ollama and ollama_model_obj.ollama.num_gpu >= 0:
-            self._handle_chat_ollama_native(pm, data, target_port, stream, ollama_model_obj)
-            return
-
-        body = json.dumps(data).encode("utf-8")
-        # P1-1: Connection health check — invalidate if stale
-        try:
-            conn = pm.get_upstream(target_port)
-            conn.request("POST", self.path, body=body,
-                         headers={"Content-Type": "application/json"})
-            resp = conn.getresponse()
-        except Exception as e:
-            log.error("Forward to :%d failed: %s", target_port, e)
-            pm.invalidate_upstream(target_port)
-            # P1-1: Retry once with fresh connection
-            try:
-                conn = pm.get_upstream(target_port)
-                conn.request("POST", self.path, body=body,
-                             headers={"Content-Type": "application/json"})
-                resp = conn.getresponse()
-            except Exception as e2:
-                log.error("Retry also failed: %s", e2)
-                self._send_json({"error": str(e2)}, 502)
-                return
-
-        try:
-            resp_status = resp.status
-            resp_headers = {k.lower(): v for k, v in resp.getheaders()}
-            resp_ct = resp_headers.get("content-type", "application/json")
-            headers_sent = False
-
-            if stream:
-                headers_sent = True
-                self.send_response(resp_status)
-                self.send_header("Content-Type", resp_ct)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Transfer-Encoding", "chunked")
-                self.send_header("Cache-Control", "no-cache")
-                self.end_headers()
-                try:
-                    while True:
-                        chunk = resp.read(8192)
-                        if not chunk:
-                            break
-                        size = f"{len(chunk):x}\r\n".encode()
-                        self._safe_write(size)
-                        self._safe_write(chunk)
-                        self._safe_write(b"\r\n")
-                    self._safe_write(b"0\r\n\r\n")
-                except Exception as e:
-                    log.debug("Stream forwarding interrupted: %s", e)
-                    # Headers already sent — just terminate chunked encoding and close
-                    try:
-                        self._safe_write(b"0\r\n\r\n")
-                    except Exception:
-                        pass
-            else:
-                resp_body = resp.read()
-                self.send_response(resp_status)
-                self.send_header("Content-Type", resp_ct)
-                self.send_header("Content-Length", str(len(resp_body)))
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self._safe_write(resp_body)
-
-            try:
-                resp.read()
-            except Exception:
-                pass
-
-        except Exception as e:
-            log.error("Error forwarding response: %s", e)
-            if not headers_sent:
-                try:
-                    self._send_json({"error": str(e)}, 502)
-                except Exception:
-                    pass
-            else:
-                # Headers already sent (streaming mode) — just close
-                try:
-                    self._safe_write(b"0\r\n\r\n")
-                except Exception:
-                    pass
-
-    def _handle_chat_ollama_native(self, pm, data, target_port, stream, model_obj):
-        """Handle chat completion for Ollama backends using native /api/chat API.
-
-        This allows passing Ollama-specific options like num_gpu which the
-        OpenAI-compatible endpoint ignores.
-        """
-        # Convert OpenAI messages to Ollama native format
-        ollama_req = {
-            "model": data["model"],
-            "messages": data.get("messages", []),
-            "stream": stream,
-            "options": {},
-        }
-        if model_obj.ollama.num_gpu >= 0:
-            ollama_req["options"]["num_gpu"] = model_obj.ollama.num_gpu
-        if data.get("max_tokens"):
-            ollama_req["options"]["num_predict"] = data["max_tokens"]
-        if model_obj.ollama.keep_alive:
-            ollama_req["keep_alive"] = model_obj.ollama.keep_alive
-
-        body = json.dumps(ollama_req).encode("utf-8")
-
-        try:
-            conn = pm.get_upstream(target_port)
-            conn.request("POST", "/api/chat", body=body,
-                         headers={"Content-Type": "application/json"})
-            resp = conn.getresponse()
-        except Exception as e:
-            log.error("Ollama native forward to :%d failed: %s", target_port, e)
-            pm.invalidate_upstream(target_port)
-            self._send_json({"error": str(e)}, 502)
-            return
-
-        try:
-            resp_status = resp.status
-            if resp_status != 200:
-                err_body = resp.read().decode("utf-8", errors="replace")
-                self._send_json({"error": f"Ollama error: {err_body[:500]}"}, resp_status)
-                return
-
-            if stream:
-                # Ollama native streaming: each line is a JSON object
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Cache-Control", "no-cache")
-                self.end_headers()
-                import uuid
-                chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-                full_content = ""
-                try:
-                    buffer = b""
-                    while True:
-                        chunk = resp.read(4096)
-                        if not chunk:
-                            break
-                        buffer += chunk
-                        while b"\n" in buffer:
-                            line, buffer = buffer.split(b"\n", 1)
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                obj = json.loads(line)
-                                content = obj.get("message", {}).get("content", "")
-                                if content:
-                                    full_content += content
-                                    sse_data = json.dumps({
-                                        "id": chat_id,
-                                        "object": "chat.completion.chunk",
-                                        "created": int(time.time()),
-                                        "model": data["model"],
-                                        "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]
-                                    })
-                                    self._safe_write(f"data: {sse_data}\n\n".encode())
-                            except json.JSONDecodeError:
-                                pass
-                    # Send final chunk with finish_reason
-                    sse_done = json.dumps({
-                        "id": chat_id,
-                        "object": "chat.completion.chunk",
-                        "created": int(time.time()),
-                        "model": data["model"],
-                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
-                    })
-                    self._safe_write(f"data: {sse_done}\n\n".encode())
-                    self._safe_write(b"data: [DONE]\n\n")
-                except Exception as e:
-                    log.error("Ollama native stream error: %s", e)
-            else:
-                # Non-streaming: Ollama returns single JSON object
-                resp_body = resp.read()
-                try:
-                    obj = json.loads(resp_body)
-                    full_content = obj.get("message", {}).get("content", "")
-                    total_input = obj.get("prompt_eval_count", 0) or 0
-                    total_output = obj.get("eval_count", 0) or 0
-                except json.JSONDecodeError:
-                    full_content = resp_body.decode("utf-8", errors="replace")
-                    total_input = 0
-                    total_output = 0
-                # Return OpenAI-compatible response
-                import uuid
-                self._send_json({
-                    "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
-                    "object": "chat.completion",
-                    "created": int(time.time()),
-                    "model": data["model"],
-                    "system_fingerprint": "fp_ollama",
-                    "choices": [{
-                        "index": 0,
-                        "message": {"role": "assistant", "content": full_content},
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {
-                        "prompt_tokens": total_input,
-                        "completion_tokens": total_output,
-                        "total_tokens": total_input + total_output
-                    }
-                })
-        except Exception as e:
-            log.error("Ollama native response error: %s", e)
-            self._send_json({"error": str(e)}, 500)
-
     def _handle_switch(self, pm):
         data = self._read_body()
         if data is None:
             return
-        target = data.get("model") or data.get("profile")  # accept both
+        target = data.get("model") or data.get("profile")
         if not target:
             self._send_json({"error": "Missing model"}, 400)
             return
-        # Record manual stop for services being replaced
         if target == "idle":
             for svc in list(pm.mgr.active_services):
                 pm.mgr.state.record_manual_stop(svc)
         elif target != "idle":
-            # Clear manual stop for target (user explicitly wants it)
             pm.mgr.state.clear_manual_stop(target)
         result = pm.mgr.switch(target)
         self._send_json(result)
@@ -873,7 +888,6 @@ def main():
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
     )
-    # Rotating file handler for persistent logs
     log_dir = Path.home() / ".inferfabric" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     from logging.handlers import RotatingFileHandler
@@ -923,7 +937,6 @@ def main():
             if not shutdown_event.is_set():
                 mgr.health_check()
 
-    # Auto-reconcile on startup: sync state with actual running services
     try:
         rec = mgr.mgr.reconcile()
         if rec.get("actions"):
@@ -950,11 +963,7 @@ def main():
             server.server_close()
         except Exception:
             pass
-        for port, conn in mgr._upstream_pool.items():
-            try:
-                conn.close()
-            except Exception:
-                pass
+        log.info("Shutdown complete")
         sd_notify("STOPPING=1")
         log.info("Shutdown complete")
 

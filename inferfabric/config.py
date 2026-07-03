@@ -148,7 +148,7 @@ class ModelConfig:
       ollama:      OllamaModelConfig if type='ollama'
       ollama_cpp:  OllamaCppConfig if type='ollama_cpp'
       ollama_daemon: OllamaDaemonConfig if type='ollama_daemon'
-      model_type:  'llm' | 'vl' | 'omni' — capability classification
+      model_type:  'llm' | 'vl' | 'omni' | 'aigc' — capability classification
       quantization: quantization format string (e.g. 'NVFP4', 'GPTQ-4bit', 'Q8_0')
     """
     name: str
@@ -162,7 +162,7 @@ class ModelConfig:
     ollama_daemon: Optional[OllamaDaemonConfig] = None
     cpu_only: bool = False
     typical_vram_pct: float = 0.0
-    model_type: str = "llm"  # 'llm' | 'vl' | 'omni'
+    model_type: str = "llm"  # 'llm' | 'vl' | 'omni' | 'aigc'
     quantization: str = ""  # quantization format: 'NVFP4', 'GPTQ-4bit', 'Q8_0', etc.
 
     @property
@@ -391,3 +391,41 @@ def load_profiles(profiles_path: Path) -> dict[str, Profile]:
             switch_cost_sec=cfg.get("switch_cost_sec", 0),
         )
     return result
+
+
+# ─── Retry Constants (CCR-style) ─────────────────────────────────
+
+UPSTREAM_RETRY_BASE_S = 0.5
+UPSTREAM_RETRY_MAX_S = 2.0
+UPSTREAM_LOCAL_RETRIES = 2  # 1 attempt + 2 retries = 3 total local attempts
+
+
+def exponential_backoff(attempt: int) -> float:
+    """CCR-style exponential backoff: base * 2^attempt, clamped to max."""
+    return min(UPSTREAM_RETRY_MAX_S, UPSTREAM_RETRY_BASE_S * (2 ** attempt))
+
+
+def should_retry_on_status(status: int) -> bool:
+    """Should we retry on this HTTP status? CCR-style decision.
+
+    - 5xx / 408 / 429 → retry with backoff
+    - 4xx (non-retryable) → skip retry, fall back immediately
+    - 2xx / 3xx → success, no retry needed
+    """
+    if status >= 500 or status in (408, 429):
+        return True
+    return False
+
+
+def parse_retry_after_ms(headers: dict) -> float | None:
+    """Parse retry-after header (seconds or date), CCR-style.
+    Returns milliseconds to wait, or None."""
+    raw = headers.get("retry-after")
+    if not raw:
+        return None
+    try:
+        secs = float(raw.strip())
+        return max(0, min(secs * 1000, 60_000))  # cap at 60s like CCR
+    except ValueError:
+        pass
+    return None

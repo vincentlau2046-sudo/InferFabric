@@ -1,3 +1,5 @@
 __pycache__/
 bench_results/
+proxy.log
+*.bak
 __pycache__/

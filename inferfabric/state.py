@@ -232,17 +232,18 @@ class StateDB:
             return None
 
     def set_sleep_state(self, model_name: str, level: Optional[int]):
-        """Set sleep state for a model. level=None clears sleep state (awake)."""
-        raw = self.get("sleep_state") or "{}"
-        try:
-            states = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            states = {}
-        if level is None:
-            states.pop(model_name, None)
-        else:
-            states[model_name] = f"l{level}"
-        self.set("sleep_state", json.dumps(states))
+        """Set sleep state for a model. level=None clears sleep state (awake). Thread-safe."""
+        with self._lock:
+            raw = self.get("sleep_state") or "{}"
+            try:
+                states = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                states = {}
+            if level is None:
+                states.pop(model_name, None)
+            else:
+                states[model_name] = f"l{level}"
+            self.set("sleep_state", json.dumps(states))
 
     def get_all_sleep_states(self) -> dict[str, str]:
         """Get all model sleep states."""

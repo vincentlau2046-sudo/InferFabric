@@ -76,7 +76,7 @@ body {
 
 /* ── Status Bar ── */
 .status-bar {
-  display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;
+  display:grid; grid-template-columns:repeat(4, 1fr); gap:12px;
   margin-bottom:20px;
 }
 .stat-card {
@@ -441,6 +441,17 @@ body {
       </div>
     </div>
     <div class="stat-card">
+      <div class="stat-icon" style="background:var(--red-g);box-shadow:0 2px 8px rgba(255,69,58,.2)">🔥</div>
+      <div class="stat-body">
+        <div class="stat-label">GPU 负载</div>
+        <div class="stat-row">
+          <span class="stat-val" id="guP">0</span><span class="stat-unit">%</span>
+        </div>
+        <div class="stat-bar"><div class="stat-bar-f" id="guB" style="width:0%;background:var(--red)"></div></div>
+        <div class="stat-sub"><span id="guC">—</span> MHz · <span id="guW">—</span> W</div>
+      </div>
+    </div>
+    <div class="stat-card">
       <div class="stat-icon ram">🧠</div>
       <div class="stat-body">
         <div class="stat-label">系统内存</div>
@@ -585,6 +596,14 @@ async function load() {
   document.getElementById('gT').textContent=gt.toLocaleString();
   document.getElementById('gB').style.width=gp.toFixed(1)+'%';
   document.getElementById('gB').style.background=gp<50?'var(--blue)':gp<80?'var(--orange)':'var(--red)';
+
+  // GPU Load
+  const guP=sys.gpu_util_pct||0;
+  document.getElementById('guP').textContent=guP.toFixed(1);
+  document.getElementById('guB').style.width=guP.toFixed(1)+'%';
+  document.getElementById('guB').style.background=guP<30?'var(--green)':guP<70?'var(--orange)':'var(--red)';
+  document.getElementById('guC').textContent=sys.gpu_clock_mhz||'—';
+  document.getElementById('guW').textContent=sys.gpu_power_w||'—';
 
   // RAM
   const rt=sys.ram_total_gb||1,ru=sys.ram_used_gb||0,rp=(ru/rt*100);
@@ -758,13 +777,14 @@ async function loadModels() {
     }
 
     // Specs row: framework + model type + context window + quantization
-    const fwIcons = { vllm:'🔥', ollama:'🦙', ollama_cpp:'📦', comfyui:'🎨' };
+    const fwIcons = { vllm:'🔥', ollama:'🦙', ollama_cpp:'📦', comfyui:'🖼️' };
     const fwLabels = { vllm:'vLLM', ollama:'Ollama', ollama_cpp:'ollama.cpp', comfyui:'ComfyUI' };
     const framework = fwLabels[m.type] || m.type;
     const fwIcon = fwIcons[m.type] || '📦';
     const ctxStr = m.context_window ? (m.context_window >= 1024 ? (m.context_window/1024).toFixed(0)+'K ctx' : m.context_window+' ctx') : '';
-    const typeIcon = { llm:'📝', vl:'👁', omni:'🌐' };
-    const typeLabel = { llm:'LLM', vl:'VL', omni:'Omni' };
+    const typeIcon = { llm:'📝', vl:'👁', omni:'🌐', aigc:'✨' };
+    const typeLabel = { llm:'LLM', vl:'VL', omni:'Omni', aigc:'AIGC' };
+    const modeLabel = { excl:'独占', shrd:'共享' };
     let specs = '<span class="spec-tag">'+fwIcon+' '+framework+'</span>';
     if(typeIcon[m.model_type]) specs += '<span class="spec-tag">'+typeIcon[m.model_type]+' '+(typeLabel[m.model_type]||m.model_type)+'</span>';
     if(ctxStr) specs += '<span class="spec-tag">📐 '+ctxStr+'</span>';
@@ -776,7 +796,7 @@ async function loadModels() {
         '<div class="model-info"><div class="model-name">'+m.name+'</div>'+
           '<div style="font-size:11px;color:var(--text3);margin-top:3px">'+statusLine+' <span style="margin-left:6px;font-variant-numeric:tabular-nums;color:var(--text4)">:'+port+'</span></div>'+
         '</div>'+
-        '<span class="model-badge '+modeBadge+'">'+modeBadge+'</span>'+
+        '<span class="model-badge '+modeBadge+'">'+(modeLabel[modeBadge]||modeBadge)+'</span>'+
       '</div>'+
       '<div class="model-specs">'+specs+'</div>'+
       '<div class="model-actions">'+btns+'</div>'+
