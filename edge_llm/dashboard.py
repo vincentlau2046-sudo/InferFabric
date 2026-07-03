@@ -319,9 +319,16 @@ body {
 .fw-group:last-child { margin-bottom: 0; }
 .fw-hdr {
   display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px; margin-bottom: 8px;
+  padding: 8px 12px; margin-bottom: 0;
   background: var(--bg); border-radius: 10px;
+  cursor: pointer; user-select: none; transition: all .15s;
 }
+.fw-hdr:hover { background: rgba(10,132,255,.06); }
+.fw-hdr.open { margin-bottom: 8px; border-radius: 10px 10px 4px 4px; }
+.fw-chevron {
+  font-size: 11px; color: var(--text4); transition: transform .2s; margin-right: 2px;
+}
+.fw-hdr.open .fw-chevron { transform: rotate(90deg); }
 .fw-icon {
   width: 24px; height: 24px; border-radius: 6px;
   display: flex; align-items: center; justify-content: center;
@@ -340,6 +347,16 @@ body {
 }
 .fw-deploy-tag.yes { background: var(--green-s); color: var(--green); }
 .fw-deploy-tag.no  { background: var(--bg); color: var(--text4); }
+.fw-body {
+  max-height: 0; overflow: hidden;
+  transition: max-height .3s ease-out, padding .2s;
+  padding: 0 4px;
+}
+.fw-body.open {
+  max-height: 2000px; padding: 0 4px;
+  transition: max-height .5s ease-in;
+}
+.fw-empty { font-size: 13px; color: var(--text4); padding: 8px 14px; }
 
 /* ── Discovered Model Card ── */
 .disc-card {
@@ -810,13 +827,8 @@ async function loadLocalModels() {
     const list = d.discovered || [];
     const el = document.getElementById('localModels');
     const listEl = document.getElementById('localModelsList');
-    if (list.length === 0) {
-      el.style.display = 'none';
-      return;
-    }
-    el.style.display = 'block';
 
-    // Framework metadata
+    // Framework metadata (fixed order, always show all)
     const fwMeta = {
       vllm:      { icon: '\uD83D\uDD25', label: 'vLLM',        canDeploy: true  },
       ollama:     { icon: '\uD83E\uDD99', label: 'Ollama',      canDeploy: true  },
@@ -824,6 +836,7 @@ async function loadLocalModels() {
       comfyui:    { icon: '\uD83C\uDFA8', label: 'ComfyUI',     canDeploy: false },
       webui:      { icon: '\uD83C\uDF10', label: 'Web UI',      canDeploy: false },
     };
+    const fwOrder = ['vllm', 'ollama', 'ollama_cpp', 'comfyui', 'webui'];
 
     // Group by framework
     const groups = {};
@@ -833,39 +846,58 @@ async function loadLocalModels() {
       groups[fw].push(m);
     }
 
-    // Render in fixed order
-    const fwOrder = ['vllm', 'ollama', 'ollama_cpp', 'comfyui', 'webui'];
+    // Always show panel (even if all empty)
+    el.style.display = 'block';
+
     let html = '';
     for (const fw of fwOrder) {
-      const models = groups[fw];
-      if (!models || models.length === 0) continue;
+      const models = groups[fw] || [];
       const meta = fwMeta[fw] || { icon: '\uD83D\uDCE6', label: fw, canDeploy: false };
+      const hasItems = models.length > 0;
+      // Default: open if has items, closed if empty
+      const initOpen = hasItems ? 'open' : '';
 
-      html += '<div class="fw-group">';
-      html += '<div class="fw-hdr">';
+      html += '<div class="fw-group" data-fw="' + fw + '">';
+      // Header (clickable to toggle)
+      html += '<div class="fw-hdr ' + initOpen + '" onclick="toggleFw(this)">';
+      html += '<span class="fw-chevron">▶</span>';
       html += '<div class="fw-icon ' + fw + '">' + meta.icon + '</div>';
       html += '<span class="fw-label">' + meta.label + '</span>';
       html += '<span class="fw-count">(' + models.length + ')</span>';
       html += '<span class="fw-deploy-tag ' + (meta.canDeploy ? 'yes' : 'no') + '">' + (meta.canDeploy ? '可部署' : '仅列举') + '</span>';
       html += '</div>';
 
-      for (const m of models) {
-        const gb = m.size_mb >= 1024 ? (m.size_mb/1024).toFixed(1)+' GB' : m.size_mb+' MB';
-        const shortPath = m.path.length > 50 ? '...' + m.path.slice(-47) : m.path;
-        html += '<div class="disc-card">';
-        html += '<div class="disc-info">';
-        html += '<div class="disc-name">' + m.name + '</div>';
-        html += '<div class="disc-meta">' + meta.label + ' · ' + gb + ' · ' + shortPath + '</div>';
-        html += '</div>';
-        if (meta.canDeploy) {
-          html += '<button class="disc-deploy" onclick="event.stopPropagation();doDeploy(\''+m.name+'\',\''+fw+'\')">Deploy</button>';
+      // Body (collapsible)
+      html += '<div class="fw-body ' + initOpen + '">';
+      if (!hasItems) {
+        html += '<div class="fw-empty">暂无未配置模型</div>';
+      } else {
+        for (const m of models) {
+          const gb = m.size_mb >= 1024 ? (m.size_mb/1024).toFixed(1)+' GB' : m.size_mb+' MB';
+          const shortPath = m.path.length > 50 ? '...' + m.path.slice(-47) : m.path;
+          html += '<div class="disc-card">';
+          html += '<div class="disc-info">';
+          html += '<div class="disc-name">' + m.name + '</div>';
+          html += '<div class="disc-meta">' + meta.label + ' · ' + gb + ' · ' + shortPath + '</div>';
+          html += '</div>';
+          if (meta.canDeploy) {
+            html += '<button class="disc-deploy" onclick="event.stopPropagation();doDeploy(\''+m.name+'\',\''+fw+'\')">Deploy</button>';
+          }
+          html += '</div>';
         }
-        html += '</div>';
       }
-      html += '</div>';
+      html += '</div>'; // fw-body
+      html += '</div>'; // fw-group
     }
     listEl.innerHTML = html;
   } catch(e) { /* ignore */ }
+}
+
+function toggleFw(hdr) {
+  const body = hdr.nextElementSibling;
+  const isOpen = hdr.classList.contains('open');
+  hdr.classList.toggle('open', !isOpen);
+  body.classList.toggle('open', !isOpen);
 }
 
 async function doDeploy(name, framework) {
