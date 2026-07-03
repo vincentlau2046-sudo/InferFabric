@@ -1,5 +1,5 @@
 """
-edge_llm/health.py — HTTP health checking + GPU memory helpers.
+inferfabric/health.py — HTTP health checking + GPU memory helpers.
 
 Extracted from profile_manager.py (v3.0 → v3.1 refactoring).
 """
@@ -18,7 +18,7 @@ from .config import (
     STOP_SIGTERM_TIMEOUT,
 )
 
-log = logging.getLogger("edge_llm")
+log = logging.getLogger("inferfabric")
 
 
 # ─── Shell Helpers ───────────────────────────────────────────────

@@ -1,5 +1,5 @@
 """
-edge_llm/state.py — State machine + SQLite state management.
+inferfabric/state.py — State machine + SQLite state management.
 
 v4.0: Added GPUMode (idle/exclusive/shared), validate_transition(),
       StateDB.get/set_active_services().
@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-log = logging.getLogger("edge_llm")
+log = logging.getLogger("inferfabric")
 
 
 # ─── GPU Mode State Machine ──────────────────────────────────────

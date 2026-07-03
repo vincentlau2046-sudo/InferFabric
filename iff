@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""
+iff — Local LLM Profile Switcher
+
+Usage:
+  iff status              Show current profile and GPU state
+  iff list                 List all profiles
+  iff switch <profile>    Switch to a profile
+  iff history            Show switch history
+  iff reset [profile]    Reset state and stop services
+"""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from inferfabric.cli import main
+
+if __name__ == "__main__":
+    main()

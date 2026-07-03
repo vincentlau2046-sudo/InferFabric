@@ -1,7 +1,7 @@
-# EdgeLLM 代码审查报告
+# InferFabric 代码审查报告
 
 **日期**: 2026-06-27
-**审查范围**: `edge_llm/` — proxy.py, profile_manager.py, cli.py, preload.py, dashboard.py, static/index.html
+**审查范围**: `inferfabric/` — proxy.py, profile_manager.py, cli.py, preload.py, dashboard.py, static/index.html
 
 ---
 

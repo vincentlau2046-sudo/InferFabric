@@ -1,5 +1,5 @@
 """
-edge_llm/preload.py — Model weight preloader.
+inferfabric/preload.py — Model weight preloader.
 
 Keeps model files in OS page cache (CPU RAM) so vLLM switch avoids disk I/O.
 Strategy:
@@ -21,7 +21,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-log = logging.getLogger("edge_llm.preload")
+log = logging.getLogger("inferfabric.preload")
 
 MODEL_BASE = Path.home() / "models"
 
@@ -138,7 +138,7 @@ class ModelPreloader:
 def cli_preload(args):
     preloader = ModelPreloader()
     if not args:
-        print("Usage: edge-llm preload <model_dir>")
+        print("Usage: iff preload <model_dir>")
         print(f"Available models: {list(MODEL_FILES.keys())}")
         return
 
@@ -169,5 +169,5 @@ def register_with_cli(dispatch):
     dispatch["preload_clear"] = cli_preload_clear
 
 # NOTE: preload is experimental and not integrated into the switch flow.
-# It can be activated manually via: edge-llm preload <model>
+# It can be activated manually via: iff preload <model>
 # Future: integrate into switch() to pre-load target model weights

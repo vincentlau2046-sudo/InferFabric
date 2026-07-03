@@ -1,5 +1,5 @@
 """
-edge_llm/config.py — Configuration, constants, and model definitions.
+inferfabric/config.py — Configuration, constants, and model definitions.
 
 v4.0: Profile concept eliminated. Models are self-describing plugins in models.d/.
 Each YAML file declares its own mode (exclusive/shared) and resource requirements.
@@ -12,15 +12,15 @@ from typing import Optional
 import yaml
 import logging
 
-log = logging.getLogger("edge_llm")
+log = logging.getLogger("inferfabric")
 
 # ─── Path Constants ──────────────────────────────────────────────
 
 BASE_DIR = Path(__file__).parent.parent
 MODELS_DIR = BASE_DIR / "models.d"
-DEFAULT_STATE_DB = Path.home() / ".edge_llm" / "state.db"
-DEFAULT_LOG_DIR = Path.home() / ".edge_llm" / "logs"
-GPU_LOCK_PATH = Path("/tmp/edge_llm_gpu.lock")
+DEFAULT_STATE_DB = Path.home() / ".inferfabric" / "state.db"
+DEFAULT_LOG_DIR = Path.home() / ".inferfabric" / "logs"
+GPU_LOCK_PATH = Path("/tmp/inferfabric_gpu.lock")
 MODEL_BASE = Path.home() / "models"
 CONDA_ENVS = Path.home() / "miniconda3" / "envs"
 COMFYUI_DIR = Path.home() / "ComfyUI"

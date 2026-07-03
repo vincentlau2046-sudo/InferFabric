@@ -1,5 +1,5 @@
 """
-edge_llm/dashboard.py — Self-contained web dashboard for EdgeLLM.
+inferfabric/dashboard.py — Self-contained web dashboard for InferFabric.
 
 v4.3: Apple-inspired warm light theme. Card-based with gradient icons,
       comfortable contrast, larger fonts, smooth transitions.
@@ -9,14 +9,14 @@ import json
 import time
 import logging
 
-log = logging.getLogger("edge_llm.dashboard")
+log = logging.getLogger("inferfabric.dashboard")
 
 DASHBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EdgeLLM</title>
+<title>InferFabric</title>
 <style>
 :root {
   --blue:    #0A84FF; --blue-s:  rgba(10,132,255,.10); --blue-g: linear-gradient(135deg,#5AC8FA,#0A84FF);
@@ -415,7 +415,7 @@ body {
   <div class="nav-in">
     <div class="nav-l">
       <div class="nav-logo">E</div>
-      <span class="nav-title">EdgeLLM</span>
+      <span class="nav-title">InferFabric</span>
       <span class="tag idle" id="sTag"><span class="dot"></span><span id="sTxt">idle</span></span>
     </div>
     <div class="nav-r">
@@ -479,17 +479,17 @@ body {
         <span class="perf-main" id="kvVal">—</span>
         <div class="perf-bar"><div class="perf-bar-f" id="kvBar" style="width:0"></div></div>
       </div>
-      <div class="perf-card" id="pcWait">
-        <span class="perf-label">Waiting</span>
-        <span class="perf-tip">排队中的请求数。0 表示无积压</span>
-        <span class="perf-main" id="wVal">—</span>
-        <span class="perf-sub" id="wSub"></span>
+      <div class="perf-card" id="pcSeq">
+        <span class="perf-label">Seq Length</span>
+        <span class="perf-tip">平均请求长度（Prompt + Generation 总 Token 数）。反映单次请求的上下文规模</span>
+        <span class="perf-main" id="seqVal">—</span>
+        <span class="perf-sub" id="seqSub"></span>
       </div>
-      <div class="perf-card" id="pcPreempt">
-        <span class="perf-label">Preempt</span>
-        <span class="perf-tip">显存不足时强制驱逐已加载请求的次数（累计）。0 表示显存充足，>0 说明显存压力大</span>
-        <span class="perf-main" id="pVal">—</span>
-        <span class="perf-sub">cumulative</span>
+      <div class="perf-card" id="pcTpot">
+        <span class="perf-label">TPOT</span>
+        <span class="perf-tip">Time Per Output Token。生成单个 token 的平均耗时（秒）。越低越好，<50ms 优秀</span>
+        <span class="perf-main" id="tpotVal">—</span>
+        <span class="perf-sub" id="tpotSub"></span>
       </div>
       <div class="perf-card" id="pcTtft">
         <span class="perf-label">TTFT</span>
@@ -499,7 +499,7 @@ body {
       </div>
       <div class="perf-card" id="pcTput">
         <span class="perf-label">Throughput</span>
-        <span class="perf-tip">每秒处理的总 Token 数（Prompt + Generation）。越高越好，反映 GPU 整体吞吐</span>
+        <span class="perf-tip">生成吞吐量（tokens/s）。1 / 平均 inter-token 延迟。数值越高，生成速度越快</span>
         <span class="perf-main" id="tpVal">—</span>
         <span class="perf-sub" id="tpSub"></span>
       </div>
@@ -683,17 +683,25 @@ async function loadVllmMetrics(port,modelName) {
     document.getElementById('kvBar').className='perf-bar-f'+(kvCls?' '+kvCls:'');
     document.getElementById('pcKv').className='perf-card'+(kvCls?' '+kvCls:'');
 
-    // Waiting
-    const w=m.num_requests_waiting??0;
-    const r=m.num_requests_running??0;
-    document.getElementById('wVal').textContent=w;
-    document.getElementById('wSub').textContent=r+' 执行中';
-    document.getElementById('pcWait').className='perf-card'+(w>0?' warn':'');
+    // Seq Length
+    if(m.seq_length!=null) {
+      document.getElementById('seqVal').textContent=m.seq_length.toLocaleString()+' tokens';
+      document.getElementById('seqSub').textContent='P '+m.seq_prompt?.toLocaleString()+' + G '+m.seq_generation?.toLocaleString()+' ('+m.seq_count+' requests)';
+    } else {
+      document.getElementById('seqVal').textContent='—';
+      document.getElementById('seqSub').textContent='';
+    }
 
-    // Preemptions
-    const pre=m.num_preemptions??0;
-    document.getElementById('pVal').textContent=pre;
-    document.getElementById('pcPreempt').className='perf-card'+(pre>0?' crit':'');
+    // TPOT
+    const tpot=m.tpot_seconds||{};
+    if(m.tpot_cum_mean!=null) {
+      const tpotMs=m.tpot_cum_mean*1000;
+      document.getElementById('tpotVal').textContent=tpotMs.toFixed(1)+' ms';
+      document.getElementById('tpotSub').textContent='P50 '+(tpot.p50*1000).toFixed(1)+'ms | P95 '+(tpot.p95*1000).toFixed(1)+'ms | '+m.tpot_cum_n+' reqs';
+    } else {
+      document.getElementById('tpotVal').textContent='—';
+      document.getElementById('tpotSub').textContent='';
+    }
 
     // TTFT — 运行期间平均值 (排除零值)
     const tf=m.ttft_seconds||{};
@@ -708,10 +716,10 @@ async function loadVllmMetrics(port,modelName) {
       document.getElementById('tfSub').textContent='';
     }
 
-    // Throughput — 运行期间平均值 (排除零值)
-    if(m.throughput_cum!=null) {
-      document.getElementById('tpVal').textContent=m.throughput_cum.toLocaleString();
-      document.getElementById('tpSub').textContent='P '+m.prompt_tokens_cum?.toLocaleString()+' G '+m.generation_tokens_cum?.toLocaleString()+' t/s (累计 '+m.cum_n+' 次)';
+    // Throughput (tokens/s)
+    if(m.throughput!=null) {
+      document.getElementById('tpVal').textContent=m.throughput+' t/s';
+      document.getElementById('tpSub').textContent=m.throughput_cum_n?' '+m.throughput_cum_n+' tokens sampled':'—';
     } else {
       document.getElementById('tpVal').textContent='—';
       document.getElementById('tpSub').textContent='';

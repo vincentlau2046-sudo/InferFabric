@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""EdgeLLM v4.0 test suite — models.d plugin + tri-state GPU state machine.
+"""InferFabric v4.0 test suite — models.d plugin + tri-state GPU state machine.
 
 No GPU / no vLLM / no ComfyUI required. All process management is mocked.
 """
@@ -13,7 +13,7 @@ import sqlite3
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-# Ensure edge_llm is importable
+# Ensure inferfabric is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 def test_models_dir_loading():
     """load_models() scans models.d/*.yaml and returns dict keyed by name."""
-    from edge_llm.config import load_models, ModelConfig
+    from inferfabric.config import load_models, ModelConfig
 
     with tempfile.TemporaryDirectory() as tmp:
         models_dir = Path(tmp)
@@ -65,7 +65,7 @@ def test_models_dir_loading():
 
 def test_models_dir_empty():
     """Empty models.d/ returns empty dict."""
-    from edge_llm.config import load_models
+    from inferfabric.config import load_models
 
     with tempfile.TemporaryDirectory() as tmp:
         models = load_models(Path(tmp))
@@ -75,7 +75,7 @@ def test_models_dir_empty():
 
 def test_models_dir_name_mismatch():
     """YAML name field must match filename stem."""
-    from edge_llm.config import load_models
+    from inferfabric.config import load_models
 
     with tempfile.TemporaryDirectory() as tmp:
         models_dir = Path(tmp)
@@ -96,7 +96,7 @@ def test_models_dir_name_mismatch():
 
 def test_comfyui_model_config():
     """ComfyUI config has type=comfyui and mode=shared."""
-    from edge_llm.config import load_models
+    from inferfabric.config import load_models
 
     with tempfile.TemporaryDirectory() as tmp:
         models_dir = Path(tmp)
@@ -116,7 +116,7 @@ def test_comfyui_model_config():
 
 def test_model_add_remove():
     """Adding/removing YAML files changes available models."""
-    from edge_llm.config import load_models
+    from inferfabric.config import load_models
 
     with tempfile.TemporaryDirectory() as tmp:
         models_dir = Path(tmp)
@@ -149,7 +149,7 @@ def test_model_add_remove():
 
 def test_gpu_mode_states():
     """GPUMode has exactly three states: idle, exclusive, shared."""
-    from edge_llm.state import GPUMode
+    from inferfabric.state import GPUMode
     assert GPUMode.IDLE == "idle"
     assert GPUMode.EXCLUSIVE == "exclusive"
     assert GPUMode.SHARED == "shared"
@@ -158,7 +158,7 @@ def test_gpu_mode_states():
 
 def test_gpu_mode_transitions_valid():
     """Valid transitions: idle→exclusive, idle→shared, exclusive→idle, shared→idle."""
-    from edge_llm.state import GPUMode, validate_transition
+    from inferfabric.state import GPUMode, validate_transition
 
     assert validate_transition("idle", "exclusive") == True
     assert validate_transition("idle", "shared") == True
@@ -171,7 +171,7 @@ def test_gpu_mode_transitions_valid():
 
 def test_gpu_mode_transitions_invalid():
     """Invalid transitions: exclusive→shared, shared→exclusive."""
-    from edge_llm.state import GPUMode, validate_transition
+    from inferfabric.state import GPUMode, validate_transition
 
     assert validate_transition("exclusive", "shared") == False
     assert validate_transition("shared", "exclusive") == False
@@ -183,7 +183,7 @@ def test_gpu_mode_transitions_invalid():
 
 def test_state_db_gpu_mode():
     """StateDB stores and retrieves gpu_mode."""
-    from edge_llm.state import StateDB
+    from inferfabric.state import StateDB
 
     with tempfile.TemporaryDirectory() as tmp:
         db = StateDB(Path(tmp) / "test.db")
@@ -201,7 +201,7 @@ def test_state_db_gpu_mode():
 
 def test_state_db_active_services():
     """StateDB stores active_services as JSON array."""
-    from edge_llm.state import StateDB
+    from inferfabric.state import StateDB
 
     with tempfile.TemporaryDirectory() as tmp:
         db = StateDB(Path(tmp) / "test.db")
@@ -225,7 +225,7 @@ def test_state_db_active_services():
 def test_switch_idle_to_exclusive():
     """idle → switch(exclusive model) → gpu_mode=exclusive, model started."""
     # This tests the manager logic with mocked process management
-    from edge_llm.state import StateDB
+    from inferfabric.state import StateDB
 
     with tempfile.TemporaryDirectory() as tmp:
         db = StateDB(Path(tmp) / "test.db")
@@ -245,7 +245,7 @@ def test_switch_idle_to_exclusive():
 
 def test_switch_idle_to_shared():
     """idle → switch(shared model) → gpu_mode=shared, model started."""
-    from edge_llm.state import StateDB
+    from inferfabric.state import StateDB
 
     with tempfile.TemporaryDirectory() as tmp:
         db = StateDB(Path(tmp) / "test.db")
@@ -263,7 +263,7 @@ def test_switch_idle_to_shared():
 
 def test_switch_exclusive_to_shared_rejected():
     """exclusive → switch(shared model) → REJECTED."""
-    from edge_llm.state import StateDB, validate_transition
+    from inferfabric.state import StateDB, validate_transition
 
     with tempfile.TemporaryDirectory() as tmp:
         db = StateDB(Path(tmp) / "test.db")
@@ -276,7 +276,7 @@ def test_switch_exclusive_to_shared_rejected():
 
 def test_switch_shared_to_exclusive_rejected():
     """shared → switch(exclusive model) → REJECTED."""
-    from edge_llm.state import validate_transition
+    from inferfabric.state import validate_transition
 
     assert validate_transition("shared", "exclusive") == False
     print("  ✅ shared→exclusive rejected")
@@ -284,7 +284,7 @@ def test_switch_shared_to_exclusive_rejected():
 
 def test_switch_shared_to_idle():
     """shared → switch(idle) → stops all shared services, gpu_mode=idle."""
-    from edge_llm.state import StateDB
+    from inferfabric.state import StateDB
 
     with tempfile.TemporaryDirectory() as tmp:
         db = StateDB(Path(tmp) / "test.db")
@@ -311,7 +311,7 @@ def test_switch_shared_to_idle():
 
 def test_switch_exclusive_to_idle():
     """exclusive → switch(idle) → stops exclusive model, gpu_mode=idle."""
-    from edge_llm.state import StateDB
+    from inferfabric.state import StateDB
 
     with tempfile.TemporaryDirectory() as tmp:
         db = StateDB(Path(tmp) / "test.db")
@@ -335,7 +335,7 @@ def test_switch_exclusive_to_idle():
 
 def test_switch_shared_add_service():
     """shared mode: adding another shared service (hot-plug V1: full restart)."""
-    from edge_llm.state import StateDB, validate_transition
+    from inferfabric.state import StateDB, validate_transition
 
     with tempfile.TemporaryDirectory() as tmp:
         db = StateDB(Path(tmp) / "test.db")
@@ -360,7 +360,7 @@ def test_switch_shared_add_service():
 
 def test_stop_single_shared_service():
     """shared mode: stop single service, others remain."""
-    from edge_llm.state import StateDB
+    from inferfabric.state import StateDB
 
     with tempfile.TemporaryDirectory() as tmp:
         db = StateDB(Path(tmp) / "test.db")
@@ -384,7 +384,7 @@ def test_stop_single_shared_service():
 
 def test_stop_last_shared_service_auto_idle():
     """shared mode: stopping the last service auto-transitions to idle."""
-    from edge_llm.state import StateDB
+    from inferfabric.state import StateDB
 
     with tempfile.TemporaryDirectory() as tmp:
         db = StateDB(Path(tmp) / "test.db")
@@ -411,10 +411,10 @@ def test_stop_last_shared_service_auto_idle():
 # ═══════════════════════════════════════════════════════════════
 
 def test_cli_models_command():
-    """edge-llm models lists all available models from models.d/."""
+    """iff models lists all available models from models.d/."""
     # This is a structural test — verify the command exists and can parse
     # Full integration test in Phase 9
-    from edge_llm.config import load_models
+    from inferfabric.config import load_models
 
     with tempfile.TemporaryDirectory() as tmp:
         models_dir = Path(tmp)
@@ -432,7 +432,7 @@ def test_cli_models_command():
 
 
 def test_cli_switch_by_model_name():
-    """edge-llm switch <model_name> uses model name, not profile name."""
+    """iff switch <model_name> uses model name, not profile name."""
     # Structural: verify model names are used as switch targets
     # No 'qw36_full' profile name — just 'qwen36_27b'
     valid_model_names = ["qwen36-27b", "qwen35-9b", "gemma4-26b", "comfyui", "idle"]
@@ -443,7 +443,7 @@ def test_cli_switch_by_model_name():
 
 
 def test_cli_stop_command():
-    """edge-llm stop <model_name> stops a single shared service."""
+    """iff stop <model_name> stops a single shared service."""
     # Structural: verify stop command is distinct from switch idle
     # stop = stop one service, switch idle = stop all
     print("  ✅ stop command defined (distinct from switch idle)")
@@ -455,7 +455,7 @@ def test_cli_stop_command():
 
 def test_proxy_model_to_service():
     """Proxy resolves model name to service config from models.d/."""
-    from edge_llm.config import load_models
+    from inferfabric.config import load_models
 
     with tempfile.TemporaryDirectory() as tmp:
         models_dir = Path(tmp)
@@ -488,7 +488,7 @@ def test_proxy_model_to_service():
 
 def test_dashboard_gpu_mode_display():
     """Dashboard status includes gpu_mode and active_services."""
-    from edge_llm.state import StateDB
+    from inferfabric.state import StateDB
 
     with tempfile.TemporaryDirectory() as tmp:
         db = StateDB(Path(tmp) / "test.db")
@@ -562,12 +562,12 @@ def test_e2e_shared_last_stop_auto_idle():
 
 
 def test_e2e_models_command():
-    """E2E: edge-llm models lists all YAML files in models.d/."""
+    """E2E: iff models lists all YAML files in models.d/."""
     pass
 
 
 def test_e2e_add_model_yaml():
-    """E2E: write new YAML → edge-llm models shows it → switch works."""
+    """E2E: write new YAML → iff models shows it → switch works."""
     pass
 
 

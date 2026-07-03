@@ -1,8 +1,8 @@
-# EdgeLLM Proxy v4.0 — 交叉审计报告
+# InferFabric Proxy v4.0 — 交叉审计报告
 
 **日期**: 2026-06-28
 **审计方**: Nova (glm-5.1) + DeepSeek-V4-Pro
-**目标**: `edge_llm/proxy.py` + 关联 `manager.py`, `state.py`, `config.py`
+**目标**: `inferfabric/proxy.py` + 关联 `manager.py`, `state.py`, `config.py`
 
 ---
 

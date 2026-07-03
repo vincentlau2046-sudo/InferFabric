@@ -1,4 +1,4 @@
-# edge-llm 技术笔记
+# iff 技术笔记
 
 ## KV Offload 配置 (2026-07-01)
 

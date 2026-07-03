@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Allow `python3 -m edge_llm` invocation."""
+"""Allow `python3 -m inferfabric` invocation."""
 
 import sys
 import os
@@ -10,5 +10,5 @@ if here not in sys.path:
     sys.path.insert(0, here)
 
 # Import and run CLI main
-import edge_llm.cli as cli
+import inferfabric.cli as cli
 cli.main()

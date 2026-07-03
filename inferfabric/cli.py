@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-edge-llm — CLI for local LLM model switching (v4.0).
+iff — CLI for local LLM model switching (v4.0).
 
 Usage:
-  edge-llm status              Show GPU mode, active services, health
-  edge-llm models              List available models from models.d/
-  edge-llm switch <model>      Switch to a model (enforces tri-state rules)
-  edge-llm stop <model>        Stop a single shared service
-  edge-llm sleep <model>           Put a running vLLM model to L2 sleep
-  edge-llm wake <model>                Wake a sleeping vLLM model
-  edge-llm history             Show switch history
-  edge-llm reset               Force reset to idle
-  edge-llm reconcile           Fix DB vs actual state inconsistencies
+  iff status              Show GPU mode, active services, health
+  iff models              List available models from models.d/
+  iff switch <model>      Switch to a model (enforces tri-state rules)
+  iff stop <model>        Stop a single shared service
+  iff sleep <model>           Put a running vLLM model to L2 sleep
+  iff wake <model>                Wake a sleeping vLLM model
+  iff history             Show switch history
+  iff reset               Force reset to idle
+  iff reconcile           Fix DB vs actual state inconsistencies
 """
 
 import sys
@@ -25,13 +25,13 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
 )
-log = logging.getLogger("edge_llm.cli")
+log = logging.getLogger("inferfabric.cli")
 
 # Add parent to path for import
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from edge_llm.manager import ModelManager
-from edge_llm.state import GPUMode, ProfileState
-from edge_llm.health import gpu_used_mb
+from inferfabric.manager import ModelManager
+from inferfabric.state import GPUMode, ProfileState
+from inferfabric.health import gpu_used_mb
 
 
 def cmd_status():
@@ -84,7 +84,7 @@ def cmd_models(args):
 
 def cmd_switch(args):
     if not args:
-        print("Usage: edge-llm switch <model_name|idle>")
+        print("Usage: iff switch <model_name|idle>")
         print("\nAvailable models:")
         mgr = ModelManager()
         for m in mgr.list_models():
@@ -135,7 +135,7 @@ def cmd_switch(args):
 
 def cmd_stop(args):
     if not args:
-        print("Usage: edge-llm stop <model_name>")
+        print("Usage: iff stop <model_name>")
         sys.exit(1)
 
     target = args[0]
@@ -210,7 +210,7 @@ def cmd_reconcile(args):
 
 def cmd_sleep(args):
     if not args:
-        print("Usage: edge-llm sleep <model_name>")
+        print("Usage: iff sleep <model_name>")
         print("\nPut a running vLLM model to sleep (L2: discard weights, wake ~3-6s).")
         sys.exit(1)
 
@@ -241,7 +241,7 @@ def cmd_sleep(args):
 
 def cmd_wake(args):
     if not args:
-        print("Usage: edge-llm wake <model_name>")
+        print("Usage: iff wake <model_name>")
         print("\nWake a sleeping vLLM model. Exclusive models require GPU=idle.")
         sys.exit(1)
 
@@ -269,7 +269,7 @@ def cmd_wake(args):
 def cmd_pull(args):
     """Pre-download model files: ollama pull / huggingface-cli download."""
     if not args:
-        print("Usage: edge-llm pull <model_name>")
+        print("Usage: iff pull <model_name>")
         print("\nPre-download model files for offline switch.")
         sys.exit(1)
 

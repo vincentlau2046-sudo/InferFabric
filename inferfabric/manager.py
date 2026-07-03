@@ -1,5 +1,5 @@
 """
-edge_llm/manager.py — Model orchestration layer (v4.0).
+inferfabric/manager.py — Model orchestration layer (v4.0).
 
 v4.0: Profile concept eliminated. Models are self-describing plugins.
 Tri-state GPU mode: idle / exclusive / shared.
@@ -36,7 +36,7 @@ from .health import (
     wait_gpu_free,
 )
 
-log = logging.getLogger("edge_llm")
+log = logging.getLogger("inferfabric")
 
 
 class ModelManager:
@@ -302,13 +302,13 @@ class ModelManager:
                 return {
                     "status": "error",
                     "message": f"GPU is in exclusive mode ({running[0] if running else 'unknown'} running). "
-                               f"Run 'edge-llm switch idle' first.",
+                               f"Run 'iff switch idle' first.",
                 }
             elif current_mode == GPUMode.SHARED and target_mode == GPUMode.EXCLUSIVE:
                 return {
                     "status": "error",
                     "message": f"GPU is in shared mode ({running} running). "
-                               f"Run 'edge-llm switch idle' first to deploy exclusive model.",
+                               f"Run 'iff switch idle' first to deploy exclusive model.",
                 }
             else:
                 return {"status": "error", "message": f"Invalid transition: {current_mode} → {target_mode}"}
@@ -468,7 +468,7 @@ class ModelManager:
 
         # If shared model, optionally also start ComfyUI
         # V1: shared vLLM models don't auto-start ComfyUI
-        # User does: edge-llm switch comfyui separately
+        # User does: iff switch comfyui separately
 
         # Start the model
         if model.is_vllm:
@@ -905,7 +905,8 @@ class ModelManager:
         # ── vLLM models (~/models/ with config.json) ──
         models_base = Path.home() / "models"
         if models_base.exists():
-            for d in sorted(models_base.iterdir()):
+            # 递归扫描: 支持 ~/models/gguf/xxx.gguf 等嵌套目录
+            for d in sorted(models_base.rglob("*")):
                 if not d.is_dir() or d.name.startswith("."):
                     continue
                 if d.name in configured_dirs:
@@ -924,6 +925,16 @@ class ModelManager:
                     })
                 elif gguf_files:
                     # ── ollama.cpp GGUF models ──
+                    # 跳过已配置的 GGUF 目录 (通过 model_path 匹配)
+                    skip = False
+                    for m in self._models.values():
+                        if m.is_ollama_cpp and m.ollama_cpp:
+                            mp = str(Path(m.ollama_cpp.model_path).expanduser().parent)
+                            if str(d) == mp or str(d).startswith(mp + "/"):
+                                skip = True
+                                break
+                    if skip:
+                        continue
                     size_mb = sum(f.stat().st_size for f in gguf_files) // (1024*1024)
                     discovered.append({
                         "name": d.name, "path": str(d),

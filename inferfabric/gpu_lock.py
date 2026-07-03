@@ -1,5 +1,5 @@
 """
-edge_llm/gpu_lock.py — GPU mutual exclusion via flock.
+inferfabric/gpu_lock.py — GPU mutual exclusion via flock.
 
 Extracted from profile_manager.py (v3.0 → v3.1 refactoring).
 
@@ -15,7 +15,7 @@ from typing import Optional
 
 from .config import GPU_LOCK_PATH
 
-log = logging.getLogger("edge_llm")
+log = logging.getLogger("inferfabric")
 
 
 class GPULock:

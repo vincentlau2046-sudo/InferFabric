@@ -1,12 +1,12 @@
 """
-edge_llm/profile_manager.py — Backward-compatible re-export wrapper (v4.0).
+inferfabric/profile_manager.py — Backward-compatible re-export wrapper (v4.0).
 
 v4.0 additions:
   - ModelConfig, load_models, MODELS_DIR from config
   - GPUMode, validate_transition from state
   - ModelManager from manager (ProfileManager is now an alias)
 
-Existing imports like `from edge_llm.profile_manager import ProfileManager`
+Existing imports like `from inferfabric.profile_manager import ProfileManager`
 will continue to work.
 """
 

@@ -12,14 +12,14 @@ import sqlite3
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from edge_llm.config import (
+from inferfabric.config import (
     VLLMConfig, ComfyUIConfig, Profile, load_profiles, DEFAULT_PROFILES,
 )
-from edge_llm.state import StateDB, ProfileState
-from edge_llm.gpu_lock import GPULock
-from edge_llm.health import gpu_used_mb, wait_gpu_free, check_http_status
-from edge_llm.process_manager import ProcessManager
-from edge_llm.manager import ProfileManager
+from inferfabric.state import StateDB, ProfileState
+from inferfabric.gpu_lock import GPULock
+from inferfabric.health import gpu_used_mb, wait_gpu_free, check_http_status
+from inferfabric.process_manager import ProcessManager
+from inferfabric.manager import ProfileManager
 
 
 # ─── Helpers ─────────────────────────────────────────────────────
@@ -231,7 +231,7 @@ def test_switch_idle_no_start():
             return {"vllm": {"status": "ok"}, "comfyui": {"status": "ok"}}
 
         # Also mock wait_gpu_free
-        import edge_llm.health as health_mod
+        import inferfabric.health as health_mod
         orig_wait = health_mod.wait_gpu_free
         health_mod.wait_gpu_free = lambda timeout=30: True
 
@@ -262,7 +262,7 @@ def test_switch_records_history():
         def mock_stop_all(**kw):
             return {"vllm": {"status": "ok"}, "comfyui": {"status": "ok"}}
 
-        import edge_llm.health as health_mod
+        import inferfabric.health as health_mod
         orig_wait = health_mod.wait_gpu_free
         health_mod.wait_gpu_free = lambda timeout=30: True
 
@@ -293,7 +293,7 @@ def test_switch_comfyui_failure_interrupts():
         def mock_stop_all(**kw):
             return {"vllm": {"status": "ok"}, "comfyui": {"status": "ok"}}
 
-        import edge_llm.health as health_mod
+        import inferfabric.health as health_mod
         orig_wait = health_mod.wait_gpu_free
         health_mod.wait_gpu_free = lambda timeout=30: True
 
@@ -329,7 +329,7 @@ def test_gpu_query():
 
 def test_backward_compat_imports():
     """Old imports from profile_manager still work."""
-    from edge_llm.profile_manager import (
+    from inferfabric.profile_manager import (
         ProfileManager, StateDB, ProfileState, GPULock,
         VLLMConfig, ComfyUIConfig, Profile,
         gpu_used_mb, gpu_total_mb, wait_http, check_http_status,

@@ -9,8 +9,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock, mock_open
 
-# Ensure edge_llm is importable
-sys.path.insert(0, str(Path.home() / "edge_llm"))
+# Ensure inferfabric is importable
+sys.path.insert(0, str(Path.home() / "inferfabric"))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -21,7 +21,7 @@ def _make_model(name="qwen36-27b", port=8000, mode="exclusive",
                 gpu_mem=0.83, model_len=131072, max_seqs=4,
                 typical_vram_pct=0.0):
     """Create a ModelConfig-like mock object."""
-    from edge_llm.config import ModelConfig, VLLMConfig
+    from inferfabric.config import ModelConfig, VLLMConfig
     model = MagicMock(spec=ModelConfig)
     model.name = name
     model.mode = mode
@@ -41,7 +41,7 @@ def _make_model(name="qwen36-27b", port=8000, mode="exclusive",
 
 def _make_manager():
     """Create a minimal ModelManager with all mocks."""
-    from edge_llm.manager import ModelManager
+    from inferfabric.manager import ModelManager
     mgr = ModelManager.__new__(ModelManager)
     mgr._lock = MagicMock()
     mgr._models = {}
@@ -174,7 +174,7 @@ class TestP04_OrphanPIDDetection(unittest.TestCase):
 
     def test_orphan_pid_cleared_when_no_live_port(self):
         """P0-4: Dead PID + no live vLLM on port → cleared."""
-        from edge_llm.state import StateDB
+        from inferfabric.state import StateDB
         import tempfile
         state = StateDB(Path(tempfile.mkdtemp()) / "state.db")
         state.set("gpu_mode", "exclusive")
@@ -212,7 +212,7 @@ class TestP04_OrphanPIDDetection(unittest.TestCase):
 
     def test_stale_pid_cleared_when_no_services(self):
         """P0-5: PID set but no active services → stale."""
-        from edge_llm.state import StateDB
+        from inferfabric.state import StateDB
         state = StateDB(Path(tempfile.mkdtemp()) / "state.db")
         state.set("vllm_pid", "99999")
         state.set("active_services", json.dumps([]))
@@ -235,7 +235,7 @@ class TestP05_PIDRecovery(unittest.TestCase):
 
     def test_recover_pid_from_fuser(self):
         """P0-5: fuser finds live vLLM → PID recovered."""
-        from edge_llm.state import StateDB
+        from inferfabric.state import StateDB
         state = StateDB(Path(tempfile.mkdtemp()) / "state.db")
         state.set("vllm_pid", "")  # No PID tracked
 
@@ -268,8 +268,8 @@ class TestP02_ReconcileBeforeIdle(unittest.TestCase):
 
     def test_reconcile_called_before_stop(self):
         """P0-2: reconcile() must be called before GPU stop."""
-        from edge_llm.manager import ModelManager, GPUMode
-        from edge_llm.state import StateDB
+        from inferfabric.manager import ModelManager, GPUMode
+        from inferfabric.state import StateDB
         import tempfile
 
         state = StateDB(Path(tempfile.mkdtemp()) / "state.db")
@@ -352,7 +352,7 @@ class TestP11_ProxyRetry(unittest.TestCase):
 
     def test_invalidate_clears_connection_cache(self):
         """P1-1: invalidate_upstream removes cached connection."""
-        from edge_llm.proxy import ProxyManager
+        from inferfabric.proxy import ProxyManager
 
         pm = ProxyManager()
         port = 8000
@@ -368,7 +368,7 @@ class TestP11_ProxyRetry(unittest.TestCase):
 
     def test_retry_flow(self):
         """P1-1: Full retry cycle — fail → invalidate → reconnect."""
-        from edge_llm.proxy import ProxyManager
+        from inferfabric.proxy import ProxyManager
 
         pm = ProxyManager()
         port = 8000
@@ -401,20 +401,20 @@ class TestP12_GPUIdleBaseline(unittest.TestCase):
     """Verify P1-2: relative baseline GPU idle detection."""
 
     def setUp(self):
-        from edge_llm.process_manager import ProcessManager
-        from edge_llm.state import StateDB
+        from inferfabric.process_manager import ProcessManager
+        from inferfabric.state import StateDB
         state = StateDB(Path(tempfile.mkdtemp()) / "state.db")
         self.pm = ProcessManager(state, Path(tempfile.mkdtemp()))
 
     def test_force_mode_skips_wait(self):
         """P1-2: force=True returns immediately."""
-        with patch("edge_llm.process_manager.gpu_used_mb", return_value=15000):
+        with patch("inferfabric.process_manager.gpu_used_mb", return_value=15000):
             result = self.pm._wait_gpu_idle(timeout=1, force=True)
             self.assertEqual(result["status"], "force")
 
     def test_baseline_cached_and_used(self):
         """P1-2: Baseline is cached to gpu_baseline.json and used for threshold."""
-        cache_file = Path.home() / ".edge_llm" / "gpu_baseline.json"
+        cache_file = Path.home() / ".inferfabric" / "gpu_baseline.json"
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(json.dumps({"baseline_mb": 1500}))
 
@@ -423,7 +423,7 @@ class TestP12_GPUIdleBaseline(unittest.TestCase):
             self.assertEqual(baseline, 1500, "Should return cached baseline")
 
             # GPU at 2000MB < threshold 2762 → ok
-            with patch("edge_llm.process_manager.gpu_used_mb", return_value=2000):
+            with patch("inferfabric.process_manager.gpu_used_mb", return_value=2000):
                 result = self.pm._wait_gpu_idle(timeout=1)
                 self.assertEqual(result["status"], "ok")
         finally:
@@ -431,11 +431,11 @@ class TestP12_GPUIdleBaseline(unittest.TestCase):
 
     def test_no_cache_measures_and_saves(self):
         """P1-2: Without cache, measures current usage and saves baseline."""
-        cache_file = Path.home() / ".edge_llm" / "gpu_baseline.json"
+        cache_file = Path.home() / ".inferfabric" / "gpu_baseline.json"
         cache_file.unlink(missing_ok=True)
 
         try:
-            with patch("edge_llm.process_manager.gpu_used_mb", return_value=1200):
+            with patch("inferfabric.process_manager.gpu_used_mb", return_value=1200):
                 baseline = self.pm._get_gpu_baseline()
                 self.assertEqual(baseline, 1200)
                 self.assertTrue(cache_file.exists())
@@ -444,13 +444,13 @@ class TestP12_GPUIdleBaseline(unittest.TestCase):
 
     def test_timeout_returns_timeout_status(self):
         """P1-2: If GPU never drops below threshold, timeout status is returned."""
-        cache_file = Path.home() / ".edge_llm" / "gpu_baseline.json"
+        cache_file = Path.home() / ".inferfabric" / "gpu_baseline.json"
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(json.dumps({"baseline_mb": 500}))
 
         try:
             # threshold = 500*1.5+512 = 1262, but GPU stays at 30000
-            with patch("edge_llm.process_manager.gpu_used_mb", return_value=30000):
+            with patch("inferfabric.process_manager.gpu_used_mb", return_value=30000):
                 result = self.pm._wait_gpu_idle(timeout=1)
                 self.assertEqual(result["status"], "timeout")
         finally:
@@ -507,7 +507,7 @@ class TestStopServiceGPUVerify(unittest.TestCase):
         mgr._proc.stop_vllm.assert_called_once_with(port=8000)
 
         # GPU not freed → force_kill_all
-        with patch("edge_llm.manager.wait_gpu_free", return_value=False):
+        with patch("inferfabric.manager.wait_gpu_free", return_value=False):
             mgr._proc.force_kill_all()
             mgr._proc.force_kill_all.assert_called()
 

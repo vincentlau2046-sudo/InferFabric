@@ -1,4 +1,4 @@
-"""EdgeLLM — Local LLM Model Switcher (v4.0)"""
+"""InferFabric — Local LLM Model Switcher (v4.0)"""
 
 from .manager import ModelManager, ProfileManager
 from .state import GPUMode, ProfileState, StateDB, validate_transition

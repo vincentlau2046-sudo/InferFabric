@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""EdgeLLM v4.3 functional tests — real HTTP integration tests.
+"""InferFabric v4.3 functional tests — real HTTP integration tests.
 
 Tests the proxy server and dashboard with real HTTP requests.
-Requires edge-llm proxy to be running on :8999.
+Requires iff proxy to be running on :8999.
 """
 
 import sys
@@ -136,7 +136,7 @@ def test_dashboard_html_served():
         with urllib.request.urlopen(url, timeout=5) as resp:
             html = resp.read().decode()
             assert "<!DOCTYPE html>" in html, "Not HTML"
-            assert "EdgeLLM" in html, "Missing EdgeLLM in HTML"
+            assert "InferFabric" in html, "Missing InferFabric in HTML"
             assert "swLock" in html, "Missing swLock in dashboard"
             assert "finally{sw=false;}" in html, "Missing finally in dashboard"
             print("✅ Dashboard HTML: served with swLock + finally")
@@ -202,9 +202,9 @@ def test_vllm_metrics_endpoint():
 
 def run_all():
     if not _check_proxy_alive():
-        print("⚠️ EdgeLLM proxy not running on :8999 — starting functional tests that don't need proxy")
+        print("⚠️ InferFabric proxy not running on :8999 — starting functional tests that don't need proxy")
         # Run only dashboard HTML check
-        print("\nSkipping proxy-dependent tests. Start proxy with: edge-llm serve")
+        print("\nSkipping proxy-dependent tests. Start proxy with: iff serve")
         return True
 
     tests = [

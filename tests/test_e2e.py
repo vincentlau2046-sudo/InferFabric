@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""EdgeLLM E2E tests — real model lifecycle with GPU.
+"""InferFabric E2E tests — real model lifecycle with GPU.
 
-Requires: edge-llm proxy running on :8999, GPU available.
+Requires: iff proxy running on :8999, GPU available.
 Tests: start model → verify healthy → release → verify idle → switch again.
 """
 
@@ -211,7 +211,7 @@ def run_all():
         with urllib.request.urlopen(f"{PROXY}/status", timeout=3) as resp:
             pass
     except Exception:
-        print("❌ Proxy not running on :8999. Start with: edge-llm serve")
+        print("❌ Proxy not running on :8999. Start with: iff serve")
         return False
 
     tests = [

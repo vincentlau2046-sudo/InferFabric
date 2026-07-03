@@ -138,7 +138,7 @@ Dashboard UI:
 # 1. 打开 Dashboard → "Discovered Models" 出现
 # 2. 点击 [Deploy] → 自动：
 #    - 生成 models.d/qwen3-vl-14b.yaml (auto port=800X, mode=shared)
-#    - edge-llm switch qwen3-vl-14b
+#    - iff switch qwen3-vl-14b
 # 3. 模型上线，Dashboard Active Services 中出现
 # 4. 用户发送请求：
 curl -d '{"model":"qwen3-vl-14b",...}' localhost:8999/v1/chat/completions
@@ -174,7 +174,7 @@ ollama pull phi3:mini
 ollama serve &
 
 # 4. 验证
-edge-llm switch llama3-8b
+iff switch llama3-8b
 curl http://localhost:8999/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"llama3.1:8b","messages":[{"role":"user","content":"hi"}]}'
@@ -189,8 +189,8 @@ cp bin/llama-server ~/miniconda3/envs/base/bin/
 # 从 HuggingFace 下载 GGUF 到 ~/models/gguf/
 
 # 3. 验证
-edge-llm switch gemma-cpu
-edge-llm status
+iff switch gemma-cpu
+iff status
 ```
 
 ## 技术决策记录

@@ -1,5 +1,5 @@
 """
-edge_llm/process_manager.py — Unified process lifecycle for vLLM + ComfyUI.
+inferfabric/process_manager.py — Unified process lifecycle for vLLM + ComfyUI.
 
 Extracted from profile_manager.py (v3.0 → v3.1 refactoring).
 
@@ -37,7 +37,7 @@ from .config import (
 from .state import StateDB
 from .health import wait_http, check_http_status, wait_gpu_free, gpu_used_mb
 
-log = logging.getLogger("edge_llm")
+log = logging.getLogger("inferfabric")
 
 
 class ProcessManager:
@@ -166,7 +166,7 @@ class ProcessManager:
 
         When ``port`` is supplied, also does port-based cleanup after the tracked
         PID path completes (or immediately if the tracked PID is dead).  This
-        catches orphaned processes that were not spawned by edge-llm.
+        catches orphaned processes that were not spawned by iff.
         """
         pgid = self.vllm_pid
         if pgid is None and port is None:
@@ -741,7 +741,7 @@ class ProcessManager:
     def _get_gpu_baseline(self) -> int:
         """Get or cache the baseline GPU memory usage."""
         # Use a simple file-based cache for baseline
-        cache_file = Path.home() / ".edge_llm" / "gpu_baseline.json"
+        cache_file = Path.home() / ".inferfabric" / "gpu_baseline.json"
         try:
             if cache_file.exists():
                 data = json.loads(cache_file.read_text())

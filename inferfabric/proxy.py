@@ -1,5 +1,5 @@
 """
-edge_llm/proxy.py — Robust auto-routing proxy + web dashboard.
+inferfabric/proxy.py — Robust auto-routing proxy + web dashboard.
 
 v4.0: Model-plugin architecture. No more Profile concept.
       Dynamic model lookup from models.d/ via find_model_by_served_name().
@@ -26,11 +26,11 @@ from pathlib import Path
 from http.client import HTTPConnection
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from edge_llm.manager import ModelManager
-from edge_llm.state import GPUMode, ProfileState
-from edge_llm.config import load_aliases
+from inferfabric.manager import ModelManager
+from inferfabric.state import GPUMode, ProfileState
+from inferfabric.config import load_aliases
 
-log = logging.getLogger("edge_llm.proxy")
+log = logging.getLogger("inferfabric.proxy")
 
 # ─── Config ──────────────────────────────────────────────────────
 
@@ -54,20 +54,8 @@ class ProxyManager:
         self._switch_lock = threading.Lock()
         self._upstream_pool: dict[int, HTTPConnection] = {}
         self._pool_lock = threading.Lock()
-        self._cum = self._make_cum()
         if self._aliases:
             log.info("Loaded %d model aliases: %s", len(self._aliases), list(self._aliases.keys()))
-
-    @staticmethod
-    def _make_cum():
-        return {"ttft_sum": 0.0, "ttft_n": 0,
-                "tput_sum": 0.0, "tput_n": 0,
-                "pt_sum": 0.0, "pt_n": 0,
-                "gt_sum": 0.0, "gt_n": 0}
-
-    def reset_cum(self):
-        """Reset cumulative accumulators (called after switch/reset)."""
-        self._cum = self._make_cum()
 
     @property
     def current(self) -> str:
@@ -180,7 +168,7 @@ class ProxyManager:
             # Check for unhealthy services in healthy state
             for svc, health in s.get("services_health", {}).items():
                 if health == "❌" and s.get("gpu_mode") != GPUMode.IDLE:
-                    log.warning("%s unhealthy but GPU not idle — use `edge-llm reconcile`", svc)
+                    log.warning("%s unhealthy but GPU not idle — use `iff reconcile`", svc)
             # Clean up expired manual_stop records
             self._clean_manual_stops()
         except Exception as e:
@@ -289,16 +277,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def _serve_dashboard(self):
         body = None
         try:
-            from edge_llm.dashboard import DASHBOARD_HTML
+            from inferfabric.dashboard import DASHBOARD_HTML
             body = DASHBOARD_HTML.encode("utf-8")
         except ImportError:
             pass
         if body is None:
             body = (
-                "<!DOCTYPE html><html><head><title>EdgeLLM</title>"
+                "<!DOCTYPE html><html><head><title>InferFabric</title>"
                 "<style>body{font-family:sans-serif;background:#0f1117;color:#e2e8f0;padding:24px}"
                 "h1{color:#3b82f6}</style></head><body>"
-                "<h1>EdgeLLM</h1><p>Dashboard unavailable. Use <code>edge-llm status</code></p>"
+                "<h1>InferFabric</h1><p>Dashboard unavailable. Use <code>iff status</code></p>"
                 "</body></html>"
             ).encode("utf-8")
 
@@ -432,73 +420,57 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         result = {}
 
-        # Gauges
-        gauge_map = {
-            "vllm:kv_cache_usage_perc": ("kv_cache_usage_perc", lambda v: round(v * 100, 1)),
-            "vllm:num_requests_waiting": ("num_requests_waiting", int),
-            "vllm:num_requests_running": ("num_requests_running", int),
-            "vllm:engine_sleep_state": ("sleep_state", int),
-        }
-        for prom, (key, fn) in gauge_map.items():
-            v = gauges.get(prom)
-            if v is not None:
-                result[key] = fn(v)
+        # ── KV Cache (gauge) ──
+        kv = gauges.get("vllm:kv_cache_usage_perc")
+        if kv is not None:
+            result["kv_cache_usage_perc"] = round(kv * 100, 1)
 
-        # Counters
-        counter_map = {
-            "vllm:num_preemptions": "num_preemptions",
-            "vllm:prompt_tokens": "prompt_tokens",
-            "vllm:generation_tokens": "generation_tokens",
-        }
-        for prom, key in counter_map.items():
-            v = counters.get(prom)
-            if v is not None:
-                result[key] = int(v)
-
-        # TTFT histogram (cumulative since start)
-        # TTFT — running average of non-zero samples
-        h = histos.get("vllm:time_to_first_token_seconds")
-        if h and h["count"] > 0:
+        # ── TTFT (histogram) ──
+        ttft = histos.get("vllm:time_to_first_token_seconds")
+        if ttft and ttft["count"] > 0:
             result["ttft_seconds"] = {
-                "p50": round(_quantile(h["buckets"], h["count"], 0.50), 3),
-                "p95": round(_quantile(h["buckets"], h["count"], 0.95), 3),
-                "mean": round(h["sum"] / h["count"], 3),
-                "count": h["count"],
+                "p50": round(_quantile(ttft["buckets"], ttft["count"], 0.50), 3),
+                "p95": round(_quantile(ttft["buckets"], ttft["count"], 0.95), 3),
+                "mean": round(ttft["sum"] / ttft["count"], 3),
+                "count": ttft["count"],
             }
+            result["ttft_cum_mean"] = round(ttft["sum"] / ttft["count"], 3)
+            result["ttft_cum_n"] = ttft["count"]
 
-        # Running accumulators for cumulative averages (stored on pm)
-        if not hasattr(pm, "_cum"):
-            pm._cum = pm._make_cum()
+        # ── TPOT (histogram: request_time_per_output_token_seconds) ──
+        tpot = histos.get("vllm:request_time_per_output_token_seconds")
+        if tpot and tpot["count"] > 0:
+            result["tpot_seconds"] = {
+                "p50": round(_quantile(tpot["buckets"], tpot["count"], 0.50), 3),
+                "p95": round(_quantile(tpot["buckets"], tpot["count"], 0.95), 3),
+                "mean": round(tpot["sum"] / tpot["count"], 4),
+                "count": tpot["count"],
+            }
+            result["tpot_cum_mean"] = round(tpot["sum"] / tpot["count"], 4)
+            result["tpot_cum_n"] = tpot["count"]
 
-        cum = pm._cum
-        # TTFT cumulative average (use p50 as sample)
-        if h and h["count"] > 0:
-            sample = h["sum"] / h["count"]  # mean TTFT this snapshot
-            if sample > 0:
-                cum["ttft_sum"] += sample
-                cum["ttft_n"] += 1
+        # ── Seq Length (avg prompt + generation tokens per request) ──
+        prompt_h = histos.get("vllm:request_prompt_tokens")
+        gen_h = histos.get("vllm:request_generation_tokens")
+        total_reqs = 0
+        if prompt_h:
+            total_reqs = prompt_h.get("count", 0)
+        if prompt_h and gen_h and total_reqs > 0:
+            avg_prompt = round(prompt_h["sum"] / total_reqs)
+            avg_gen = round(gen_h["sum"] / total_reqs)
+            result["seq_length"] = avg_prompt + avg_gen
+            result["seq_prompt"] = avg_prompt
+            result["seq_generation"] = avg_gen
+            result["seq_count"] = total_reqs
 
-        # Throughput cumulative average
-        pt = result.get("prompt_tokens", 0)
-        gt = result.get("generation_tokens", 0)
-        if gt > 0:  # generation tokens > 0 means work is being done
-            # Calculate instant throughput from gauge values
-            total = pt + gt
-            cum["tput_sum"] += total
-            cum["tput_n"] += 1
-            cum["pt_sum"] += pt
-            cum["pt_n"] += 1
-            cum["gt_sum"] += gt
-            cum["gt_n"] += 1
-
-        if cum["tput_n"] > 0:
-            result["throughput_cum"] = round(cum["tput_sum"] / cum["tput_n"], 1)
-            result["prompt_tokens_cum"] = round(cum["pt_sum"] / cum["pt_n"], 1)
-            result["generation_tokens_cum"] = round(cum["gt_sum"] / cum["gt_n"], 1)
-            result["cum_n"] = cum["tput_n"]
-        if cum["ttft_n"] > 0:
-            result["ttft_cum_mean"] = round(cum["ttft_sum"] / cum["ttft_n"], 3)
-            result["ttft_cum_n"] = cum["ttft_n"]
+        # ── Throughput (tokens/s) ──
+        # throughput = 1 / avg_inter_token_latency_seconds
+        inter = histos.get("vllm:inter_token_latency_seconds")
+        if inter and inter["count"] > 0:
+            avg_inter = inter["sum"] / inter["count"]
+            if avg_inter > 0:
+                result["throughput"] = round(1.0 / avg_inter, 1)
+                result["throughput_cum_n"] = inter["count"]
 
         self._send_json(result)
 
@@ -812,8 +784,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # Clear manual stop for target (user explicitly wants it)
             pm.mgr.state.clear_manual_stop(target)
         result = pm.mgr.switch(target)
-        # Reset cumulative accumulators after switch
-        pm.reset_cum()
         self._send_json(result)
 
     def _handle_stop(self, pm):
@@ -833,7 +803,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         for svc in list(pm.mgr.active_services):
             pm.mgr.state.record_manual_stop(svc)
         pm.mgr.force_reset()
-        pm.reset_cum()
         self._send_json({"status": "reset", "gpu_mode": GPUMode.IDLE})
 
     def _handle_sleep(self, pm):
@@ -872,8 +841,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": "Missing name"}, 400)
             return
         result = pm.mgr.auto_deploy(name, model_type)
-        if result.get("status") in ("switched", "already_active"):
-            pm.reset_cum()
         self._send_json(result)
 
     def _send_json(self, data, status=200):
@@ -907,12 +874,12 @@ def main():
         format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
     )
     # Rotating file handler for persistent logs
-    log_dir = Path.home() / ".edge_llm" / "logs"
+    log_dir = Path.home() / ".inferfabric" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     from logging.handlers import RotatingFileHandler
     fh = RotatingFileHandler(log_dir / "proxy.log", maxBytes=10_000_000, backupCount=3)
     fh.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s %(message)s"))
-    logging.getLogger("edge_llm").addHandler(fh)
+    logging.getLogger("inferfabric").addHandler(fh)
 
     mgr = ProxyManager()
     shutdown_event = threading.Event()
@@ -967,7 +934,7 @@ def main():
     threading.Thread(target=health_loop, daemon=True, name="health").start()
 
     sd_notify("READY=1")
-    log.info("EdgeLLM Proxy: %s:%d (auto_switch=%s, threaded, v4.0)",
+    log.info("InferFabric Proxy: %s:%d (auto_switch=%s, threaded, v4.0)",
              PROXY_HOST, PROXY_PORT, AUTO_SWITCH)
     log.info("Dashboard: http://%s:%d/", PROXY_HOST, PROXY_PORT)
     log.info("GPU mode: %s | Services: %s", mgr.mgr.gpu_mode, mgr.mgr.active_services)

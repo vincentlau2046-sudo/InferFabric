@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""EdgeLLM v4.3 robustness test suite — covers audit fixes.
+"""InferFabric v4.3 robustness test suite — covers audit fixes.
 
 Tests:
   1. Dashboard sw lock (finally + timeout safety)
@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 def _make_state_db(tmp: str) -> object:
     """Create a StateDB backed by a temp directory."""
-    from edge_llm.state import StateDB
+    from inferfabric.state import StateDB
     db = StateDB(Path(tmp) / "state.db")
     db.set("gpu_mode", "idle")
     db.set("active_services", "[]")
@@ -66,7 +66,7 @@ def _make_model(name, mode, port, is_vllm=True):
 
 def test_dashboard_sw_lock_has_finally():
     """Verify all action functions use finally{sw=false} instead of bare sw=false."""
-    dashboard_path = Path(__file__).parent.parent / "edge_llm" / "dashboard.py"
+    dashboard_path = Path(__file__).parent.parent / "inferfabric" / "dashboard.py"
     content = dashboard_path.read_text()
 
     # Count 'finally{sw=false}' occurrences
@@ -87,7 +87,7 @@ def test_dashboard_sw_lock_has_finally():
 
 def test_dashboard_sw_lock_timeout_mechanism():
     """Verify swLock() function exists with 30s timeout safety."""
-    dashboard_path = Path(__file__).parent.parent / "edge_llm" / "dashboard.py"
+    dashboard_path = Path(__file__).parent.parent / "inferfabric" / "dashboard.py"
     content = dashboard_path.read_text()
 
     assert "function swLock()" in content, "Missing swLock() function"
@@ -99,7 +99,7 @@ def test_dashboard_sw_lock_timeout_mechanism():
 
 def test_dashboard_no_bare_sw_true_in_actions():
     """Verify no action function uses bare 'sw=true' (should use swLock())."""
-    dashboard_path = Path(__file__).parent.parent / "edge_llm" / "dashboard.py"
+    dashboard_path = Path(__file__).parent.parent / "inferfabric" / "dashboard.py"
     content = dashboard_path.read_text()
 
     # sw=true should only appear inside swLock() function, not in action function bodies
@@ -119,7 +119,7 @@ def test_dashboard_no_bare_sw_true_in_actions():
 
 def test_switch_to_idle_passes_comfyui_config():
     """_switch_to_idle() should pass comfyui_cfg to stop_all()."""
-    manager_path = Path(__file__).parent.parent / "edge_llm" / "manager.py"
+    manager_path = Path(__file__).parent.parent / "inferfabric" / "manager.py"
     content = manager_path.read_text()
 
     # Find _switch_to_idle method
@@ -130,7 +130,7 @@ def test_switch_to_idle_passes_comfyui_config():
 
 def test_stop_service_uses_stop_comfyui_with_config():
     """stop_service() should use stop_comfyui_with_config() for ComfyUI models."""
-    manager_path = Path(__file__).parent.parent / "edge_llm" / "manager.py"
+    manager_path = Path(__file__).parent.parent / "inferfabric" / "manager.py"
     content = manager_path.read_text()
 
     assert "stop_comfyui_with_config(model.comfyui)" in content, \
@@ -140,7 +140,7 @@ def test_stop_service_uses_stop_comfyui_with_config():
 
 def test_shared_add_service_passes_comfyui_config():
     """_shared_add_service() should pass comfyui_cfg to stop_all()."""
-    manager_path = Path(__file__).parent.parent / "edge_llm" / "manager.py"
+    manager_path = Path(__file__).parent.parent / "inferfabric" / "manager.py"
     content = manager_path.read_text()
 
     # Find _shared_add_service
@@ -151,7 +151,7 @@ def test_shared_add_service_passes_comfyui_config():
 
 def test_force_reset_passes_comfyui_config():
     """force_reset() should pass comfyui_cfg to stop_all()."""
-    manager_path = Path(__file__).parent.parent / "edge_llm" / "manager.py"
+    manager_path = Path(__file__).parent.parent / "inferfabric" / "manager.py"
     content = manager_path.read_text()
 
     # Find force_reset
@@ -181,7 +181,7 @@ def test_force_reset_passes_comfyui_config():
 
 def test_v1_models_aggregation_code():
     """Verify _handle_v1_models iterates all active services, not just active[0]."""
-    proxy_path = Path(__file__).parent.parent / "edge_llm" / "proxy.py"
+    proxy_path = Path(__file__).parent.parent / "inferfabric" / "proxy.py"
     content = proxy_path.read_text()
 
     # Should iterate over all active services
@@ -196,7 +196,7 @@ def test_v1_models_aggregation_code():
 
 def test_v1_models_no_hardcoded_first():
     """Verify no active[0] hardcoded index in _handle_v1_models."""
-    proxy_path = Path(__file__).parent.parent / "edge_llm" / "proxy.py"
+    proxy_path = Path(__file__).parent.parent / "inferfabric" / "proxy.py"
     content = proxy_path.read_text()
 
     # Extract _handle_v1_models method
@@ -214,7 +214,7 @@ def test_v1_models_no_hardcoded_first():
 
 def test_get_upstream_no_health_probe():
     """get_upstream() should NOT probe /health on every call (lazy invalidation)."""
-    proxy_path = Path(__file__).parent.parent / "edge_llm" / "proxy.py"
+    proxy_path = Path(__file__).parent.parent / "inferfabric" / "proxy.py"
     content = proxy_path.read_text()
 
     # Extract get_upstream method
@@ -233,7 +233,7 @@ def test_get_upstream_no_health_probe():
 
 def test_pkill_fallback_dynamic_ports():
     """_pkill_vllm_fallback should discover ports from models.d, not hardcode."""
-    pm_path = Path(__file__).parent.parent / "edge_llm" / "process_manager.py"
+    pm_path = Path(__file__).parent.parent / "inferfabric" / "process_manager.py"
     content = pm_path.read_text()
 
     # Extract _pkill_vllm_fallback method
@@ -254,8 +254,8 @@ def test_pkill_fallback_dynamic_ports():
 
 def test_state_machine_transition_validation():
     """Test that invalid transitions are rejected."""
-    from edge_llm.manager import validate_transition
-    from edge_llm.state import GPUMode
+    from inferfabric.manager import validate_transition
+    from inferfabric.state import GPUMode
 
     # Valid transitions
     assert validate_transition(GPUMode.IDLE, GPUMode.EXCLUSIVE) is True
@@ -275,8 +275,8 @@ def test_state_machine_idempotent_idle():
     """Switching to idle when already idle should be no-op."""
     with tempfile.TemporaryDirectory() as tmp:
         state = _make_state_db(tmp)
-        from edge_llm.process_manager import ProcessManager
-        from edge_llm.manager import ModelManager
+        from inferfabric.process_manager import ProcessManager
+        from inferfabric.manager import ModelManager
 
         # Mock process manager
         pm = MagicMock()
@@ -304,7 +304,7 @@ def test_stop_service_rejects_exclusive():
         state.set("gpu_mode", "exclusive")
         state.set("active_services", '["qwen36-27b"]')
 
-        from edge_llm.manager import ModelManager
+        from inferfabric.manager import ModelManager
         mgr = ModelManager.__new__(ModelManager)
         mgr.state = state
         mgr._proc = MagicMock()
@@ -322,7 +322,7 @@ def test_stop_service_rejects_exclusive():
 
 def test_gpu_lock_force_clear():
     """GPU lock force_clear() should work even when no lock exists."""
-    from edge_llm.gpu_lock import GPULock
+    from inferfabric.gpu_lock import GPULock
     lock = GPULock()
     # Should not raise
     lock.force_clear()
@@ -333,7 +333,7 @@ def test_gpu_lock_force_clear():
 
 def test_gpu_lock_double_release_safe():
     """Double release should not raise."""
-    from edge_llm.gpu_lock import GPULock
+    from inferfabric.gpu_lock import GPULock
     lock = GPULock()
     lock.acquire()
     lock.release()
@@ -353,7 +353,7 @@ def test_stop_vllm_no_pid_uses_fallback():
     """stop_vllm() with no PID should use pkill fallback."""
     with tempfile.TemporaryDirectory() as tmp:
         state = _make_state_db(tmp)
-        from edge_llm.process_manager import ProcessManager
+        from inferfabric.process_manager import ProcessManager
         pm = ProcessManager(state, Path(tmp))
 
         # No PID set
@@ -371,7 +371,7 @@ def test_stop_comfyui_no_pid_uses_fallback():
     """stop_comfyui() with no PID should use pkill fallback."""
     with tempfile.TemporaryDirectory() as tmp:
         state = _make_state_db(tmp)
-        from edge_llm.process_manager import ProcessManager
+        from inferfabric.process_manager import ProcessManager
         pm = ProcessManager(state, Path(tmp))
 
         assert pm.comfyui_pid is None
@@ -387,7 +387,7 @@ def test_stop_comfyui_with_config_prefers_native():
     """stop_comfyui_with_config() should prefer native stop when PID available."""
     with tempfile.TemporaryDirectory() as tmp:
         state = _make_state_db(tmp)
-        from edge_llm.process_manager import ProcessManager
+        from inferfabric.process_manager import ProcessManager
         pm = ProcessManager(state, Path(tmp))
 
         # Set a fake PID
@@ -405,11 +405,11 @@ def test_wait_gpu_idle_returns_on_low_vram():
     """_wait_gpu_idle() should return ok when GPU VRAM < 2GB."""
     with tempfile.TemporaryDirectory() as tmp:
         state = _make_state_db(tmp)
-        from edge_llm.process_manager import ProcessManager
+        from inferfabric.process_manager import ProcessManager
         pm = ProcessManager(state, Path(tmp))
 
         # Mock gpu_used_mb to return low value
-        with patch('edge_llm.process_manager.gpu_used_mb', return_value=512):
+        with patch('inferfabric.process_manager.gpu_used_mb', return_value=512):
             result = pm._wait_gpu_idle(timeout=5)
             assert result["status"] == "ok"
             assert result["used_mb"] == 512
@@ -420,11 +420,11 @@ def test_wait_gpu_idle_timeout():
     """_wait_gpu_idle() should timeout when GPU stays busy."""
     with tempfile.TemporaryDirectory() as tmp:
         state = _make_state_db(tmp)
-        from edge_llm.process_manager import ProcessManager
+        from inferfabric.process_manager import ProcessManager
         pm = ProcessManager(state, Path(tmp))
 
         # Mock gpu_used_mb to always return high value
-        with patch('edge_llm.process_manager.gpu_used_mb', return_value=8192):
+        with patch('inferfabric.process_manager.gpu_used_mb', return_value=8192):
             result = pm._wait_gpu_idle(timeout=3)
             assert result["status"] == "timeout"
         print("✅ _wait_gpu_idle: times out when GPU stays busy")
@@ -436,7 +436,7 @@ def test_wait_gpu_idle_timeout():
 
 def test_check_http_status_timeout():
     """check_http_status should return ❌ on connection failure."""
-    from edge_llm.health import check_http_status
+    from inferfabric.health import check_http_status
     result = check_http_status("http://localhost:59999/nonexistent")
     assert result == "❌", f"Expected ❌, got {result}"
     print("✅ check_http_status: returns ❌ on connection failure")
@@ -444,7 +444,7 @@ def test_check_http_status_timeout():
 
 def test_wait_http_timeout():
     """wait_http should return False on timeout."""
-    from edge_llm.health import wait_http
+    from inferfabric.health import wait_http
     result = wait_http("http://localhost:59999/nonexistent", timeout=1)
     assert result is False, f"Expected False, got {result}"
     print("✅ wait_http: returns False on timeout")
@@ -457,7 +457,7 @@ def test_wait_http_timeout():
 def test_state_db_set_get_roundtrip():
     """StateDB set/get should roundtrip correctly."""
     with tempfile.TemporaryDirectory() as tmp:
-        from edge_llm.state import StateDB
+        from inferfabric.state import StateDB
         db = StateDB(Path(tmp) / "test.db")
         db.set("key1", "value1")
         db.set("key2", "42")
@@ -470,7 +470,7 @@ def test_state_db_set_get_roundtrip():
 def test_state_db_set_multi():
     """StateDB set_multi should atomically set multiple keys."""
     with tempfile.TemporaryDirectory() as tmp:
-        from edge_llm.state import StateDB
+        from inferfabric.state import StateDB
         db = StateDB(Path(tmp) / "test.db")
         db.set_multi({"k1": "v1", "k2": "v2", "k3": "v3"})
         assert db.get("k1") == "v1"
@@ -482,7 +482,7 @@ def test_state_db_set_multi():
 def test_state_db_active_services():
     """StateDB active_services management."""
     with tempfile.TemporaryDirectory() as tmp:
-        from edge_llm.state import StateDB
+        from inferfabric.state import StateDB
         db = StateDB(Path(tmp) / "test.db")
         db.set("gpu_mode", "idle")
         db.set("active_services", "[]")
@@ -504,7 +504,7 @@ def test_state_db_active_services():
 
 def test_load_models_real_configs():
     """Load actual models.d/ configs and validate structure."""
-    from edge_llm.config import load_models
+    from inferfabric.config import load_models
     models_dir = Path(__file__).parent.parent / "models.d"
     if not models_dir.exists():
         print("⚠️ Skipping: models.d/ not found")
@@ -527,7 +527,7 @@ def test_load_models_real_configs():
 
 def test_vllm_config_build_cmd():
     """VLLMConfig.build_cmd() should produce valid command list."""
-    from edge_llm.config import VLLMConfig
+    from inferfabric.config import VLLMConfig
     cfg = VLLMConfig(
         model_dir="test-model",
         served_name="vllm_test",
@@ -552,7 +552,7 @@ def test_vllm_config_build_cmd():
 
 def test_proxy_upstream_pool_lazy():
     """ProxyManager upstream pool should use lazy invalidation."""
-    proxy_path = Path(__file__).parent.parent / "edge_llm" / "proxy.py"
+    proxy_path = Path(__file__).parent.parent / "inferfabric" / "proxy.py"
     content = proxy_path.read_text()
 
     # get_upstream should not probe /health
@@ -567,7 +567,7 @@ def test_proxy_upstream_pool_lazy():
 
 def test_proxy_cumulative_metrics_reset():
     """ProxyManager should have reset_cum() for metric accumulators."""
-    proxy_path = Path(__file__).parent.parent / "edge_llm" / "proxy.py"
+    proxy_path = Path(__file__).parent.parent / "inferfabric" / "proxy.py"
     content = proxy_path.read_text()
 
     assert "reset_cum" in content, "Missing reset_cum() method"
@@ -581,7 +581,7 @@ def test_proxy_cumulative_metrics_reset():
 
 def test_kv_offload_skips_expandable_segments():
     """start_vllm should skip expandable_segments when KV offloading is enabled."""
-    pm_path = Path(__file__).parent.parent / "edge_llm" / "process_manager.py"
+    pm_path = Path(__file__).parent.parent / "inferfabric" / "process_manager.py"
     content = pm_path.read_text()
 
     assert "has_kv_offload" in content, "Missing KV offload detection"
@@ -597,7 +597,7 @@ def test_kv_offload_skips_expandable_segments():
 def test_state_db_concurrent_writes():
     """StateDB should handle concurrent writes without corruption."""
     with tempfile.TemporaryDirectory() as tmp:
-        from edge_llm.state import StateDB
+        from inferfabric.state import StateDB
         db = StateDB(Path(tmp) / "test.db")
         errors = []
 

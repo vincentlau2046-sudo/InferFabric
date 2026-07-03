@@ -17,7 +17,7 @@
 - L2 sleep（权重丢弃，VRAM 释放）
 - 互斥锁：同时只允许一个模型 sleep
 - 状态机：sleep 不影响 GPU 模式定义
-- CLI：`edge-llm sleep/wake`
+- CLI：`iff sleep/wake`
 - Dashboard + proxy API 端到端
 
 ### 4. KV Offloading 配置

@@ -1,4 +1,4 @@
-# EdgeLLM v3.0 — 软件工程审视与重构报告
+# InferFabric v3.0 — 软件工程审视与重构报告
 
 > 日期：2026-06-28  
 > 版本：v2.0 → v3.0  
@@ -9,7 +9,7 @@
 
 ## 一、项目概述
 
-**EdgeLLM** 是本地 LLM 模型生命周期管理系统，运行在单卡 RTX 5090D (32GB VRAM) 上，管理 3 个互斥 vLLM 模型 + ComfyUI 的启停和切换。
+**InferFabric** 是本地 LLM 模型生命周期管理系统，运行在单卡 RTX 5090D (32GB VRAM) 上，管理 3 个互斥 vLLM 模型 + ComfyUI 的启停和切换。
 
 ### 技术栈
 - **核心**：Python 3.11+ (profile_manager.py, cli.py, proxy.py, dashboard.py)
@@ -29,7 +29,7 @@
 | profiles.yaml | 98 | Profile 配置 |
 | switch_vllm.sh | 230 | Bash 版模型切换 |
 | switch_comfyui.sh | 99 | ComfyUI 启停 |
-| edge-llm-recovery.sh | 99 | 紧急恢复 |
+| iff-recovery.sh | 99 | 紧急恢复 |
 
 **总计**：~2,183 行
 
@@ -77,7 +77,7 @@
 | M2 | dashboard.py 未被使用 | proxy.py 优先查找 dashboard.py → static/ → fallback |
 | M3 | preload.py 未集成 | 标记为实验性，文档说明，不删除 |
 | M4 | reconcile 用 wait_http 不区分 ⏳/❌ | 改用 `check_http_status()` 三态 |
-| M5 | 日志不统一 | 统一到 `~/.edge_llm/logs/` |
+| M5 | 日志不统一 | 统一到 `~/.inferfabric/logs/` |
 | M6 | pkill 模式匹配风险 | 主路径改用 killpg；pkill 仅作 fallback |
 
 ### Low 级（2 项）
@@ -197,8 +197,8 @@ class GPULock:
 
 **switch_vllm.sh 新增**：
 ```bash
-LOCK_FILE="/tmp/edge_llm_gpu.lock"
-STATE_DB="$HOME/.edge_llm/state.db"
+LOCK_FILE="/tmp/inferfabric_gpu.lock"
+STATE_DB="$HOME/.inferfabric/state.db"
 
 check_gpu_lock() {
     # flock 非阻塞检查
@@ -240,11 +240,11 @@ except sqlite3.OperationalError:
 
 | 场景 | 命令 | 结果 | 耗时 |
 |------|------|------|------|
-| idle → qw36_full | `edge-llm switch qw36_full` | ✅ | 53-56s |
-| qw36_full → idle (killpg) | `edge-llm switch idle` | ✅ 优雅关闭 | 2-3s |
-| idle → qw36_full (二次) | `edge-llm switch qw36_full` | ✅ | 53-56s |
-| 状态一致性 | `edge-llm reconcile` | ✅ 修复 idle→healthy | <1s |
-| 强制重置 | `edge-llm reset idle` | ✅ | ~5s |
+| idle → qw36_full | `iff switch qw36_full` | ✅ | 53-56s |
+| qw36_full → idle (killpg) | `iff switch idle` | ✅ 优雅关闭 | 2-3s |
+| idle → qw36_full (二次) | `iff switch qw36_full` | ✅ | 53-56s |
+| 状态一致性 | `iff reconcile` | ✅ 修复 idle→healthy | <1s |
+| 强制重置 | `iff reset idle` | ✅ | ~5s |
 | CLI 全命令 | status/list/history/reconcile | ✅ | <1s |
 
 ### 关键指标对比
@@ -288,10 +288,10 @@ except sqlite3.OperationalError:
 ## 七、文件清单与依赖关系
 
 ```
-~/edge_llm/
+~/inferfabric/
 ├── profiles.yaml              # Profile 定义（5 个 profile）
-├── edge-llm                   # CLI 入口（→ ~/bin/edge-llm symlink）
-├── edge_llm/
+├── iff                   # CLI 入口（→ ~/bin/iff symlink）
+├── inferfabric/
 │   ├── __init__.py            # v3.0.0，导出核心类
 │   ├── profile_manager.py     # 核心状态机（730 行）
 │   │   ├── ProfileState       #   状态常量
@@ -308,7 +308,7 @@ except sqlite3.OperationalError:
 ├── scripts/
 │   ├── switch_vllm.sh         # Bash vLLM 切换（含 GPU lock + state.db 集成）
 │   ├── switch_comfyui.sh      # ComfyUI 启停
-│   └── edge-llm-recovery.sh   # 紧急恢复（含 DB 迁移）
+│   └── iff-recovery.sh   # 紧急恢复（含 DB 迁移）
 ├── tests/
 │   └── test_local.py          # 单元测试（覆盖率低）
 └── ARCHITECTURE_REVIEW.md     # v2.0 架构审视报告（参考用）
@@ -322,9 +322,9 @@ profiles.yaml
          └── proxy.py (HTTP 代理)
               └── dashboard.py (Dashboard HTML)
 
-scripts/switch_vllm.sh ←→ ~/.edge_llm/state.db + /tmp/edge_llm_gpu.lock
+scripts/switch_vllm.sh ←→ ~/.inferfabric/state.db + /tmp/inferfabric_gpu.lock
 scripts/switch_comfyui.sh ← profile_manager.py 调用
-scripts/edge-llm-recovery.sh ← 独立运行
+scripts/iff-recovery.sh ← 独立运行
 ```
 
 ### 外部依赖
@@ -341,34 +341,34 @@ scripts/edge-llm-recovery.sh ← 独立运行
 
 ### 日常操作
 ```bash
-edge-llm status                    # 查看当前状态
-edge-llm switch qw36_full          # 切换到 Qwen3.6
-edge-llm switch idle               # 释放 GPU
-edge-llm reconcile                 # 修复状态不一致
+iff status                    # 查看当前状态
+iff switch qw36_full          # 切换到 Qwen3.6
+iff switch idle               # 释放 GPU
+iff reconcile                 # 修复状态不一致
 ```
 
 ### 故障恢复
 ```bash
 # 场景 1: switch 报 "lock held"
-rm -f /tmp/edge_llm_gpu.lock && edge-llm reconcile
+rm -f /tmp/inferfabric_gpu.lock && iff reconcile
 
 # 场景 2: 进程卡死
-edge-llm reset idle
+iff reset idle
 
 # 场景 3: GPU 显存不释放（孤儿 CUDA context）
-~/edge_llm/scripts/edge-llm-recovery.sh --full
+~/inferfabric/scripts/iff-recovery.sh --full
 
 # 场景 4: state.db 损坏
-rm -f ~/.edge_llm/state.db && edge-llm reconcile
+rm -f ~/.inferfabric/state.db && iff reconcile
 ```
 
 ### 日志路径
 ```
-~/.edge_llm/logs/vllm_qw36-27b-vllm.log    # vLLM Qwen3.6 日志
-~/.edge_llm/logs/vllm_qw35-9b-vllm.log     # vLLM Qwen3.5 日志
-~/.edge_llm/logs/vllm_gm4-26b-vllm.log     # vLLM Gemma4 日志
-~/.edge_llm/state.db                        # 状态数据库
-/tmp/edge_llm_gpu.lock                      # GPU 锁（flock）
+~/.inferfabric/logs/vllm_qw36-27b-vllm.log    # vLLM Qwen3.6 日志
+~/.inferfabric/logs/vllm_qw35-9b-vllm.log     # vLLM Qwen3.5 日志
+~/.inferfabric/logs/vllm_gm4-26b-vllm.log     # vLLM Gemma4 日志
+~/.inferfabric/state.db                        # 状态数据库
+/tmp/inferfabric_gpu.lock                      # GPU 锁（flock）
 ```
 
 ---

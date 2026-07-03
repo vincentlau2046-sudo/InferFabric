@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
-# edge-llm-recovery.sh — Emergency GPU Reset
-# Usage: ~/edge_llm/scripts/edge-llm-recovery.sh [--full]
+# iff-recovery.sh — Emergency GPU Reset
+# Usage: ~/inferfabric/scripts/iff-recovery.sh [--full]
 # --full: attempts nvidia-smi --gpu-reset if normal recovery fails
 # ============================================================
 
@@ -9,16 +9,16 @@ set -euo pipefail
 
 FULL="${1:-}"
 
-echo "=== EdgeLLM Emergency Recovery ==="
+echo "=== InferFabric Emergency Recovery ==="
 echo "[$(date '+%H:%M:%S')] Starting recovery..."
 
-# Step 1: Stop via edge-llm
-echo "[1/6] Stopping via edge-llm..."
-edge-llm reset idle 2>/dev/null || {
-    # Fallback to old scripts if edge-llm not installed
+# Step 1: Stop via iff
+echo "[1/6] Stopping via iff..."
+iff reset idle 2>/dev/null || {
+    # Fallback to old scripts if iff not installed
     # switch_vllm.sh 已废弃
-    edge-llm switch idle 2>/dev/null || true
-    ~/edge_llm/scripts/switch_comfyui.sh stop 2>/dev/null || true
+    iff switch idle 2>/dev/null || true
+    ~/inferfabric/scripts/switch_comfyui.sh stop 2>/dev/null || true
 }
 sleep 2
 
@@ -58,13 +58,13 @@ fi
 
 # Step 5: Clean lock and re-init state (NEVER rm -rf state.db)
 echo "[5/6] Cleaning lock and state..."
-rm -f /tmp/edge_llm_gpu.lock
-mkdir -p ~/.edge_llm
+rm -f /tmp/inferfabric_gpu.lock
+mkdir -p ~/.inferfabric
 
 # Safely re-init state.db (creates tables if missing, keeps existing data)
 python3 << 'PYEOF'
 import sqlite3, pathlib
-db = pathlib.Path.home() / '.edge_llm' / 'state.db'
+db = pathlib.Path.home() / '.inferfabric' / 'state.db'
 db.parent.mkdir(exist_ok=True)
 c = sqlite3.connect(str(db))
 c.execute('PRAGMA journal_mode=WAL')
@@ -92,7 +92,7 @@ if [ "$PARTIAL" = true ]; then
     echo "⚠️ Partial recovery — GPU still busy (${USED} MB)"
     echo "   State DB reset to idle. Orphan CUDA context may need reboot."
     echo ""
-    echo "   You can still try: edge-llm switch <profile>"
+    echo "   You can still try: iff switch <profile>"
     echo "   If GPU remains stuck, reboot the machine."
 else
     echo ""
@@ -101,6 +101,6 @@ fi
 
 echo ""
 echo "Available commands:"
-echo "  edge-llm switch qw36_full    # Start Qwen3.6"
-echo "  edge-llm reconcile           # Fix DB vs reality"
-echo "  edge-llm switch qwen36-27b  # edge-llm CLI"
+echo "  iff switch qw36_full    # Start Qwen3.6"
+echo "  iff reconcile           # Fix DB vs reality"
+echo "  iff switch qwen36-27b  # iff CLI"

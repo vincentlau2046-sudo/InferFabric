@@ -11,8 +11,8 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from edge_llm.config import ModelConfig, VLLMConfig, ComfyUIConfig, load_models
-from edge_llm.state import StateDB, ProfileState, GPUMode
+from inferfabric.config import ModelConfig, VLLMConfig, ComfyUIConfig, load_models
+from inferfabric.state import StateDB, ProfileState, GPUMode
 
 
 # ─── Helpers ─────────────────────────────────────────────────────
@@ -92,7 +92,7 @@ def test_shared_add_incremental_no_stop():
             start_count["comfyui"] += 1
             return {"status": "healthy", "port": cfg.port, "pid": 9999}
 
-        import edge_llm.health as health_mod
+        import inferfabric.health as health_mod
         orig_wait = health_mod.wait_gpu_free
         health_mod.wait_gpu_free = lambda timeout=30: True
 
@@ -148,7 +148,7 @@ def test_shared_add_vram_accept():
             start_count[0] += 1
             return {"status": "healthy", "port": cfg.port, "pid": 9999}
 
-        import edge_llm.health as health_mod
+        import inferfabric.health as health_mod
         orig_wait = health_mod.wait_gpu_free
         health_mod.wait_gpu_free = lambda timeout=30: True
 
@@ -266,7 +266,7 @@ def test_stop_service_verifies_gpu():
         def mock_stop_vllm(port=None):
             pass
 
-        import edge_llm.health as health_mod
+        import inferfabric.health as health_mod
         orig_wait = health_mod.wait_gpu_free
         health_mod.wait_gpu_free = lambda timeout=30: True
 
@@ -296,7 +296,7 @@ def test_switch_to_idle_passes_ports():
         def mock_stop_all(**kw):
             stop_all_received.update(kw)
 
-        import edge_llm.health as health_mod
+        import inferfabric.health as health_mod
         orig_wait = health_mod.wait_gpu_free
         health_mod.wait_gpu_free = lambda timeout=30: True
 
@@ -373,7 +373,7 @@ def test_stop_service_routes_vllm():
         def mock_stop_vllm(port=None):
             port_used[0] = port
 
-        import edge_llm.health as health_mod
+        import inferfabric.health as health_mod
         orig_wait = health_mod.wait_gpu_free
         health_mod.wait_gpu_free = lambda timeout=30: True
 
@@ -398,7 +398,7 @@ def test_stop_service_routes_comfyui():
         def mock_stop_comfyui(cfg, port=None):
             port_used[0] = port
 
-        import edge_llm.health as health_mod
+        import inferfabric.health as health_mod
         orig_wait = health_mod.wait_gpu_free
         health_mod.wait_gpu_free = lambda timeout=30: True
 
@@ -446,7 +446,7 @@ def _make_shared_comfyui(name, port):
 
 def _make_manager(tmpdir, models=None):
     """Create a ProfileManager with mock models, no real services."""
-    from edge_llm.manager import ProfileManager
+    from inferfabric.manager import ProfileManager
     db = Path(tmpdir) / "state.db"
     mgr = ProfileManager(state_db_path=str(db))
     if models:
@@ -457,7 +457,7 @@ def _make_manager(tmpdir, models=None):
 def _make_pm():
     """Create a ProcessManager with a mock StateDB (no real files)."""
     import tempfile
-    from edge_llm.process_manager import ProcessManager
+    from inferfabric.process_manager import ProcessManager
     with tempfile.TemporaryDirectory() as tmp:
         db = StateDB(Path(tmp) / "test.db")
         return ProcessManager(state=db, log_dir=Path(tmp))

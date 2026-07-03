@@ -341,7 +341,7 @@ def main():
         urllib.request.urlopen(f"{VLLM_URL}/health", timeout=5).read()
         print("vLLM healthy ✓")
     except:
-        print("vLLM not running! Start: edge-llm switch qwen36-27b")
+        print("vLLM not running! Start: iff switch qwen36-27b")
         return
 
     gpu = get_gpu()
