@@ -1,0 +1,13 @@
+name: qwen25-omni-3b
+description: "Qwen2.5 Omni 3B Q8_0 — Ollama.cpp CPU 推理 (Vision-Language)"
+type: ollama_cpp
+mode: shared
+model_type: vl
+quantization: Q8_0
+cpu_only: true
+ollama_cpp:
+  model_path: ~/models/gguf/Qwen2.5-Omni-3B-Q8_0/Qwen2.5-Omni-3B-Q8_0.gguf
+  port: 11436
+  threads: 16
+  context_size: 32768
+  gpu_layers: 0
