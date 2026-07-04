@@ -554,7 +554,8 @@ class ModelManager:
 
     def _shared_add_service(self, model: ModelConfig) -> dict:
         """Add a shared-mode service. Caller must hold self._lock (see switch())."""
-        assert self._lock.is_held, "_shared_add_service requires switch lock"
+        if not self._lock.is_held:
+            raise RuntimeError("_shared_add_service called without holding GPU lock")
         """Add a shared service without touching existing ones.
 
         Only starts the new model. Existing shared services remain running.
@@ -596,10 +597,11 @@ class ModelManager:
             self.state.set("profile_state", ProfileState.ERROR)
             return {"status": "error", "message": f"Failed to start: {failed}", "results": results}
 
-        # Update state: add to active services
+        # Update state: add to active services + record config hash
         remaining = list(self.active_services)
         remaining.append(model.name)
         self.state.set_active_services(remaining)
+        self.state.set(f"config_hash:{model.name}", model.config_hash())
         self.state.set("profile_state", ProfileState.HEALTHY)
 
         elapsed = round(time.time() - t0, 1)

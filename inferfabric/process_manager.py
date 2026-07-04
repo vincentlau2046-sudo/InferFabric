@@ -625,7 +625,7 @@ class ProcessManager:
 
         subprocess.run(["pkill", "-9", "-f", f"python.*{_re.escape(str(COMFYUI_DIR))}/main.py"], timeout=5, check=False)
         # Try to kill ComfyUI specifically by working dir
-        comfyui_dir = str(COMFYUI_DIR)
+        comfyui_dir = _re.escape(str(COMFYUI_DIR))
         subprocess.run(["pkill", "-9", "-f", f"python.*{comfyui_dir}"], timeout=5, check=False)
 
         time.sleep(2)
