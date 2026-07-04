@@ -571,6 +571,8 @@ class ModelManager:
             return 0.0
 
     def _shared_add_service(self, model: ModelConfig) -> dict:
+        """Add a shared-mode service. Caller must hold self._lock (see switch())."""
+        assert self._lock.is_held, "_shared_add_service requires switch lock"
         """Add a shared service without touching existing ones.
 
         Only starts the new model. Existing shared services remain running.

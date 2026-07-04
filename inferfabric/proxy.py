@@ -173,6 +173,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     _vllm_gen_counters: dict = {}  # port -> (timestamp, generation_tokens_total)
     # EMA state for smoothed throughput: port -> ema_value (tokens/s)
     _vllm_throughput_ema: dict = {}  # port -> float
+    _vllm_metrics_lock = threading.Lock()  # protects _vllm_gen_counters + _vllm_throughput_ema
 
     def log_message(self, fmt, *args):
         log.debug("[proxy] " + fmt, *args)
@@ -749,34 +750,37 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         gen_key = "vllm:generation_tokens"
         gen_counter = counters.get(gen_key)
         cur_ts = time.time()
-        prev_state = self._vllm_gen_counters.get(port)
 
-        if gen_counter is not None:
-            inst_tp = None
-            if prev_state is not None:
-                prev_ts, prev_val = prev_state
-                elapsed = cur_ts - prev_ts
-                actual_tokens = int(gen_counter) - int(prev_val)
-                if elapsed > 0 and actual_tokens > 0:
-                    inst_tp = round(actual_tokens / elapsed, 1)
+        # Single-lock section: all reads/writes to shared dicts in one critical section
+        with self._vllm_metrics_lock:
+            prev_state = self._vllm_gen_counters.get(port)
 
-            # EMA update: only when actual generation happened
-            prev_ema = self._vllm_throughput_ema.get(port)
-            if inst_tp is not None:
-                if prev_ema is None:
-                    ema_tp = inst_tp
-                else:
-                    ema_tp = EMA_ALPHA * inst_tp + (1 - EMA_ALPHA) * prev_ema
-                self._vllm_throughput_ema[port] = ema_tp
-                result["throughput"] = round(ema_tp, 1)
-                result["throughput_inst"] = inst_tp
-                result["throughput_cum_n"] = int(gen_counter)
-            elif prev_ema is not None:
-                # Idle: keep last EMA value
-                result["throughput"] = round(prev_ema, 1)
-                result["throughput_cum_n"] = int(gen_counter)
+            if gen_counter is not None:
+                inst_tp = None
+                if prev_state is not None:
+                    prev_ts, prev_val = prev_state
+                    elapsed = cur_ts - prev_ts
+                    actual_tokens = int(gen_counter) - int(prev_val)
+                    if elapsed > 0 and actual_tokens > 0:
+                        inst_tp = round(actual_tokens / elapsed, 1)
 
-        self._vllm_gen_counters[port] = (cur_ts, gen_counter)
+                # EMA update: only when actual generation happened
+                prev_ema = self._vllm_throughput_ema.get(port)
+                if inst_tp is not None:
+                    if prev_ema is None:
+                        ema_tp = inst_tp
+                    else:
+                        ema_tp = EMA_ALPHA * inst_tp + (1 - EMA_ALPHA) * prev_ema
+                    self._vllm_throughput_ema[port] = ema_tp
+                    result["throughput"] = round(ema_tp, 1)
+                    result["throughput_inst"] = inst_tp
+                    result["throughput_cum_n"] = int(gen_counter)
+                elif prev_ema is not None:
+                    # Idle: keep last EMA value
+                    result["throughput"] = round(prev_ema, 1)
+                    result["throughput_cum_n"] = int(gen_counter)
+
+            self._vllm_gen_counters[port] = (cur_ts, gen_counter)
 
         self._send_json(result)
 
