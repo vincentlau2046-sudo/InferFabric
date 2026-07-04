@@ -23,6 +23,7 @@
 - [CLI 参考](#cli-参考)
 - [模型配置格式](#模型配置格式)
 - [增删模型](#增删模型)
+- [OpenClaw / Codex / Claude Code 集成](#openclaw--codex--claude-code-集成)
 - [Proxy 服务](#proxy-服务)
 - [状态持久化](#状态持久化)
 - [故障恢复](#故障恢复)
@@ -329,6 +330,121 @@ extra_flags: --cache-none --enable-manager
 ### name 字段规则
 
 YAML 内 `name` 字段必须与文件名(去掉 `.yaml` 后缀)一致。连字符命名:`qwen36-27b.yaml` → `name: qwen36-27b`。
+
+---
+
+## OpenClaw / Codex / Claude Code 集成
+
+InferFabric Proxy (`:8999`) 作为 OpenClaw 的 Anthropic-compatible 后端，支持 OpenClaw、Codex、Claude Code (CC) 等客户端的自动化路由。
+
+### 客户端配置
+
+在 OpenClaw config 中，将 provider 指向 InferFabric Proxy：
+
+```
+# OpenClaw 配置示例 (providers 段落)
+provider:
+  id: inferfabric
+  base_url: http://127.0.0.1:8999
+  models:
+    - id: vllm_qwen27b
+      name: Qwen3.6-27B
+    - id: vllm_qw35_gptq
+      name: Qwen3.5-9B
+    - id: vllm_gemma26b
+      name: Gemma4-26B
+```
+
+客户端发送 OpenAI 格式请求到 `:8999/v1/chat/completions`，Proxy 自动路由到当前活跃的本地模型或云端 fallback。
+
+### 路由架构
+
+```
+客户端 (OpenClaw/Codex/CC)
+        │
+        ├── POST /v1/chat/completions ──→ [自动路由]
+        │                                    │
+        │                        ┌───────────┼───────────┐
+        │                        ▼         ▼           ▼
+        │                    vLLM路径   Ollama路径  Ollama原生
+        │                    (rate limit)│           (native)
+        │                        │
+        │                        ├── svc_name → 动态服务查找
+        │                        ├── AUTO_SWITCH → 自动切换模型
+        │                        └── Semaphore (8 slots, 30s)
+        │
+        ├── POST /v1/messages ──→ [Anthropic Messages]
+        │                              │
+        │                        ┌───────┴───────┐
+        │                        ▼             ▼
+        │                    本地 LLM     Baidu fallback
+        │                    (active svc)   (Coding Plan)
+        │                        │
+        │                        ├── 指数退避重试
+        │                        └── 429 rate limit
+        │
+        └── GET /v1/models ──→ 聚合所有活跃服务的模型列表
+```
+
+### `/v1/chat/completions` 路由逻辑
+
+1. **模型解析**: `model` 字段 → `model_to_service()` 查找 aliases + `models.d/`
+2. **服务发现**: 检查当前活跃服务是否匹配；不匹配且 `AUTO_SWITCH=1` 时自动切换
+3. **Ollama 模型**: 如果模型配置 `num_gpu >= 0`，走原生 Ollama 转发（绕过 vLLM 路径）
+4. **vLLM 路径**: 应用 Semaphore rate limiter（8 slots, 30s timeout），成功后转发到目标端口
+5. **错误处理**: 409（切换进行中）、429（容量耗尽）、503（切换被阻止）
+
+### `/v1/messages` 路由逻辑
+
+1. **本地优先**: 扫描当前活跃服务，找第一个 `type: llm` 或 `vl` 的本地模型
+2. **本地转发**: 转发到活跃模型的 `/v1/messages` 端点，支持指数退避重试
+3. **Baidu Fallback**: 本地失败后自动回退到 Baidu Coding Plan (`BAIDU_MESSAGES_BASE`)
+4. **Rate Limit**: 本地路径通过 Semaphore 保护，Baidu 路径绕过
+
+### 模型别名系统
+
+`models.d/aliases.yaml` 定义语义化模型别名，客户端可直接使用：
+
+```yaml
+aliases:
+  fast: qwen35-9b       # 快速响应
+  powerful: qwen36-27b  # 高算力
+  balanced: qwen35-9b  # 平衡模式
+```
+
+客户端请求 `model: fast`，Proxy 自动解析为 `qwen35-9b` 并路由。
+
+### AUTO_SWITCH 行为
+
+| 场景 | `AUTO_SWITCH=1` (默认) | `AUTO_SWITCH=0` |
+|------|-------------------------|----------------|
+| 请求不活跃的模型 | 自动切换模型，等待健康检查 | 返回 404 |
+| 模型已在运行 | 直接转发 | 直接转发 |
+| 切换进行中 | 返回 409 | 返回 409 |
+| 手动停止的模型 | 被阻止，返回 503 | 同上 |
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `EDGE_PROXY_HOST` | `127.0.0.1` | 代理监听地址 |
+| `EDGE_PROXY_PORT` | `8999` | 代理端口 |
+| `EDGE_AUTO_SWITCH` | `1` | 是否自动切换模型 |
+| `EDGE_HEALTH_CHECK` | `60` | 健康检查间隔（秒） |
+| `BAIDU_MESSAGES_BASE` | `https://qianfan.baidubce.com/anthropic/coding/v1` | Baidu fallback 端点 |
+
+### Proxy 启动
+
+```bash
+# 直接启动
+python3 -m inferfabric serve
+
+# systemd
+sudo systemctl start iff
+
+# 自定义端口
+EDGE_PROXY_PORT=9999 python3 -m inferfabric serve
+```
 
 ---
 
