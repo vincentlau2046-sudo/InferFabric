@@ -9,7 +9,10 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
+import json
 import yaml
+import hashlib
+import dataclasses
 import logging
 
 log = logging.getLogger("inferfabric")
@@ -164,6 +167,31 @@ class ModelConfig:
     typical_vram_pct: float = 0.0
     model_type: str = "llm"  # 'llm' | 'vl' | 'omni' | 'aigc'
     quantization: str = ""  # quantization format: 'NVFP4', 'GPTQ-4bit', 'Q8_0', etc.
+
+    # Fields excluded from config hash (runtime / non-startup)
+    _HASH_EXCLUDE_FIELDS = frozenset({"typical_vram_pct"})
+
+    def config_hash(self) -> str:
+        """Deterministic hash of all config fields that affect startup behavior.
+
+        Excludes _HASH_EXCLUDE_FIELDS and None values.  Used for drift detection
+        so that a running service is automatically restarted when its YAML changes.
+        """
+        payload = {}
+        for f in dataclasses.fields(self):
+            if f.name.startswith("_"):
+                continue
+            if f.name in self._HASH_EXCLUDE_FIELDS:
+                continue
+            val = getattr(self, f.name)
+            if val is None:
+                continue
+            # Recurse into nested dataclasses (VLLMConfig, ComfyUIConfig, etc.)
+            if dataclasses.is_dataclass(val) and not isinstance(val, type):
+                val = dataclasses.asdict(val)
+            payload[f.name] = val
+        raw = json.dumps(payload, sort_keys=True, default=str)
+        return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
     @property
     def port(self) -> Optional[int]:

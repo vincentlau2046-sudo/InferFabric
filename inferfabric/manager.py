@@ -375,48 +375,23 @@ class ModelManager:
 
     # P0-1: Check if model config has changed since it was started
     def _check_model_config_changed(self, model: ModelConfig) -> bool:
-        """Compare vLLM process cmdline against YAML config. Returns True if drifted."""
-        import subprocess
-        import re
+        """Compare stored config hash against current YAML. Returns True if drifted."""
         try:
-            port = model.vllm.port
-            result = subprocess.run(
-                ["fuser", "-v", str(port) + "/tcp"],
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode != 0:
-                return True  # Port not in use — config definitely changed
-            
-            pid_match = re.search(r'\s+(\d+)\s', result.stdout)
-            if not pid_match:
+            current_hash = model.config_hash()
+            stored_hash = self.state.get(f"config_hash:{model.name}")
+            if stored_hash is None:
+                # First check after upgrade — record hash, treat as no drift
+                log.info("Config hash for %s not found, recording: %s", model.name, current_hash)
+                self.state.set(f"config_hash:{model.name}", current_hash)
+                return False
+            if stored_hash != current_hash:
+                log.info("Config drift detected for %s: stored=%s current=%s",
+                         model.name, stored_hash, current_hash)
                 return True
-            
-            pid = int(pid_match.group(1))
-            cmdline_path = f"/proc/{pid}/cmdline"
-            if not Path(cmdline_path).exists():
-                return True
-            
-            with open(cmdline_path, 'r') as f:
-                combined = f.read().replace('\x00', ' ')
-            
-            # Check critical params: gpu_memory_utilization, max_model_len, max_num_seqs
-            critical_keys = ['gpu-memory-utilization', 'max-model-len', 'max-num-seqs']
-            for key in critical_keys:
-                yaml_val = getattr(model.vllm, key.replace('-', '_'), None)
-                if yaml_val is not None:
-                    target = str(yaml_val)
-                    # Check --key=value or --key value patterns
-                    if f'--{key}={target}' not in combined and f'--{key} {target}' not in combined:
-                        # Key exists in cmdline but value differs, or key missing entirely
-                        if f'--{key}' in combined:
-                            return True  # Value mismatch
-                        # Key not found — also a mismatch for critical params
-                        return True
-            
             return False
         except Exception:
-            log.debug("Config drift check failed for %s: %s", model.name, sys.exc_info()[1])
-            return False
+            log.debug("Config hash check failed for %s: %s", model.name, sys.exc_info()[1])
+            return False  # conservative: don't restart on check failure
     
     def _switch_to_idle(self) -> dict:
         """Stop all services and transition to idle."""
@@ -548,10 +523,17 @@ class ModelManager:
 
         # Success
         elapsed = round(time.time() - t0, 1)
+        # Record config hashes for drift detection on next switch
+        config_hashes = {}
+        for svc_name in services_to_start:
+            svc_model = self._models.get(svc_name)
+            if svc_model:
+                config_hashes[f"config_hash:{svc_name}"] = svc_model.config_hash()
         self.state.set_multi({
             "gpu_mode": target_mode,
             "active_services": json.dumps(services_to_start),
             "profile_state": ProfileState.HEALTHY,
+            **config_hashes,
         })
 
         return {
