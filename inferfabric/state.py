@@ -86,7 +86,7 @@ class StateDB:
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db_path = db_path
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._init()
 
     def _conn(self):
@@ -234,16 +234,25 @@ class StateDB:
     def set_sleep_state(self, model_name: str, level: Optional[int]):
         """Set sleep state for a model. level=None clears sleep state (awake). Thread-safe."""
         with self._lock:
-            raw = self.get("sleep_state") or "{}"
+            c = self._conn()
             try:
-                states = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                states = {}
-            if level is None:
-                states.pop(model_name, None)
-            else:
-                states[model_name] = f"l{level}"
-            self.set("sleep_state", json.dumps(states))
+                row = c.execute("SELECT value FROM state WHERE key='sleep_state'").fetchone()
+                raw = row[0] if row else "{}"
+                try:
+                    states = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    states = {}
+                if level is None:
+                    states.pop(model_name, None)
+                else:
+                    states[model_name] = f"l{level}"
+                c.execute(
+                    "INSERT OR REPLACE INTO state (key, value) VALUES ('sleep_state', ?)",
+                    (json.dumps(states),),
+                )
+                c.commit()
+            finally:
+                c.close()
 
     def get_all_sleep_states(self) -> dict[str, str]:
         """Get all model sleep states."""
