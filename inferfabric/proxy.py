@@ -105,9 +105,9 @@ class ProxyManager:
         if self.mgr.state.is_manually_stopped(target):
             log.info("Auto-switch to %s blocked: manually stopped by user", target)
             return False
-        if not self._switch_lock.acquire(timeout=30):
-            log.warning("Switch lock timeout, skipping")
-            return False
+        if not self._switch_lock.acquire(timeout=0):
+            log.warning("Switch already in progress, rejecting")
+            return None  # caller should send 409
         try:
             if time.time() - self._last_switch < self._cooldown:
                 log.warning("Switch cooldown active, skipping")
@@ -344,6 +344,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         service_name = pm.model_to_service(model)
         if service_name and AUTO_SWITCH:
             switched = pm.ensure_service(service_name)
+            if switched is None:
+                self._send_json({"error": "switch already in progress", "status": "conflict"}, 409)
+                return
             if not switched and service_name not in pm.mgr.active_services:
                 if pm.mgr.state.is_manually_stopped(service_name):
                     reason = f"{service_name} was manually stopped — auto-switch blocked for {pm.mgr.state.MANUAL_STOP_TTL}s"

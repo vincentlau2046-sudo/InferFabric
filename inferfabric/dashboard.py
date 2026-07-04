@@ -567,13 +567,22 @@ body {
 <div class="toast" id="toast"></div>
 
 <script>
-let sw = false, swT = 0;
 function swLock() {
-  // Safety: force-unlock after 30s to prevent permanent deadlock
-  if(sw && Date.now()-swT>30000) { console.warn('sw lock forced unlock after 30s'); sw=false; }
-  if(sw) return false;
-  sw=true; swT=Date.now(); return true;
+  // Cross-tab lock via localStorage (shared across tabs)
+  try {
+    const key = 'inferfabric_sw_lock';
+    const now = Date.now();
+    const stored = localStorage.getItem(key);
+    if (stored && (now - parseInt(stored, 10)) < 30000) return false;
+    localStorage.setItem(key, String(now));
+    return true;
+  } catch(e) { return true; } // localStorage unavailable → allow
 }
+function swUnlock() {
+  try { localStorage.removeItem('inferfabric_sw_lock'); } catch(e) {}
+}
+// Cleanup on tab close
+window.addEventListener('beforeunload', swUnlock);
 function toast(m,t) {
   const e=document.getElementById('toast');
   e.textContent=m; e.className='toast '+t+' show';
@@ -836,7 +845,7 @@ async function doRelease(n,isExcl) {
       }
     }
   }catch(e){toast(e.message,'err');}
-  finally{sw=false;}
+  finally{swUnlock();}
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
@@ -848,7 +857,7 @@ async function doSleep(n) {
     else if(r.status==='already_sleeping') toast(n+' 已在休眠','info');
     else toast(r.message||'失败','err');
   }catch(e){toast(e.message,'err');}
-  finally{sw=false;}
+  finally{swUnlock();}
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
@@ -860,7 +869,7 @@ async function doWake(n) {
     else if(r.status==='already_awake') toast(n+' 未休眠','info');
     else toast(r.message||'失败','err');
   }catch(e){toast(e.message,'err');}
-  finally{sw=false;}
+  finally{swUnlock();}
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
@@ -873,7 +882,7 @@ async function doSwitch(n) {
     else if(r.status==='already_active') toast('已在 '+n,'info');
     else toast(r.message||'失败','err');
   }catch(e){toast(e.message,'err');}
-  finally{sw=false;}
+  finally{swUnlock();}
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
@@ -885,7 +894,7 @@ async function doStop(n) {
     else if(r.status==='already_stopped') toast(n+' 未运行','info');
     else toast(r.message||'停止失败','err');
   }catch(e){toast(e.message,'err');}
-  finally{sw=false;}
+  finally{swUnlock();}
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
