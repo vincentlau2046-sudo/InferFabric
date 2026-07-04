@@ -171,6 +171,8 @@ from inferfabric import forwarder
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
     # Per-port state for counter-diff throughput (MTP-aware)
     _vllm_gen_counters: dict = {}  # port -> (timestamp, generation_tokens_total)
+    # EMA state for smoothed throughput: port -> ema_value (tokens/s)
+    _vllm_throughput_ema: dict = {}  # port -> float
 
     def log_message(self, fmt, *args):
         log.debug("[proxy] " + fmt, *args)
@@ -724,27 +726,41 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             result["seq_generation"] = avg_gen
             result["seq_count"] = total_reqs
 
-        # Throughput: use generation_tokens_total counter diff (MTP-aware).
-        # Under MTP spec decode, inter_token_latency count = draft steps, not accepted tokens,
-        # so 1/avg_inter misreports throughput by ~1.5x. Counter diff is accurate.
+        # Throughput: EMA-based (MTP-aware). Industry standard = total_output_tokens / elapsed_time.
+        # Idle time must not dilute throughput — use EMA over active 10s windows.
+        # alpha=0.3 → ~3-4 samples determine average (30-40s window), responsive but stable.
+        # When idle (actual_tokens == 0), EMA is NOT updated — last active value persists.
+        EMA_ALPHA = 0.3
         gen_key = "vllm:generation_tokens"
         gen_counter = counters.get(gen_key)
         cur_ts = time.time()
         prev_state = self._vllm_gen_counters.get(port)
-        if prev_state is not None and gen_counter is not None:
-            prev_ts, prev_val = prev_state
-            elapsed = cur_ts - prev_ts
-            actual_tokens = int(gen_counter) - int(prev_val)
-            if elapsed > 0 and actual_tokens > 0:
-                result["throughput"] = round(actual_tokens / elapsed, 1)
+
+        if gen_counter is not None:
+            inst_tp = None
+            if prev_state is not None:
+                prev_ts, prev_val = prev_state
+                elapsed = cur_ts - prev_ts
+                actual_tokens = int(gen_counter) - int(prev_val)
+                if elapsed > 0 and actual_tokens > 0:
+                    inst_tp = round(actual_tokens / elapsed, 1)
+
+            # EMA update: only when actual generation happened
+            prev_ema = self._vllm_throughput_ema.get(port)
+            if inst_tp is not None:
+                if prev_ema is None:
+                    ema_tp = inst_tp
+                else:
+                    ema_tp = EMA_ALPHA * inst_tp + (1 - EMA_ALPHA) * prev_ema
+                self._vllm_throughput_ema[port] = ema_tp
+                result["throughput"] = round(ema_tp, 1)
+                result["throughput_inst"] = inst_tp
                 result["throughput_cum_n"] = int(gen_counter)
-        elif inter := histos.get("vllm:inter_token_latency_seconds"):
-            # Fallback when no prior scrape exists
-            if inter["count"] > 0:
-                avg_inter = inter["sum"] / inter["count"]
-                if avg_inter > 0:
-                    result["throughput"] = round(1.0 / avg_inter, 1)
-                    result["throughput_cum_n"] = inter["count"]
+            elif prev_ema is not None:
+                # Idle: keep last EMA value
+                result["throughput"] = round(prev_ema, 1)
+                result["throughput_cum_n"] = int(gen_counter)
+
         self._vllm_gen_counters[port] = (cur_ts, gen_counter)
 
         self._send_json(result)

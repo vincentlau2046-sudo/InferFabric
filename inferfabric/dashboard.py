@@ -735,10 +735,15 @@ async function loadVllmMetrics(port,modelName) {
       document.getElementById('tfSub').textContent='';
     }
 
-    // Throughput (tokens/s)
+    // Throughput — EMA (active-only), excludes idle time
+    // Primary: smoothed average over last 30-40s of active generation
+    // Sub: instant 10s sample + total tokens
     if(m.throughput!=null) {
-      document.getElementById('tpVal').textContent=m.throughput+' t/s';
-      document.getElementById('tpSub').textContent=m.throughput_cum_n?' '+m.throughput_cum_n+' tokens sampled':'—';
+      document.getElementById('tpVal').textContent=m.throughput+' t/s (EMA)';
+      var subText = 'total '+m.throughput_cum_n?.toLocaleString()+' tokens';
+      if(m.throughput_inst!==undefined && m.throughput_inst!==null)
+        subText += ' | '+m.throughput_inst+' t/s (10s)';
+      document.getElementById('tpSub').textContent=subText;
     } else {
       document.getElementById('tpVal').textContent='—';
       document.getElementById('tpSub').textContent='';
