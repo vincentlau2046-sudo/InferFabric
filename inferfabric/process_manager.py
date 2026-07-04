@@ -11,6 +11,7 @@ Key improvements over v3.0:
 """
 
 import os
+import re as _re
 import time
 import signal
 import shlex
@@ -475,11 +476,11 @@ class ProcessManager:
 
     def _pkill_comfyui_fallback(self) -> dict:
         """Fallback: stop ComfyUI via pkill."""
-        subprocess.run(["pkill", "-f", "python main.py"], timeout=5, check=False, capture_output=True)
+        subprocess.run(["pkill", "-f", f"python.*{_re.escape(str(COMFYUI_DIR))}/main.py"], timeout=5, check=False, capture_output=True)
         time.sleep(2)
         # SIGKILL remaining
-        subprocess.run(["pkill", "-9", "-f", "python main.py"], timeout=5, check=False)
-        subprocess.run(["pkill", "-9", "-f", "ComfyUI"], timeout=5, check=False)
+        subprocess.run(["pkill", "-9", "-f", f"python.*{_re.escape(str(COMFYUI_DIR))}/main.py"], timeout=5, check=False)
+        subprocess.run(["pkill", "-9", "-f", f"python.*{_re.escape(str(COMFYUI_DIR))}"], timeout=5, check=False)
         time.sleep(1)
         self._set_comfyui_pid(None)
         self._cleanup_pid_files("comfyui")
@@ -622,7 +623,7 @@ class ProcessManager:
             except (ProcessLookupError, PermissionError):
                 pass
 
-        subprocess.run(["pkill", "-9", "-f", "python main.py"], timeout=5, check=False)
+        subprocess.run(["pkill", "-9", "-f", f"python.*{_re.escape(str(COMFYUI_DIR))}/main.py"], timeout=5, check=False)
         # Try to kill ComfyUI specifically by working dir
         comfyui_dir = str(COMFYUI_DIR)
         subprocess.run(["pkill", "-9", "-f", f"python.*{comfyui_dir}"], timeout=5, check=False)
