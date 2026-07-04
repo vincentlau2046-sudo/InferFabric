@@ -378,6 +378,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             log.error("Forward to :%d failed: %s", target_port, e)
             try:
+                conn.close()
+            except Exception:
+                pass
+            try:
                 conn = pm.make_conn(target_port)
                 conn.request("POST", self.path, body=body,
                              headers={"Content-Type": "application/json"})
@@ -461,6 +465,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         body = json.dumps(ollama_req).encode("utf-8")
 
+        conn = None
         try:
             conn = pm.make_conn(target_port)
             conn.request("POST", "/api/chat", body=body,
@@ -469,6 +474,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             log.error("Ollama native forward to :%d failed: %s", target_port, e)
             self._send_json({"error": str(e)}, 502)
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
             return
 
         try:
@@ -558,6 +568,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             log.error("Ollama native response error: %s", e)
             self._send_json({"error": str(e)}, 500)
         finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
             try:
                 resp.close()
             except Exception:
