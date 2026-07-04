@@ -392,6 +392,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 resp = conn.getresponse()
             except Exception as e2:
                 log.error("Retry also failed: %s", e2)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
                 self._send_json({"error": str(e2)}, 502)
                 return
 
