@@ -168,6 +168,32 @@ class ProxyManager:
 from inferfabric import forwarder
 
 
+class _RateLimiter:
+    """Per-model vLLM concurrency gate.
+
+    Semaphore caps concurrent requests to max_num_seqs.
+    Requests failing to acquire within timeout → 429 + Retry-After.
+
+    Only applies to local vLLM forwarding; Baidu/Ollama bypass.
+    """
+
+    def __init__(self, max_concurrent: int = 8, timeout: float = 30.0):
+        self._sem = threading.Semaphore(max_concurrent)
+        self._timeout = timeout
+        self._max_concurrent = max_concurrent
+
+    def acquire(self) -> bool:
+        return self._sem.acquire(timeout=self._timeout)
+
+    def release(self):
+        self._sem.release()
+
+
+# P0: matches qwen36-27b max_num_seqs=8
+# TODO: dynamically read from model YAML; Baidu/Ollama excluded
+_VLLM_RATE_LIMITER = _RateLimiter(max_concurrent=8, timeout=30.0)
+
+
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
     # Per-port state for counter-diff throughput (MTP-aware)
     _vllm_gen_counters: dict = {}  # port -> (timestamp, generation_tokens_total)
@@ -316,7 +342,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         if active_llm:
             log.info("/v1/messages → LOCAL %s (port %d)", active_llm.name, active_llm.port)
-            forwarder.forward_anthropic_local(self, pm, data, auth_header, active_llm, original_model)
+            if not _VLLM_RATE_LIMITER.acquire():
+                self._send_json(
+                    {"error": "vLLM at capacity, try again later", "status": "rate_limit"},
+                    429,
+                )
+                return
+            try:
+                forwarder.forward_anthropic_local(
+                    self, pm, data, auth_header, active_llm, original_model
+                )
+            finally:
+                _VLLM_RATE_LIMITER.release()
         else:
             log.info("/v1/messages → BAIDU fallback")
             forwarder.forward_to_baidu(self, data, auth_header, original_model)
@@ -373,33 +410,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._handle_chat_ollama_native(pm, data, target_port, stream, ollama_model_obj)
             return
 
+        # vLLM path — apply rate limiter
         body = json.dumps(data).encode("utf-8")
+        if not _VLLM_RATE_LIMITER.acquire():
+            self._send_json(
+                {"error": "vLLM at capacity, try again later", "status": "rate_limit"},
+                429,
+            )
+            return
         try:
             conn = pm.make_conn(target_port)
             conn.request("POST", self.path, body=body,
                          headers={"Content-Type": "application/json"})
             resp = conn.getresponse()
-        except Exception as e:
-            log.error("Forward to :%d failed: %s", target_port, e)
-            try:
-                conn.close()
-            except Exception:
-                pass
-            try:
-                conn = pm.make_conn(target_port)
-                conn.request("POST", self.path, body=body,
-                             headers={"Content-Type": "application/json"})
-                resp = conn.getresponse()
-            except Exception as e2:
-                log.error("Retry also failed: %s", e2)
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                self._send_json({"error": str(e2)}, 502)
-                return
 
-        try:
             resp_status = resp.status
             resp_headers = {k.lower(): v for k, v in resp.getheaders()}
             resp_ct = resp_headers.get("content-type", "application/json")
@@ -442,19 +466,66 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     self._safe_write(resp_body)
                 finally:
                     resp.close()
-
         except Exception as e:
-            log.error("Error forwarding response: %s", e)
-            if not headers_sent:
+            log.error("Forward to :%d failed: %s", target_port, e)
+            try:
+                conn.close()
+            except Exception:
+                pass
+            try:
+                conn = pm.make_conn(target_port)
+                conn.request("POST", self.path, body=body,
+                             headers={"Content-Type": "application/json"})
+                resp = conn.getresponse()
+
+                resp_status = resp.status
+                resp_headers = {k.lower(): v for k, v in resp.getheaders()}
+                resp_ct = resp_headers.get("content-type", "application/json")
+                headers_sent = False
+
+                if stream:
+                    headers_sent = True
+                    self.send_response(resp_status)
+                    self.send_header("Content-Type", resp_ct)
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    try:
+                        while True:
+                            chunk = resp.read(8192)
+                            if not chunk:
+                                break
+                            size = f"{len(chunk):x}\r\n".encode()
+                            self._safe_write(size)
+                            self._safe_write(chunk)
+                            self._safe_write(b"\r\n")
+                        self._safe_write(b"0\r\n\r\n")
+                    except Exception:
+                        pass
+                    finally:
+                        resp.close()
+                else:
+                    try:
+                        resp_body = resp.read()
+                        self.send_response(resp_status)
+                        self.send_header("Content-Type", resp_ct)
+                        self.send_header("Content-Length", str(len(resp_body)))
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.end_headers()
+                        self._safe_write(resp_body)
+                    finally:
+                        resp.close()
+            except Exception as e2:
+                log.error("Retry also failed: %s", e2)
                 try:
-                    self._send_json({"error": str(e)}, 502)
+                    conn.close()
                 except Exception:
                     pass
-            else:
-                try:
-                    self._safe_write(b"0\r\n\r\n")
-                except Exception:
-                    pass
+                if not headers_sent:
+                    self._send_json({"error": str(e2)}, 502)
+        finally:
+            _VLLM_RATE_LIMITER.release()
 
     def _handle_chat_ollama_native(self, pm, data, target_port, stream, model_obj):
         """Handle chat for Ollama backends using native /api/chat API."""
