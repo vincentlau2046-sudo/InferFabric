@@ -1,7 +1,7 @@
 # InferFabric - 本地 LLM 模型切换系统 v4.0
 
-> **版本**: v4.3.0
-> **更新**: 2026-07-01
+> **版本**: v4.5.0
+> **更新**: 2026-07-04
 > **硬件**: RTX 5090D (32GB VRAM)
 > **核心理念**: 模型即插件 — 一个 YAML 文件 = 一个可部署的模型
 
@@ -401,4 +401,5 @@ rm -f ~/.inferfabric/state.db && iff reconcile
 | v4.1 | 2026-07-01 | 双引擎负载均衡、流式管道修复 |
 | v4.2 | 2026-07-02 | AICF 管线集成、Flux Dev 切换 |
 | v4.3 | 2026-07-03 | CCR 架构 Anthropic Messages、模块化拆分 forwarder.py |
-| **v4.4** | **2026-07-04** | **Stability+ — 线程安全锁、连接泄漏审计修复** |
+| v4.4 | 2026-07-04 | Stability+ — 线程安全锁、连接泄漏审计修复 |
+| **v4.5** | **2026-07-04** | **Semaphore rate limiter (8 slots, 30s timeout), vLLM 过载保护** |
