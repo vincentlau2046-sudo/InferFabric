@@ -2,6 +2,7 @@ name: comfyui
 description: "ComfyUI 图像生成"
 mode: shared
 type: comfyui
+model_type: aigc
 typical_vram_pct: 50
 
 conda_env: comfyui

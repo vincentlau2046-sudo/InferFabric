@@ -61,24 +61,28 @@ def wait_gpu_free(timeout: int = GPU_FREE_TIMEOUT, threshold_mb: int = GPU_FREE_
 
 # ─── HTTP Health ─────────────────────────────────────────────────
 
-def check_http_status(url: str, timeout: int = 3) -> str:
-    """Check HTTP endpoint: '✅' (200), '⏳' (503 loading), '❌' (unreachable/error)."""
+def check_http_status(url: str, timeout: int = 3, retries: int = 3) -> str:
+    """Check HTTP endpoint: '✅' (200), '⏳' (503 loading), '❌' (unreachable/error).
+    Retries on transient failure to avoid false negatives from GC pauses / load spikes."""
     import urllib.request
     import urllib.error
-    try:
-        resp = urllib.request.urlopen(url, timeout=timeout)
+    for attempt in range(retries):
         try:
-            if resp.status == 200:
-                return "✅"
-        finally:
-            resp.close()
-    except urllib.error.HTTPError as e:
-        if e.code == 503:
-            return "⏳"
-        log.debug("HTTP %d from %s", e.code, url)
-        return "⏳"
-    except Exception:
-        return "❌"
+            resp = urllib.request.urlopen(url, timeout=timeout)
+            try:
+                if resp.status == 200:
+                    return "✅"
+            finally:
+                resp.close()
+        except urllib.error.HTTPError as e:
+            if e.code == 503:
+                return "⏳"
+            log.debug("HTTP %d from %s (attempt %d/%d)", e.code, url, attempt + 1, retries)
+        except Exception:
+            log.debug("HTTP check failed from %s (attempt %d/%d)", url, attempt + 1, retries)
+
+    log.debug("HTTP check failed after %d retries: %s", retries, url)
+    return "❌"
 
 
 def wait_http(url: str, timeout: int = 300) -> bool:

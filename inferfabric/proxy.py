@@ -169,6 +169,8 @@ from inferfabric import forwarder
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
+    # Per-port state for counter-diff throughput (MTP-aware)
+    _vllm_gen_counters: dict = {}  # port -> (timestamp, generation_tokens_total)
 
     def log_message(self, fmt, *args):
         log.debug("[proxy] " + fmt, *args)
@@ -722,12 +724,28 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             result["seq_generation"] = avg_gen
             result["seq_count"] = total_reqs
 
-        inter = histos.get("vllm:inter_token_latency_seconds")
-        if inter and inter["count"] > 0:
-            avg_inter = inter["sum"] / inter["count"]
-            if avg_inter > 0:
-                result["throughput"] = round(1.0 / avg_inter, 1)
-                result["throughput_cum_n"] = inter["count"]
+        # Throughput: use generation_tokens_total counter diff (MTP-aware).
+        # Under MTP spec decode, inter_token_latency count = draft steps, not accepted tokens,
+        # so 1/avg_inter misreports throughput by ~1.5x. Counter diff is accurate.
+        gen_key = "vllm:generation_tokens"
+        gen_counter = counters.get(gen_key)
+        cur_ts = time.time()
+        prev_state = self._vllm_gen_counters.get(port)
+        if prev_state is not None and gen_counter is not None:
+            prev_ts, prev_val = prev_state
+            elapsed = cur_ts - prev_ts
+            actual_tokens = int(gen_counter) - int(prev_val)
+            if elapsed > 0 and actual_tokens > 0:
+                result["throughput"] = round(actual_tokens / elapsed, 1)
+                result["throughput_cum_n"] = int(gen_counter)
+        elif inter := histos.get("vllm:inter_token_latency_seconds"):
+            # Fallback when no prior scrape exists
+            if inter["count"] > 0:
+                avg_inter = inter["sum"] / inter["count"]
+                if avg_inter > 0:
+                    result["throughput"] = round(1.0 / avg_inter, 1)
+                    result["throughput_cum_n"] = inter["count"]
+        self._vllm_gen_counters[port] = (cur_ts, gen_counter)
 
         self._send_json(result)
 

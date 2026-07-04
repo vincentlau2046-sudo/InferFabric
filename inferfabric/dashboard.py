@@ -643,7 +643,7 @@ async function load() {
   if(vPort){
     clearInterval(vllmTimer);
     loadVllmMetrics(vPort,vName);
-    vllmTimer=setInterval(()=>loadVllmMetrics(vPort,vName),60000);
+    vllmTimer=setInterval(()=>loadVllmMetrics(vPort,vName),10000);
   }else{
     document.getElementById('perfPanel').style.display='none';
     clearInterval(vllmTimer);

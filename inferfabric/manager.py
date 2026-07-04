@@ -150,6 +150,15 @@ class ModelManager:
                 status = self.check_vllm_health(m.vllm.port)
                 if status in ("✅", "⏳"):
                     actual_services.append(name)
+                else:
+                    # Health check failed — cross-verify via fuser before marking dead
+                    import subprocess
+                    result = subprocess.run(
+                        ["fuser", "-v", str(m.vllm.port) + "/tcp"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        actual_services.append(name)
             elif m.is_comfyui:
                 health_url = m.comfyui.health_url or f"http://localhost:{m.comfyui.port}/system_stats"
                 status = self.check_comfyui_health(health_url)
@@ -222,9 +231,24 @@ class ModelManager:
                     self.state.set("vllm_pid", "")
 
         # P0-5: Check if PID exists but no services running — stale
+        # P0-5 fix: verify via fuser before clearing to avoid health-check false negatives
         if self._proc.vllm_pid and not actual_services:
-            actions.append(f"Stale vllm_pid={self._proc.vllm_pid} with no active services — clearing")
-            self.state.set("vllm_pid", "")
+            import subprocess
+            has_live_vllm = False
+            for name, m in self._models.items():
+                if m.is_vllm:
+                    result = subprocess.run(
+                        ["fuser", "-v", str(m.vllm.port) + "/tcp"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        has_live_vllm = True
+                        break
+            if not has_live_vllm:
+                actions.append(f"Stale vllm_pid={self._proc.vllm_pid} with no active services — clearing")
+                self.state.set("vllm_pid", "")
+            else:
+                actions.append(f"vllm_pid={self._proc.vllm_pid} still owns port — keeping (health check false negative)")
 
         # P0-5: If a vLLM is actually running but PID is not tracked, recover via fuser
         if not self._proc.vllm_pid:
