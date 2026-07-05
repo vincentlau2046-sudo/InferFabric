@@ -1,0 +1,143 @@
+{
+  "config": {
+    "model": "vllm_qwen27b",
+    "kv_offload": "native 8GB",
+    "max_model_len": 171000,
+    "gpu_memory_utilization": 0.9,
+    "max_num_seqs": 8
+  },
+  "baseline_gpu": {
+    "gpu_used_mb": 29100,
+    "gpu_total_mb": 32607,
+    "gpu_util_pct": 6
+  },
+  "baseline_kv": {
+    "gpu_blocks": 0,
+    "cpu_blocks": 0
+  },
+  "basic_streaming": [
+    {
+      "target_prompt_len": 128,
+      "error": "'NoneType' object is not subscriptable"
+    },
+    {
+      "ttft_s": null,
+      "tpot_s": null,
+      "tokens_received": 0,
+      "total_time_s": 3.961,
+      "throughput_tok_s": 0.0,
+      "target_prompt_len": 512
+    },
+    {
+      "ttft_s": null,
+      "tpot_s": null,
+      "tokens_received": 0,
+      "total_time_s": 4.086,
+      "throughput_tok_s": 0.0,
+      "target_prompt_len": 1024
+    },
+    {
+      "ttft_s": null,
+      "tpot_s": null,
+      "tokens_received": 0,
+      "total_time_s": 4.323,
+      "throughput_tok_s": 0.0,
+      "target_prompt_len": 4096
+    },
+    {
+      "ttft_s": null,
+      "tpot_s": null,
+      "tokens_received": 0,
+      "total_time_s": 5.233,
+      "throughput_tok_s": 0.0,
+      "target_prompt_len": 16384
+    },
+    {
+      "ttft_s": null,
+      "tpot_s": null,
+      "tokens_received": 0,
+      "total_time_s": 9.429,
+      "throughput_tok_s": 0.0,
+      "target_prompt_len": 65536
+    },
+    {
+      "ttft_s": null,
+      "tpot_s": null,
+      "tokens_received": 0,
+      "total_time_s": 17.249,
+      "throughput_tok_s": 0.0,
+      "target_prompt_len": 128000
+    }
+  ],
+  "basic_non_stream": [
+    {
+      "target_prompt_len": 128,
+      "error": "'NoneType' object is not subscriptable"
+    },
+    {
+      "target_prompt_len": 1024,
+      "error": "'NoneType' object is not subscriptable"
+    },
+    {
+      "target_prompt_len": 4096,
+      "error": "'NoneType' object is not subscriptable"
+    },
+    {
+      "target_prompt_len": 16384,
+      "error": "'NoneType' object is not subscriptable"
+    }
+  ],
+  "concurrency": {
+    "1": {
+      "error": "'NoneType' object is not subscriptable"
+    },
+    "2": {
+      "error": "'NoneType' object is not subscriptable"
+    },
+    "4": {
+      "error": "'NoneType' object is not subscriptable"
+    },
+    "8": {
+      "error": "'NoneType' object is not subscriptable"
+    }
+  },
+  "long_context": [
+    {
+      "ttft_s": null,
+      "tpot_s": null,
+      "tokens_received": 0,
+      "total_time_s": 2.554,
+      "throughput_tok_s": 0.0,
+      "target_prompt_len": 65536
+    },
+    {
+      "ttft_s": null,
+      "tpot_s": null,
+      "tokens_received": 0,
+      "total_time_s": 3.102,
+      "throughput_tok_s": 0.0,
+      "target_prompt_len": 128000
+    }
+  ],
+  "prefix_caching": {
+    "request_1": {
+      "prompt_tokens": 1510,
+      "cached_tokens": 0,
+      "cache_hit_rate": "0.0%",
+      "completion_tokens": 128,
+      "wall_time_s": 1.069
+    },
+    "request_2": {
+      "prompt_tokens": 1511,
+      "cached_tokens": 0,
+      "cache_hit_rate": "0.0%",
+      "completion_tokens": 128,
+      "wall_time_s": 1.111
+    }
+  },
+  "final_gpu": {
+    "gpu_used_mb": 32012,
+    "gpu_total_mb": 32607,
+    "gpu_util_pct": 97
+  }
+}

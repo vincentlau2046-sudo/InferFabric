@@ -1,0 +1,93 @@
+{
+  "config": {
+    "model": "vllm_qwen27b",
+    "kv_offload": "native 8GB",
+    "max_model_len": 171000
+  },
+  "baseline_gpu": {
+    "used_mb": 28167,
+    "total_mb": 32607
+  },
+  "baseline_kv": {
+    "gpu_blocks": 0,
+    "cpu_blocks": 0
+  },
+  "basic": [
+    {
+      "target": 128,
+      "error": "list index out of range"
+    },
+    {
+      "target": 512,
+      "error": "list index out of range"
+    },
+    {
+      "target": 1024,
+      "error": "list index out of range"
+    },
+    {
+      "target": 4096,
+      "error": "list index out of range"
+    },
+    {
+      "target": 16384,
+      "error": "list index out of range"
+    },
+    {
+      "target": 65536,
+      "error": "list index out of range"
+    }
+  ],
+  "concurrency": {
+    "1": {
+      "aggregate_tput": 126.9,
+      "total_wall_s": 2.0,
+      "total_completion": 256
+    },
+    "2": {
+      "aggregate_tput": 125.3,
+      "total_wall_s": 4.1,
+      "total_completion": 512
+    },
+    "4": {
+      "aggregate_tput": 228.7,
+      "total_wall_s": 4.5,
+      "total_completion": 1024
+    },
+    "8": {
+      "aggregate_tput": 304.8,
+      "total_wall_s": 6.7,
+      "total_completion": 2048
+    }
+  },
+  "long_context": [
+    {
+      "target": 16384,
+      "error": "list index out of range"
+    }
+  ],
+  "prefix_caching": {
+    "req_1": {
+      "prompt_tokens": 330,
+      "cached_tokens": 0,
+      "cache_hit_pct": "0%",
+      "completion_tokens": 128,
+      "wall_s": 0.993
+    },
+    "req_2": {
+      "prompt_tokens": 331,
+      "cached_tokens": 0,
+      "cache_hit_pct": "0%",
+      "completion_tokens": 128,
+      "wall_s": 0.941
+    }
+  },
+  "final_gpu": {
+    "used_mb": 31174,
+    "total_mb": 32607
+  },
+  "final_kv": {
+    "gpu_blocks": 0,
+    "cpu_blocks": 0
+  }
+}
