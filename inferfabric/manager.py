@@ -309,6 +309,12 @@ class ModelManager:
         # Already running? (P0-1: check config drift before skipping)
         if target in self.active_services:
             if model.is_vllm and model.vllm:
+                # Reload YAML to detect config drift against disk
+                self._models = load_models(self.models_dir)
+                model = self._models.get(target)
+                if model is None:
+                    log.warning("YAML for %s not found after reload — skipping drift check", target)
+                    return {"status": "already_active", "model": target}
                 changed = self._check_model_config_changed(model)
                 if changed:
                     log.info("Config changed for %s — restarting", target)
@@ -461,6 +467,13 @@ class ModelManager:
     def _deploy_model(self, model: ModelConfig, target_mode: str) -> dict:
         """Deploy a model from idle state."""
         t0 = time.time()
+
+        # Ensure we use the latest YAML (prevents stale config after drift)
+        model_name = model.name
+        self._models = load_models(self.models_dir)
+        model = self._models.get(model_name)
+        if model is None:
+            return {"status": "error", "message": f"Model {model_name} not found in YAML after reload"}
 
         results = {}
         services_to_start = [model.name]
