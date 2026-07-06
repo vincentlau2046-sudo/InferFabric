@@ -11,7 +11,7 @@ vllm:
   conda_env: qw36-27b-vllm
   max_model_len: 151552
   gpu_memory_utilization: 0.85
-  max_num_seqs: 8
+  max_num_seqs: 6
   kv_cache_dtype: fp8
   speculative_config: '{"method": "mtp", "num_speculative_tokens": 2}'
   extra_flags: >-

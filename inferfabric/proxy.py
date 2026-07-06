@@ -177,7 +177,7 @@ class _RateLimiter:
     Only applies to local vLLM forwarding; Baidu/Ollama bypass.
     """
 
-    def __init__(self, max_concurrent: int = 8, timeout: float = 30.0):
+    def __init__(self, max_concurrent: int = 6, timeout: float = 30.0):
         self._sem = threading.Semaphore(max_concurrent)
         self._timeout = timeout
         self._max_concurrent = max_concurrent
@@ -191,7 +191,7 @@ class _RateLimiter:
 
 # P0: matches qwen36-27b max_num_seqs=8
 # TODO: dynamically read from model YAML; Baidu/Ollama excluded
-_VLLM_RATE_LIMITER = _RateLimiter(max_concurrent=8, timeout=30.0)
+_VLLM_RATE_LIMITER = _RateLimiter(max_concurrent=6, timeout=30.0)
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
@@ -1009,7 +1009,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True
     daemon_threads = True
-    timeout = 1.0
 
 
 # ─── Main ─────────────────────────────────────────────────────────
