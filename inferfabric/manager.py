@@ -507,7 +507,7 @@ class ModelManager:
 
         # Start the model
         if model.is_vllm:
-            results[model.name] = self._proc.start_vllm(model.vllm)
+            results[model.name] = self._proc.start_vllm(model.vllm, model.model_type)
         elif model.is_comfyui:
             results[model.name] = self._proc.start_comfyui(model.comfyui)
         elif model.is_ollama_daemon:
@@ -623,7 +623,7 @@ class ModelManager:
         log.info("Shared add (incremental): %s", model.name)
         results = {}
         if model.is_vllm:
-            results[model.name] = self._proc.start_vllm(model.vllm)
+            results[model.name] = self._proc.start_vllm(model.vllm, model.model_type)
         elif model.is_comfyui:
             results[model.name] = self._proc.start_comfyui(model.comfyui)
 

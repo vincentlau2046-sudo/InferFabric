@@ -79,8 +79,13 @@ class ProcessManager:
 
     # ─── vLLM ────────────────────────────────────────────────────
 
-    def start_vllm(self, cfg: VLLMConfig) -> dict:
-        """Start vLLM via conda env's vllm binary. Uses start_new_session for process group isolation."""
+    def start_vllm(self, cfg: VLLMConfig, model_type: str = "") -> dict:
+        """Start vLLM via conda env's vllm binary. Uses start_new_session for process group isolation.
+
+        ``model_type`` is the parent ``ModelConfig.model_type`` ('llm'/'vl'/...),
+        passed in by the manager so process spawning can apply type-specific env
+        overrides. VLLMConfig itself does not carry this field.
+        """
         log_file = self._log_dir / f"vllm_{cfg.conda_env}.log"
         pid_file = self._log_dir / f"vllm_{cfg.conda_env}.pid"
 
@@ -108,7 +113,7 @@ class ProcessManager:
             log.info("Sleep mode enabled (L2) for %s", cfg.served_name)
 
         # DeepGemm on Blackwell consumer causes OOM/accuracy issues for NVFP4 VL models
-        if cfg.model_type == "vl":
+        if model_type == "vl":
             env["VLLM_USE_DEEP_GEMM"] = "0"
             log.info("DeepGemm disabled for VL model %s", cfg.served_name)
 
