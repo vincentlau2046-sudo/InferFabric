@@ -3,3 +3,7 @@ bench_results/
 proxy.log
 *.bak
 __pycache__/
+# Runtime state databases (SQLite, regenerated on each run)
+*.state.db
+state.db
+.state.db

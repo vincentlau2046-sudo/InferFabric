@@ -15,9 +15,7 @@ vllm:
   kv_cache_dtype: fp8
   extra_flags: >-
     --moe-backend marlin
-    --max-num-batched-tokens 8192
-    --enable-prefix-caching
-    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 8]}'
     --enable-chunked-prefill
-    --async-scheduling
+    --max-num-batched-tokens 8192
+    --reasoning-parser gemma4
     --trust-remote-code

@@ -185,13 +185,26 @@ body {
 
 /* ── Model Specs Row ── */
 .model-specs {
-  display:flex; gap:6px; margin-top:5px;
-  font-size:11px; color:var(--text3); flex-wrap:wrap;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  margin-top: 5px;
+  width: 100%;
+  align-items: start;
 }
 .model-specs .spec-tag {
-  display:inline-flex; align-items:center; gap:3px;
-  padding:2px 6px; border-radius:4px;
-  background:var(--bg); font-size:11px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: 11px;
+  width: 100%;
+  box-sizing: border-box;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .model-badge {
@@ -796,10 +809,11 @@ async function loadModels() {
     const framework = fwLabels[m.type] || m.type;
     const fwIcon = fwIcons[m.type] || '📦';
     const ctxStr = m.context_window ? (m.context_window >= 1024 ? (m.context_window/1024).toFixed(0)+'K ctx' : m.context_window+' ctx') : '';
-    const typeIcon = { llm:'📝', vl:'👁', omni:'🌐', aigc:'✨' };
-    const typeLabel = { llm:'LLM', vl:'VL', omni:'Omni', aigc:'AIGC' };
+    const typeIcon = { llm:'🧠', vl:'👁', omni:'🌐', aigc:'✨', multimodal:'🎭' };
+    const typeLabel = { llm:'LLM', vl:'VL', omni:'Omni', aigc:'AIGC', multimodal:'Multimodal' };
     const modeLabel = { excl:'独占', shrd:'共享' };
     let specs = '<span class="spec-tag">'+fwIcon+' '+framework+'</span>';
+    // Always show model type tag for consistent card layout
     if(typeIcon[m.model_type]) specs += '<span class="spec-tag">'+typeIcon[m.model_type]+' '+(typeLabel[m.model_type]||m.model_type)+'</span>';
     if(ctxStr) specs += '<span class="spec-tag">📐 '+ctxStr+'</span>';
     if(m.quantization) specs += '<span class="spec-tag">⚡ '+m.quantization+'</span>';

@@ -107,6 +107,11 @@ class ProcessManager:
             cmd.append("--enable-sleep-mode")
             log.info("Sleep mode enabled (L2) for %s", cfg.served_name)
 
+        # DeepGemm on Blackwell consumer causes OOM/accuracy issues for NVFP4 VL models
+        if cfg.model_type == "vl":
+            env["VLLM_USE_DEEP_GEMM"] = "0"
+            log.info("DeepGemm disabled for VL model %s", cfg.served_name)
+
         conda_bin = str(CONDA_ENVS / cfg.conda_env / "bin")
         env["PATH"] = conda_bin + ":" + env.get("PATH", "")
 

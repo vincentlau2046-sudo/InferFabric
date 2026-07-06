@@ -100,7 +100,7 @@ class ModelManager:
                 "description": m.description,
                 "mode": m.mode,
                 "type": m.type,
-                "active": m.name in self.active_services,
+                "active": self._is_model_actively_running(m),
                 "model_type": getattr(m, "model_type", "llm"),
                 "quantization": getattr(m, "quantization", ""),
                 "context_window": _get_context(m),
@@ -325,10 +325,12 @@ class ModelManager:
             else:
                 return {"status": "already_active", "model": target}
 
-        # Validate transition
+        # Validate transition — allow exclusive → exclusive (same-port swap)
         if not validate_transition(current_mode, target_mode):
-            running = self.active_services
-            if current_mode == GPUMode.EXCLUSIVE:
+            # Allow exclusive → exclusive: stop old, start new
+            if current_mode == GPUMode.EXCLUSIVE and target_mode == GPUMode.EXCLUSIVE:
+                pass  # Allowed below
+            elif current_mode == GPUMode.EXCLUSIVE:
                 return {
                     "status": "error",
                     "message": f"GPU is in exclusive mode ({running[0] if running else 'unknown'} running). "
@@ -357,6 +359,9 @@ class ModelManager:
             if current_mode == GPUMode.IDLE:
                 # Fresh start — just deploy
                 result = self._deploy_model(model, target_mode)
+            elif current_mode == GPUMode.EXCLUSIVE and target_mode == GPUMode.EXCLUSIVE:
+                # Exclusive → exclusive: stop old, start new (same-port swap)
+                result = self._switch_exclusive(model)
             elif current_mode == GPUMode.SHARED and target_mode == GPUMode.SHARED:
                 # V1: full restart — stop all, then start all including new one
                 result = self._shared_add_service(model)
@@ -399,6 +404,24 @@ class ModelManager:
             log.debug("Config hash check failed for %s: %s", model.name, sys.exc_info()[1])
             return False  # conservative: don't restart on check failure
     
+    def _switch_exclusive(self, model: ModelConfig) -> dict:
+        """Switch from one exclusive model to another (same-port swap).
+
+        Stops the currently active exclusive model, clears active_services,
+        then deploys the new one. Reuses the same port so proxy mapping is stable.
+        """
+        # Stop current active exclusive model
+        current = list(self.active_services)
+        for svc_name in current:
+            log.info("Stopping current exclusive service: %s", svc_name)
+            self._stop_service(svc_name)
+
+        # Clear active state before deploying new model
+        self.state.set("active_services", json.dumps([]))
+
+        # Deploy the new model
+        return self._deploy_model(model, GPUMode.EXCLUSIVE)
+
     def _switch_to_idle(self) -> dict:
         """Stop all services and transition to idle."""
         current_mode = self.gpu_mode
@@ -1067,6 +1090,23 @@ ollama_cpp:
         result = self.switch(name)
         return result
 
+    def _is_model_actively_running(self, model: ModelConfig) -> bool:
+        """True if this model is currently deployed AND its service is actually live.
+
+        Uses `_check_model_health` (live port probe) rather than trusting the
+        `active_services` state DB, which can lag behind reality after crashes
+        or manual `pkill`. Falls back to `active_services` membership for models
+        without a probeable service port (e.g. ollama-type models served by a
+        shared daemon).
+        """
+        try:
+            if self._check_model_health(model):
+                return True
+        except Exception:
+            log.debug("Health check failed for %s: %s", model.name, sys.exc_info()[1])
+        # Fallback: state DB says it's active, or it has no probeable port
+        return model.name in self.active_services
+
     def _check_model_health(self, model: ModelConfig) -> bool:
         """Check if a specific model's service is healthy."""
         if model.is_vllm:
@@ -1074,6 +1114,10 @@ ollama_cpp:
         elif model.is_comfyui:
             health_url = model.comfyui.health_url or f"http://localhost:{model.comfyui.port}/system_stats"
             return self.check_comfyui_health(health_url) == "✅"
+        elif getattr(model, "is_ollama_daemon", False):
+            return self.check_ollama_health(model.ollama_daemon.port) == "✅"
+        elif getattr(model, "is_ollama_cpp", False):
+            return self.check_http_health(model.ollama_cpp.port, "/health") == "✅"
         return False
 
 

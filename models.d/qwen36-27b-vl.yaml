@@ -1,30 +1,29 @@
-name: qwen36-27b
-description: "Qwen3.6-27B NVFP4 + MTP"
+name: qwen36-27b-vl
+description: "Qwen3.6-27B NVFP4 + MTP + Vision (Huihui abliterated)"
 mode: exclusive
-model_type: llm
+model_type: vl
 quantization: NVFP4
 
 vllm:
-  model_dir: Qwen3.6-27B-Text-NVFP4-MTP
-  served_name: vllm_qwen27b
-  port: 8000
-  conda_env: qw36-27b-vllm
-  max_model_len: 151552
+  model_dir: Huihui-Qwen3.6-27B-abliterated-NVFP4-MTP
+  served_name: vllm_qwen27b_vl
+  port: 8003
+  conda_env: qwen36-27b-vllm-vl
+  max_model_len: 131072
   gpu_memory_utilization: 0.85
   max_num_seqs: 8
   kv_cache_dtype: fp8
   speculative_config: '{"method": "mtp", "num_speculative_tokens": 2}'
   extra_flags: >-
     --max-num-batched-tokens 8192
-    --language-model-only
     --enable-prefix-caching
     --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 8, 16, 32]}'
     --enable-chunked-prefill
     --async-scheduling
     --enable-auto-tool-choice
-    --tool-call-parser qwen3_coder
+    --tool-call-parser qwen3_xml
     --reasoning-parser qwen3
     --trust-remote-code
+    --attention-backend flashinfer
     --kv-offloading-backend native
     --kv-offloading-size 16
-    --attention-backend flashinfer
