@@ -138,6 +138,19 @@ class ModelManager:
 
     # ── Reconciliation ──────────────────────────────────────────
 
+    @staticmethod
+    def _port_pid(port: int) -> Optional[int]:
+        """Return PID owning a TCP port via fuser, or None."""
+        import subprocess, re
+        result = subprocess.run(
+            ["fuser", "-v", str(port) + "/tcp"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            m = re.search(r'(\d+)', result.stdout)
+            return int(m.group(1)) if m else None
+        return None
+
     def reconcile(self) -> dict:
         """Compare DB state against actual running processes. Fix inconsistencies."""
         db_gpu_mode = self.gpu_mode
@@ -152,12 +165,7 @@ class ModelManager:
                     actual_services.append(name)
                 else:
                     # Health check failed — cross-verify via fuser before marking dead
-                    import subprocess
-                    result = subprocess.run(
-                        ["fuser", "-v", str(m.vllm.port) + "/tcp"],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    if result.returncode == 0:
+                    if self._port_pid(m.vllm.port) is not None:
                         actual_services.append(name)
             elif m.is_comfyui:
                 health_url = m.comfyui.health_url or f"http://localhost:{m.comfyui.port}/system_stats"
@@ -214,16 +222,11 @@ class ModelManager:
             except (ProcessLookupError, PermissionError):
                 # PID doesn't exist — check if any vLLM service is actually running
                 # P0-4 fix: check if port has a live process via fuser
-                import subprocess
                 has_live_vllm = False
                 for svc_name in actual_services:
                     m = self._models.get(svc_name)
                     if m and m.is_vllm:
-                        result = subprocess.run(
-                            ["fuser", "-v", str(m.vllm.port) + "/tcp"],
-                            capture_output=True, text=True, timeout=5
-                        )
-                        if result.returncode == 0:
+                        if self._port_pid(m.vllm.port) is not None:
                             has_live_vllm = True
                             break
                 if not has_live_vllm:
@@ -233,15 +236,10 @@ class ModelManager:
         # P0-5: Check if PID exists but no services running — stale
         # P0-5 fix: verify via fuser before clearing to avoid health-check false negatives
         if self._proc.vllm_pid and not actual_services:
-            import subprocess
             has_live_vllm = False
             for name, m in self._models.items():
                 if m.is_vllm:
-                    result = subprocess.run(
-                        ["fuser", "-v", str(m.vllm.port) + "/tcp"],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    if result.returncode == 0:
+                    if self._port_pid(m.vllm.port) is not None:
                         has_live_vllm = True
                         break
             if not has_live_vllm:
@@ -252,25 +250,14 @@ class ModelManager:
 
         # P0-5: If a vLLM is actually running but PID is not tracked, recover via fuser
         if not self._proc.vllm_pid:
-            import subprocess
             for svc_name in actual_services:
                 m = self._models.get(svc_name)
                 if m and m.is_vllm:
-                    try:
-                        result = subprocess.run(
-                            ["fuser", "-v", str(m.vllm.port) + "/tcp"],
-                            capture_output=True, text=True, timeout=5
-                        )
-                        if result.returncode == 0:
-                            import re
-                            pid_match = re.search(r'\s+(\d+)\s', result.stdout)
-                            if pid_match:
-                                recovered_pid = int(pid_match.group(1))
-                                self.state.set("vllm_pid", str(recovered_pid))
-                                actions.append(f"Recovered vllm_pid={recovered_pid} for {svc_name} via fuser")
-                                break
-                    except Exception:
-                        pass
+                    pid = self._port_pid(m.vllm.port)
+                    if pid is not None:
+                        self.state.set("vllm_pid", str(pid))
+                        actions.append(f"Recovered vllm_pid={pid} for {svc_name} via fuser")
+                        break
 
         return {
             "db_gpu_mode": db_gpu_mode,
@@ -671,14 +658,13 @@ class ModelManager:
             return 0.0
 
     def _shared_add_service(self, model: ModelConfig) -> dict:
-        """Add a shared-mode service. Caller must hold self._lock (see switch())."""
-        if not self._lock.is_held:
-            raise RuntimeError("_shared_add_service called without holding GPU lock")
-        """Add a shared service without touching existing ones.
+        """Add a shared-mode service. Caller must hold self._lock (see switch()).
 
         Only starts the new model. Existing shared services remain running.
         Checks typical VRAM headroom before starting.
         """
+        if not self._lock.is_held:
+            raise RuntimeError("_shared_add_service called without holding GPU lock")
         t0 = time.time()
 
         if model.name in self.active_services:
@@ -865,16 +851,12 @@ class ModelManager:
             else:
                 return {"status": "already_awake", "model": name, "message": "Model is not sleeping"}
 
-        # Validate GPU mode for wake
+        # Validate GPU mode for wake — use shared transition table
         current_gpu = self.gpu_mode
-        if model.is_exclusive:
-            if current_gpu != GPUMode.IDLE:
-                return {"status": "error",
-                        "message": f"Cannot wake exclusive model '{name}': GPU is {current_gpu}, must be idle"}
-        else:
-            if current_gpu not in (GPUMode.IDLE, GPUMode.SHARED):
-                return {"status": "error",
-                        "message": f"Cannot wake shared model '{name}': GPU is {current_gpu}, must be idle or shared"}
+        target_mode = model.gpu_role  # 'exclusive' or 'shared'
+        if not validate_transition(current_gpu, target_mode):
+            return {"status": "error",
+                    "message": f"Cannot wake model '{name}': GPU is {current_gpu}, cannot transition to {target_mode}"}
 
         log.info("Waking model '%s' (L2)", name)
         result = self._proc.wake_vllm(model.vllm.port)
@@ -979,6 +961,11 @@ class ModelManager:
                 comfyui_cfg = m.comfyui
                 break
         self._proc.stop_all(comfyui_cfg=comfyui_cfg)
+        # Stop ollama_cpp (gpu_role=none) processes explicitly
+        for svc_name in self.active_services:
+            m = self._models.get(svc_name)
+            if m and m.is_ollama_cpp:
+                self._proc.stop_ollama_cpp(m.ollama_cpp.port)
         self._proc.force_kill_all()
 
         if not wait_gpu_free(timeout=20):
@@ -1086,8 +1073,8 @@ class ModelManager:
                                     if unit.startswith("G"): size_mb = int(val * 1024)
                                     elif unit.startswith("M"): size_mb = int(val)
                                     elif unit.startswith("K"): size_mb = int(val / 1024)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    log.debug("discover_local_models scan error: %s", e)
                                 break
                         if model_ref not in configured_ollama_refs:
                             discovered.append({
@@ -1095,8 +1082,8 @@ class ModelManager:
                                 "type": "ollama", "framework": "ollama", "size_mb": size_mb,
                                 "files": [],
                             })
-        except Exception:
-            pass  # Ollama not available, skip
+        except Exception as e:
+            log.debug("discover_local_models scan error: %s", e)
 
         # ── ComfyUI models (~/ComfyUI/models/) ──
         comfyui_models = Path.home() / "ComfyUI" / "models"

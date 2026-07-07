@@ -156,7 +156,7 @@ class ModelConfig:
     """
     name: str
     description: str
-    gpu_role: str = "none"  # 'exclusive' | 'shared' | 'none'
+    gpu_role: str = "exclusive"  # 'exclusive' | 'shared' | 'none'
     type: str = "vllm"  # 'vllm' | 'comfyui' | 'ollama' | 'ollama_cpp' | 'ollama_daemon'
     vllm: Optional[VLLMConfig] = None
     comfyui: Optional[ComfyUIConfig] = None

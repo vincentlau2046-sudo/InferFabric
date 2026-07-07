@@ -38,7 +38,7 @@ _VALID_TRANSITIONS = {
     ("idle", "shared"): True,        # deploy shared model/service
     # From exclusive
     ("exclusive", "idle"): True,     # stop exclusive model
-    ("exclusive", "exclusive"): False, # must idle first
+    ("exclusive", "exclusive"): True,    # same-port swap allowed
     ("exclusive", "shared"): False,  # must idle first
     # From shared
     ("shared", "idle"): True,        # stop all shared services
@@ -56,9 +56,13 @@ def validate_transition(from_mode: str, to_mode: str) -> bool:
       - exclusive → idle: ✅ stop exclusive model
       - shared → idle:    ✅ stop all shared services
       - shared → shared:  ✅ add/remove shared service
+      - exclusive → exclusive: ✅ same-port swap
       - exclusive → shared: ❌ must idle first
       - shared → exclusive: ❌ must idle first
     """
+    # "none" is orthogonal to GPU mode — not a GPUMode value
+    if to_mode == "none" or from_mode == "none":
+        return False
     result = _VALID_TRANSITIONS.get((from_mode, to_mode))
     if result is None:
         log.warning("Unknown GPU mode transition: %s → %s", from_mode, to_mode)

@@ -208,7 +208,6 @@ def forward_anthropic_local(handler, pm, data, auth_header, model_obj, original_
                     pass
             break
 
-    pm.invalidate_upstream(model_obj.port)
     log.info("Falling back to Baidu after local failure (last error: %s)", last_error)
     data["model"] = original_model
     forward_to_baidu(handler, data, auth_header, original_model)

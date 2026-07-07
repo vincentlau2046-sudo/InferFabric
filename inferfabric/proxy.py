@@ -115,8 +115,9 @@ class ProxyManager:
                 return False
             log.info("Auto-switch → %s", target)
             result = self.mgr.switch(target)
-            self._last_switch = time.time()
-            if result["status"] == "switched":
+            ok = result["status"] == "switched"
+            if ok:
+                self._last_switch = time.time()
                 return self._wait_healthy(target)
             return result["status"] in ("switched", "already_active")
         finally:
@@ -296,6 +297,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._handle_sleep(pm)
             elif path == "/wake":
                 self._handle_wake(pm)
+            elif path in ("/api/chat", "/api/generate"):
+                self._handle_chat(pm)
             elif path == "/reset":
                 self._handle_reset(pm)
             elif path == "/reconcile":
@@ -519,10 +522,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             )
             return
         try:
-            if not self._forward_request(pm, target_port, body, stream):
-                if not self._forward_request(pm, target_port, body, stream):
-                    self._send_json({"error": "Upstream unavailable after retry"}, 502)
+            for attempt in range(2):
+                if self._forward_request(pm, target_port, body, stream):
                     return
+                if attempt == 0:
+                    time.sleep(0.5)
+            self._send_json({"error": "Upstream unavailable after retry"}, 502)
         finally:
             limiter.release()
 
