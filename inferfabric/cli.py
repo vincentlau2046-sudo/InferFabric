@@ -110,7 +110,7 @@ def cmd_switch(args):
             sys.exit(1)
         # Clear manual stop for target (user explicitly wants it)
         mgr.state.clear_manual_stop(target)
-        print(f"Switching to '{target}' (mode={model.mode})...")
+        print(f"Switching to '{target}' (gpu_role={model.gpu_role})...")
 
     result = mgr.switch(target)
 

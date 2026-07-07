@@ -584,6 +584,27 @@ class ProcessManager:
         for pf in self._log_dir.glob("ollama_cpp_*.pid"):
             pf.unlink(missing_ok=True)
 
+    def run_ollama(self, model_ref: str, keep_alive: str = "5m") -> dict:
+        """Trigger `ollama run` to load/pull a model into the Ollama daemon.
+
+        Uses `--input ""` so the CLI loads the model then exits without
+        blocking on stdin. keep_alive tells the daemon how long to retain
+        the model in memory after the last request.
+        """
+        cmd = ["ollama", "run", model_ref, "--keepalive", keep_alive, "--input", ""]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        except FileNotFoundError:
+            return {"status": "error", "message": "ollama CLI not found in PATH"}
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "message": f"ollama run timed out after 60s for {model_ref}"}
+        if result.returncode == 0:
+            return {"status": "ok", "message": f"Loaded {model_ref} into Ollama daemon"}
+        return {
+            "status": "error",
+            "message": f"ollama run failed: {result.stderr.strip() or result.stdout.strip()}",
+        }
+
     # ─── Combined Operations ─────────────────────────────────────
 
     def stop_all(

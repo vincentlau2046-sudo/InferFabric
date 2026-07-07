@@ -1,6 +1,6 @@
 name: gemma4-26b
 description: "Gemma4-26B A4B NVFP4"
-mode: exclusive
+gpu_role: exclusive
 model_type: llm
 quantization: NVFP4
 
