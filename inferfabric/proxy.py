@@ -16,6 +16,7 @@ import threading
 import time
 from pathlib import Path
 from http.client import HTTPConnection
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from inferfabric.manager import ModelManager
@@ -192,6 +193,29 @@ class _RateLimiter:
 # P0: matches qwen36-27b max_num_seqs=8
 # TODO: dynamically read from model YAML; Baidu/Ollama excluded
 _VLLM_RATE_LIMITER = _RateLimiter(max_concurrent=6, timeout=30.0)
+_MODEL_RATE_LIMITERS: dict[str, _RateLimiter] = {}
+_MODEL_LIMITER_MAX = 50
+
+def _get_model_rate_limiter(pm, model_name: str) -> _RateLimiter:
+    """Get per-model rate limiter based on YAML max_num_seqs."""
+    if model_name in _MODEL_RATE_LIMITERS:
+        return _MODEL_RATE_LIMITERS[model_name]
+    # Guard against unbounded growth
+    if len(_MODEL_RATE_LIMITERS) >= _MODEL_LIMITER_MAX:
+        _MODEL_RATE_LIMITERS.clear()
+    try:
+        model_obj = pm.mgr.get_model(model_name)
+        if model_obj and model_obj.config and model_obj.config.max_num_seqs:
+            max_concurrent = model_obj.config.max_num_seqs
+        else:
+            max_concurrent = 6
+    except Exception:
+        max_concurrent = 6
+    # Enforce bounds: [2, 20] — Semaphore(0) would block forever; cap at 20
+    max_concurrent = max(2, min(max_concurrent, 20))
+    limiter = _RateLimiter(max_concurrent=max_concurrent, timeout=30.0)
+    _MODEL_RATE_LIMITERS[model_name] = limiter
+    return limiter
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
@@ -360,6 +384,78 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     # ── OpenAI chat handler ──
 
+    def _forward_request(self, pm, target_port, body, stream):
+        """Forward a request to an upstream service.
+
+        Returns True if the response was fully sent to the client.
+        Returns False if the caller should retry (headers not yet sent).
+        """
+        headers_sent = False
+        conn = None
+        resp = None
+        try:
+            conn = pm.make_conn(target_port)
+            conn.request("POST", self.path, body=body,
+                         headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
+
+            resp_status = resp.status
+            resp_headers = {k.lower(): v for k, v in resp.getheaders()}
+            resp_ct = resp_headers.get("content-type", "application/json")
+
+            if stream:
+                # Streaming: forward chunk-by-chunk
+                headers_sent = True
+                self.send_response(resp_status)
+                self.send_header("Content-Type", resp_ct)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                try:
+                    while True:
+                        chunk = resp.read(8192)
+                        if not chunk:
+                            break
+                        size = f"{len(chunk):x}\r\n".encode()
+                        self._safe_write(size)
+                        self._safe_write(chunk)
+                        self._safe_write(b"\r\n")
+                    self._safe_write(b"0\r\n\r\n")
+                except Exception as e:
+                    log.debug("Stream forwarding interrupted: %s", e)
+                finally:
+                    resp.close()
+            else:
+                # Non-streaming: buffer then send
+                try:
+                    resp_body = resp.read()
+                finally:
+                    resp.close()
+                headers_sent = True
+                self.send_response(resp_status)
+                self.send_header("Content-Type", resp_ct)
+                self.send_header("Content-Length", str(len(resp_body)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self._safe_write(resp_body)
+            return True
+        except Exception as e:
+            log.error("Forward to :%d failed: %s", target_port, e)
+            try:
+                if resp:
+                    resp.close()
+            except Exception:
+                pass
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
+            if not headers_sent:
+                return False
+            return True
+
     def _handle_chat(self, pm):
         data = self._read_body()
         if data is None:
@@ -410,122 +506,22 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._handle_chat_ollama_native(pm, data, target_port, stream, ollama_model_obj)
             return
 
-        # vLLM path — apply rate limiter
+        # vLLM path — apply dynamic rate limiter
         body = json.dumps(data).encode("utf-8")
-        if not _VLLM_RATE_LIMITER.acquire():
+        limiter = _get_model_rate_limiter(pm, model)
+        if not limiter.acquire():
             self._send_json(
                 {"error": "vLLM at capacity, try again later", "status": "rate_limit"},
                 429,
             )
             return
         try:
-            conn = pm.make_conn(target_port)
-            conn.request("POST", self.path, body=body,
-                         headers={"Content-Type": "application/json"})
-            resp = conn.getresponse()
-
-            resp_status = resp.status
-            resp_headers = {k.lower(): v for k, v in resp.getheaders()}
-            resp_ct = resp_headers.get("content-type", "application/json")
-            headers_sent = False
-
-            if stream:
-                headers_sent = True
-                self.send_response(resp_status)
-                self.send_header("Content-Type", resp_ct)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Transfer-Encoding", "chunked")
-                self.send_header("Cache-Control", "no-cache")
-                self.end_headers()
-                try:
-                    while True:
-                        chunk = resp.read(8192)
-                        if not chunk:
-                            break
-                        size = f"{len(chunk):x}\r\n".encode()
-                        self._safe_write(size)
-                        self._safe_write(chunk)
-                        self._safe_write(b"\r\n")
-                    self._safe_write(b"0\r\n\r\n")
-                except Exception as e:
-                    log.debug("Stream forwarding interrupted: %s", e)
-                    try:
-                        self._safe_write(b"0\r\n\r\n")
-                    except Exception:
-                        pass
-                finally:
-                    resp.close()
-            else:
-                try:
-                    resp_body = resp.read()
-                    self.send_response(resp_status)
-                    self.send_header("Content-Type", resp_ct)
-                    self.send_header("Content-Length", str(len(resp_body)))
-                    self.send_header("Access-Control-Allow-Origin", "*")
-                    self.end_headers()
-                    self._safe_write(resp_body)
-                finally:
-                    resp.close()
-        except Exception as e:
-            log.error("Forward to :%d failed: %s", target_port, e)
-            try:
-                conn.close()
-            except Exception:
-                pass
-            try:
-                conn = pm.make_conn(target_port)
-                conn.request("POST", self.path, body=body,
-                             headers={"Content-Type": "application/json"})
-                resp = conn.getresponse()
-
-                resp_status = resp.status
-                resp_headers = {k.lower(): v for k, v in resp.getheaders()}
-                resp_ct = resp_headers.get("content-type", "application/json")
-                headers_sent = False
-
-                if stream:
-                    headers_sent = True
-                    self.send_response(resp_status)
-                    self.send_header("Content-Type", resp_ct)
-                    self.send_header("Access-Control-Allow-Origin", "*")
-                    self.send_header("Transfer-Encoding", "chunked")
-                    self.send_header("Cache-Control", "no-cache")
-                    self.end_headers()
-                    try:
-                        while True:
-                            chunk = resp.read(8192)
-                            if not chunk:
-                                break
-                            size = f"{len(chunk):x}\r\n".encode()
-                            self._safe_write(size)
-                            self._safe_write(chunk)
-                            self._safe_write(b"\r\n")
-                        self._safe_write(b"0\r\n\r\n")
-                    except Exception:
-                        pass
-                    finally:
-                        resp.close()
-                else:
-                    try:
-                        resp_body = resp.read()
-                        self.send_response(resp_status)
-                        self.send_header("Content-Type", resp_ct)
-                        self.send_header("Content-Length", str(len(resp_body)))
-                        self.send_header("Access-Control-Allow-Origin", "*")
-                        self.end_headers()
-                        self._safe_write(resp_body)
-                    finally:
-                        resp.close()
-            except Exception as e2:
-                log.error("Retry also failed: %s", e2)
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                if not headers_sent:
-                    self._send_json({"error": str(e2)}, 502)
+            if not self._forward_request(pm, target_port, body, stream):
+                if not self._forward_request(pm, target_port, body, stream):
+                    self._send_json({"error": "Upstream unavailable after retry"}, 502)
+                    return
         finally:
-            _VLLM_RATE_LIMITER.release()
+            limiter.release()
 
     def _handle_chat_ollama_native(self, pm, data, target_port, stream, model_obj):
         """Handle chat for Ollama backends using native /api/chat API."""
@@ -665,13 +661,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(models_d)
             return
 
-        all_models = []
-        for svc in active:
-            model = pm.mgr.get_model(svc)
-            if not model or not model.port:
-                continue
-            port = model.port
-            conn = None
+        # Forward /v1/models to active upstream services (concurrent)
+
+        def _fetch_models(svc, port):
             try:
                 conn = HTTPConnection("127.0.0.1", port, timeout=10)
                 conn.request("GET", "/v1/models")
@@ -679,15 +671,31 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 body = resp.read()
                 if resp.status == 200:
                     data = json.loads(body)
-                    all_models.extend(data.get("data", []))
+                    return data.get("data", [])
+                return []
             except Exception as e:
-                log.error("/v1/models forward failed for %s (port %d): %s", svc, port, e)
+                log.warning("/v1/models fetch failed for %s (port %d): %s", svc, port, e)
+                return []
             finally:
-                if conn:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+        # Pre-fetch model→port mapping (avoid repeated get_model calls)
+        model_ports = {}
+        for svc in active:
+            m = pm.mgr.get_model(svc)
+            if m and m.port:
+                model_ports[svc] = m.port
+
+        all_models = []
+        if model_ports:
+            with ThreadPoolExecutor(max_workers=len(model_ports)) as executor:
+                futures = {executor.submit(_fetch_models, svc, port): svc
+                           for svc, port in model_ports.items()}
+                for fut in as_completed(futures):
+                    all_models.extend(fut.result())
 
         all_models.append({"id": "qianfan-code-latest", "object": "model", "owned_by": "proxy", "permission": []})
 

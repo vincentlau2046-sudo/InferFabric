@@ -904,12 +904,12 @@ class ModelManager:
         self._proc.force_kill_all()
 
         if not wait_gpu_free(timeout=20):
-            try:
-                import subprocess
-                subprocess.run(["nvidia-smi", "--gpu-reset"], timeout=10, check=False)
-                time.sleep(5)
-            except Exception:
-                pass
+            log.warning(
+                "GPU not free after force_reset (%d MB used). "
+                "Skipping nvidia-smi --gpu-reset (destructive). "
+                "Manual reset may be needed: sudo nvidia-smi --gpu-reset",
+                gpu_used_mb()
+            )
 
         self._lock.force_clear()
 
@@ -951,43 +951,44 @@ class ModelManager:
         # ── vLLM models (~/models/ with config.json) ──
         models_base = Path.home() / "models"
         if models_base.exists():
-            # 递归扫描: 支持 ~/models/gguf/xxx.gguf 等嵌套目录
-            for d in sorted(models_base.rglob("*")):
-                if not d.is_dir() or d.name.startswith("."):
+            # Scan up to 3 levels deep (avoid rglob on large dirs)
+            def _scan_dirs(parent):
+                return [c for c in sorted(parent.glob("*")) if c.is_dir() and not c.name.startswith(".")]
+
+            level1 = _scan_dirs(models_base)
+            level2 = [s for d1 in level1 for s in _scan_dirs(d1)]
+            level3 = [s for d2 in level2 for s in _scan_dirs(d2)]
+
+            for scan_dir in level1 + level2 + level3:
+                if scan_dir.name in configured_dirs:
                     continue
-                if d.name in configured_dirs:
-                    continue
-                config_json = d / "config.json"
-                gguf_files = list(d.glob("*.gguf"))
+                config_json = scan_dir / "config.json"
                 if config_json.exists():
                     try:
-                        size_mb = sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) // (1024*1024)
+                        size_mb = sum(f.stat().st_size for f in scan_dir.rglob("*") if f.is_file()) // (1024*1024)
                     except Exception:
                         size_mb = 0
                     discovered.append({
-                        "name": d.name, "path": str(d),
+                        "name": scan_dir.name, "path": str(scan_dir),
                         "type": "vllm", "framework": "vllm", "size_mb": size_mb,
-                        "files": [f.name for f in sorted(d.iterdir()) if f.is_file()][:20],
+                        "files": [f.name for f in sorted(scan_dir.iterdir()) if f.is_file()][:20],
                     })
-                elif gguf_files:
-                    # ── ollama.cpp GGUF models ──
-                    # 跳过已配置的 GGUF 目录 (通过 model_path 匹配)
+                gguf_files = list(scan_dir.glob("*.gguf"))
+                if gguf_files:
                     skip = False
                     for m in self._models.values():
                         if m.is_ollama_cpp and m.ollama_cpp:
                             mp = str(Path(m.ollama_cpp.model_path).expanduser().parent)
-                            if str(d) == mp or str(d).startswith(mp + "/"):
+                            if str(scan_dir) == mp or str(scan_dir).startswith(mp + "/"):
                                 skip = True
                                 break
-                    if skip:
-                        continue
-                    size_mb = sum(f.stat().st_size for f in gguf_files) // (1024*1024)
-                    discovered.append({
-                        "name": d.name, "path": str(d),
-                        "type": "ollama_cpp", "framework": "ollama_cpp", "size_mb": size_mb,
-                        "files": [f.name for f in gguf_files],
-                    })
-
+                    if not skip:
+                        size_mb = sum(f.stat().st_size for f in gguf_files) // (1024*1024)
+                        discovered.append({
+                            "name": scan_dir.name, "path": str(scan_dir),
+                            "type": "ollama_cpp", "framework": "ollama_cpp", "size_mb": size_mb,
+                            "files": [f.name for f in gguf_files],
+                        })
         # ── Ollama pulled models (ollama list) ──
         try:
             import subprocess
