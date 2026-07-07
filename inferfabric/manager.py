@@ -10,6 +10,7 @@ import os
 import sys
 import json
 import time
+import subprocess
 import logging
 from pathlib import Path
 from typing import Optional
@@ -559,12 +560,28 @@ class ModelManager:
         """Start a type=ollama model — via the Ollama daemon API.
 
         Ollama models are served by an external daemon (port 11434), not an
-        independent InferFabric process. This triggers `ollama run` to load
-        the model into the daemon so it's ready for inference.
+        independent InferFabric process. This ensures the daemon is running,
+        then triggers `ollama run` to load the model so it's ready for inference.
         """
         daemon_healthy = self.check_ollama_health(11434)
         if daemon_healthy != "✅":
-            return {"status": "error", "message": "Ollama daemon not running. Start with: ollama serve"}
+            log.info("Ollama daemon not running — auto-starting")
+            try:
+                subprocess.Popen(
+                    ["ollama", "serve"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except FileNotFoundError:
+                return {"status": "error", "message": "ollama not found in PATH. Install Ollama first."}
+            # Wait for daemon to become healthy (up to 30s)
+            for _ in range(60):
+                time.sleep(0.5)
+                if self.check_ollama_health(11434) == "✅":
+                    break
+            else:
+                return {"status": "error", "message": "Ollama daemon failed to start within 30s"}
 
         model_ref = model.ollama.model_ref
         keep_alive = model.ollama.keep_alive or "5m"
@@ -725,12 +742,12 @@ class ModelManager:
         if name not in self.active_services:
             return {"status": "error", "message": f"Service '{name}' is not running"}
 
-        if self.gpu_mode == GPUMode.EXCLUSIVE:
-            return {"status": "error", "message": "Cannot stop individual service in exclusive mode. Use 'switch idle'."}
-
         model = self._models.get(name)
         if not model:
             return {"status": "error", "message": f"Unknown model: {name}"}
+
+        if self.gpu_mode == GPUMode.EXCLUSIVE and not model.is_gpu_none:
+            return {"status": "error", "message": "Cannot stop individual service in exclusive mode. Use 'switch idle'."}
 
         # Stop the specific service (pass port for port-based cleanup)
         if model.is_vllm:
