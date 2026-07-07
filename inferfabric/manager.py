@@ -567,11 +567,18 @@ class ModelManager:
         if daemon_healthy != "✅":
             log.info("Ollama daemon not running — auto-starting")
             try:
+                env = os.environ.copy()
+                # 如果当前模型配置了 num_gpu=0，启动时传入环境变量
+                model_ref = model.ollama.model_ref
+                num_gpu = model.ollama.num_gpu if hasattr(model.ollama, 'num_gpu') else -1
+                if num_gpu >= 0:
+                    env["OLLAMA_NUM_GPU"] = str(num_gpu)
                 subprocess.Popen(
                     ["ollama", "serve"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     start_new_session=True,
+                    env=env,
                 )
             except FileNotFoundError:
                 return {"status": "error", "message": "ollama not found in PATH. Install Ollama first."}
@@ -585,7 +592,8 @@ class ModelManager:
 
         model_ref = model.ollama.model_ref
         keep_alive = model.ollama.keep_alive or "5m"
-        return self._proc.run_ollama(model_ref, keep_alive)
+        num_gpu = model.ollama.num_gpu if hasattr(model.ollama, 'num_gpu') else -1
+        return self._proc.run_ollama(model_ref, keep_alive, num_gpu)
 
     def _deploy_model(self, model: ModelConfig, target_mode: str) -> dict:
         """Deploy a model from idle state."""

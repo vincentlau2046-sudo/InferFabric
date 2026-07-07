@@ -584,16 +584,22 @@ class ProcessManager:
         for pf in self._log_dir.glob("ollama_cpp_*.pid"):
             pf.unlink(missing_ok=True)
 
-    def run_ollama(self, model_ref: str, keep_alive: str = "5m") -> dict:
+    def run_ollama(self, model_ref: str, keep_alive: str = "5m", num_gpu: int = -1) -> dict:
         """Trigger `ollama run` to load/pull a model into the Ollama daemon.
 
-        Uses `--input ""` so the CLI loads the model then exits without
-        blocking on stdin. keep_alive tells the daemon how long to retain
-        the model in memory after the last request.
+        Pipes empty stdin so the CLI loads the model then exits without
+        blocking. `num_gpu` is passed via `OLLAMA_NUM_GPU` env var to control
+        GPU offloading layers (e.g., 0 for CPU-only, -1 for auto).
         """
-        cmd = ["ollama", "run", model_ref, "--keepalive", keep_alive, "--input", ""]
+        env = os.environ.copy()
+        if num_gpu >= 0:
+            env["OLLAMA_NUM_GPU"] = str(num_gpu)
+
+        cmd = ["ollama", "run", model_ref, "--keepalive", keep_alive]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(
+                cmd, input="\n", capture_output=True, text=True, timeout=60, env=env
+            )
         except FileNotFoundError:
             return {"status": "error", "message": "ollama CLI not found in PATH"}
         except subprocess.TimeoutExpired:
