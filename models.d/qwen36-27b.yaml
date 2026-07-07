@@ -1,6 +1,6 @@
 name: qwen36-27b
 description: "Qwen3.6-27B NVFP4 + MTP"
-mode: exclusive
+gpu_role: exclusive
 model_type: llm
 quantization: NVFP4
 

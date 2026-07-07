@@ -1,6 +1,6 @@
 name: qwen36-27b-vl
 description: "Qwen3.6-27B NVFP4 + MTP + Vision (Huihui abliterated)"
-mode: exclusive
+gpu_role: exclusive
 model_type: vl
 quantization: NVFP4
 

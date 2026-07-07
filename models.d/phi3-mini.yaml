@@ -1,10 +1,10 @@
 name: phi3-mini
 description: "Phi-3 Mini 3.8B (Ollama)"
 type: ollama
-mode: shared
+gpu_role: shared
 model_type: llm
 quantization: Q4_0
-cpu_only: true
+typical_vram_pct: 4.2
 ollama:
   model_ref: "phi3:mini"
   keep_alive: "5m"

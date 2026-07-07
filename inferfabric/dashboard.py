@@ -135,6 +135,7 @@ body {
 }
 .panel-icon.excl { background:var(--red-g);  box-shadow:0 2px 6px rgba(255,69,58,.2); }
 .panel-icon.shrd { background:var(--green-g); box-shadow:0 2px 6px rgba(48,209,88,.2); }
+.panel-icon.free { background:var(--orange-g); box-shadow:0 2px 8px rgba(255,159,10,.2); }
 .panel-title { font-size:15px; font-weight:600; color:var(--text1); letter-spacing:-.01em; }
 
 /* ── Service Chips ── */
@@ -213,6 +214,7 @@ body {
 }
 .model-badge.excl { background:var(--red-s); color:var(--red); }
 .model-badge.shrd { background:var(--green-s); color:var(--green); }
+.model-badge.free { background:var(--orange-s); color:var(--orange); }
 
 /* ── Card Actions ── */
 .model-actions {
@@ -635,6 +637,13 @@ body {
       </div>
       <div id="shrdList" class="model-grid"></div>
     </div>
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-icon free">⚡</div>
+        <span class="panel-title">GPU-FREE</span>
+      </div>
+      <div id="freeList" class="model-grid"></div>
+    </div>
   </div>
 
   <div class="act-row">
@@ -969,6 +978,7 @@ async function loadModels() {
   const [models, st] = await Promise.all([j('/models'), j('/status')]);
   const excl=models.filter(m=>m.mode==='exclusive');
   const shrd=models.filter(m=>m.mode==='shared');
+  const free=models.filter(m=>m.mode==='none');
   const sleepSt=st.sleep_states||{};
   const svcInfo=st.services_info||{};
 
@@ -1003,7 +1013,7 @@ async function loadModels() {
     const ctxStr = m.context_window ? (m.context_window >= 1024 ? (m.context_window/1024).toFixed(0)+'K ctx' : m.context_window+' ctx') : '';
     const typeIcon = { llm:'🧠', vl:'👁', omni:'🌐', aigc:'✨', multimodal:'🎭' };
     const typeLabel = { llm:'LLM', vl:'VL', omni:'Omni', aigc:'AIGC', multimodal:'Multimodal' };
-    const modeLabel = { excl:'独占', shrd:'共享' };
+    const modeLabel = { excl:'独占', shrd:'共享', free:'GPU-FREE' };
     let specs = '<span class="spec-tag">'+fwIcon+' '+framework+'</span>';
     // Always show model type tag for consistent card layout
     if(typeIcon[m.model_type]) specs += '<span class="spec-tag">'+typeIcon[m.model_type]+' '+(typeLabel[m.model_type]||m.model_type)+'</span>';
@@ -1025,6 +1035,7 @@ async function loadModels() {
 
   document.getElementById('exclList').innerHTML=excl.map(m=>renderCard(m,'excl')).join('');
   document.getElementById('shrdList').innerHTML=shrd.map(m=>renderCard(m,'shrd')).join('');
+  document.getElementById('freeList').innerHTML=free.length>0?free.map(m=>renderCard(m,'free')).join(''):'<div class="fill">⚡ 无模型</div>';
 }
 
 async function doRelease(n,isExcl) {

@@ -144,7 +144,7 @@ class ModelConfig:
     Core attributes:
       name:        Unique identifier (must match YAML filename stem)
       description: Human-readable description
-      mode:        'exclusive' (GPU fully locked) or 'shared' (coexists with other shared services)
+      gpu_role:   'exclusive' (GPU fully locked) | 'shared' (coexists with other shared services) | 'none' (CPU-only)
       type:        'vllm' | 'comfyui' | 'ollama' | 'ollama_cpp' | 'ollama_daemon'
       vllm:        VLLMConfig if type='vllm'
       comfyui:     ComfyUIConfig if type='comfyui'
@@ -156,14 +156,13 @@ class ModelConfig:
     """
     name: str
     description: str
-    mode: str  # 'exclusive' | 'shared'
+    gpu_role: str = "none"  # 'exclusive' | 'shared' | 'none'
     type: str = "vllm"  # 'vllm' | 'comfyui' | 'ollama' | 'ollama_cpp' | 'ollama_daemon'
     vllm: Optional[VLLMConfig] = None
     comfyui: Optional[ComfyUIConfig] = None
     ollama: Optional[OllamaModelConfig] = None
     ollama_cpp: Optional[OllamaCppConfig] = None
     ollama_daemon: Optional[OllamaDaemonConfig] = None
-    cpu_only: bool = False
     typical_vram_pct: float = 0.0
     model_type: str = "llm"  # 'llm' | 'vl' | 'omni' | 'aigc'
     quantization: str = ""  # quantization format: 'NVFP4', 'GPTQ-4bit', 'Q8_0', etc.
@@ -221,15 +220,19 @@ class ModelConfig:
 
     @property
     def needs_gpu(self) -> bool:
-        return not self.cpu_only
+        return self.gpu_role != "none"
 
     @property
     def is_exclusive(self) -> bool:
-        return self.mode == "exclusive"
+        return self.gpu_role == "exclusive"
 
     @property
     def is_shared(self) -> bool:
-        return self.mode == "shared"
+        return self.gpu_role == "shared"
+
+    @property
+    def is_gpu_none(self) -> bool:
+        return self.gpu_role == "none"
 
     @property
     def is_vllm(self) -> bool:
@@ -367,14 +370,13 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
         result[model_name] = ModelConfig(
             name=model_name,
             description=raw.get("description", model_name),
-            mode=raw.get("mode", "exclusive"),
+            gpu_role=raw.get("gpu_role", "none"),
             type=model_type,
             vllm=vllm_cfg,
             comfyui=comfy_cfg,
             ollama=ollama_cfg,
             ollama_cpp=ollama_cpp_cfg,
             ollama_daemon=ollama_daemon_cfg,
-            cpu_only=bool(raw.get("cpu_only", False)),
             typical_vram_pct=float(raw.get("typical_vram_pct", 0)),
             model_type=raw.get("model_type", "llm"),
             quantization=raw.get("quantization", ""),

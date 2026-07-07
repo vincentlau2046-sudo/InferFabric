@@ -1,6 +1,6 @@
 name: qwen35-9b
 description: "Qwen3.5-9B GPTQ-4bit"
-mode: shared
+gpu_role: shared
 model_type: vl
 quantization: GPTQ-4bit
 
@@ -24,3 +24,5 @@ vllm:
     --tool-call-parser qwen3_coder
     --reasoning-parser qwen3
     --trust-remote-code
+    --kv-offloading-backend native
+    --kv-offloading-size 8

@@ -1,6 +1,6 @@
 name: comfyui
 description: "ComfyUI 图像生成"
-mode: shared
+gpu_role: shared
 type: comfyui
 model_type: aigc
 typical_vram_pct: 50

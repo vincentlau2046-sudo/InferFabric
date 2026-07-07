@@ -499,10 +499,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             model_obj = pm.mgr.get_model(service_name)
             if model_obj and model_obj.served_name:
                 data["model"] = model_obj.served_name
-            if model_obj and model_obj.is_ollama:
+            if model_obj and (model_obj.is_ollama or model_obj.is_ollama_cpp):
                 ollama_model_obj = model_obj
 
-        if ollama_model_obj and ollama_model_obj.ollama and ollama_model_obj.ollama.num_gpu >= 0:
+        if ollama_model_obj and ollama_model_obj.is_ollama and ollama_model_obj.ollama and ollama_model_obj.ollama.num_gpu >= 0:
+            self._handle_chat_ollama_native(pm, data, target_port, stream, ollama_model_obj)
+            return
+        if ollama_model_obj and ollama_model_obj.is_ollama_cpp:
             self._handle_chat_ollama_native(pm, data, target_port, stream, ollama_model_obj)
             return
 
@@ -531,12 +534,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             "stream": stream,
             "options": {},
         }
-        if model_obj.ollama.num_gpu >= 0:
+        if model_obj.ollama and model_obj.ollama.num_gpu >= 0:
             ollama_req["options"]["num_gpu"] = model_obj.ollama.num_gpu
         if data.get("max_tokens"):
             ollama_req["options"]["num_predict"] = data["max_tokens"]
-        if model_obj.ollama.keep_alive:
+        if model_obj.ollama and model_obj.ollama.keep_alive:
             ollama_req["keep_alive"] = model_obj.ollama.keep_alive
+        if model_obj.ollama_cpp and model_obj.ollama_cpp.gpu_layers != 0:
+            ollama_req["options"]["num_gpu"] = model_obj.ollama_cpp.gpu_layers
 
         body = json.dumps(ollama_req).encode("utf-8")
 
