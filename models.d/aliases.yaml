@@ -3,8 +3,8 @@ description: "Model aliases"
 type: alias_map
 
 aliases:
-  fast: llama3-1b
+  fast: qwen25-omni-3b
   powerful: qwen36-27b-vl
-  cheap: llama3-1b
+  cheap: qwen25-omni-3b
   code: qwen36-27b-vl
   balanced: qwen35-9b
