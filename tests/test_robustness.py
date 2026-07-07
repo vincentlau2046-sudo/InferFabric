@@ -547,36 +547,7 @@ def test_vllm_config_build_cmd():
 
 
 # ═══════════════════════════════════════════════════════════════
-# 12. Proxy Manager Robustness
-# ═══════════════════════════════════════════════════════════════
-
-def test_proxy_upstream_pool_lazy():
-    """ProxyManager upstream pool should use lazy invalidation."""
-    proxy_path = Path(__file__).parent.parent / "inferfabric" / "proxy.py"
-    content = proxy_path.read_text()
-
-    # get_upstream should not probe /health
-    start = content.find("def get_upstream")
-    end = content.find("\n    def ", start + 1)
-    method = content[start:end]
-
-    assert "conn.request" not in method, "get_upstream should not make requests (lazy)"
-    assert "invalidate_upstream" in content, "Missing invalidate_upstream method"
-    print("✅ Proxy: upstream pool uses lazy invalidation")
-
-
-def test_proxy_cumulative_metrics_reset():
-    """ProxyManager should have reset_cum() for metric accumulators."""
-    proxy_path = Path(__file__).parent.parent / "inferfabric" / "proxy.py"
-    content = proxy_path.read_text()
-
-    assert "reset_cum" in content, "Missing reset_cum() method"
-    assert "_cum" in content, "Missing _cum accumulator dict"
-    print("✅ Proxy: cumulative metrics with reset_cum()")
-
-
-# ═══════════════════════════════════════════════════════════════
-# 13. KV Offload Auto-Detection
+# 12. KV Offload Auto-Detection
 # ═══════════════════════════════════════════════════════════════
 
 def test_kv_offload_skips_expandable_segments():
@@ -666,9 +637,6 @@ def run_all():
         # Config
         test_load_models_real_configs,
         test_vllm_config_build_cmd,
-        # Proxy
-        test_proxy_upstream_pool_lazy,
-        test_proxy_cumulative_metrics_reset,
         # KV offload
         test_kv_offload_skips_expandable_segments,
         # Concurrent

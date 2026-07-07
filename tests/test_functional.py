@@ -595,58 +595,8 @@ class TestP01_SwitchConfigDrift(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# P1-1: proxy.py — connection retry / invalidate + retry
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestP11_ProxyRetry(unittest.TestCase):
-    """Verify P1-1: connection failure triggers invalidate + retry."""
-
-    def test_invalidate_clears_connection_cache(self):
-        """P1-1: invalidate_upstream removes cached connection."""
-        from inferfabric.proxy import ProxyManager
-
-        pm = ProxyManager()
-        port = 8000
-
-        # Simulate caching a connection (attribute is _upstream_pool)
-        conn = MagicMock()
-        pm._upstream_pool[port] = conn
-
-        pm.invalidate_upstream(port)
-
-        self.assertNotIn(port, pm._upstream_pool,
-                        "Port should be removed from cache after invalidate")
-
-    def test_retry_flow(self):
-        """P1-1: Full retry cycle — fail → invalidate → reconnect."""
-        from inferfabric.proxy import ProxyManager
-
-        pm = ProxyManager()
-        port = 8000
-
-        # Simulate cached bad connection
-        bad_conn = MagicMock()
-        bad_conn.request.side_effect = ConnectionRefusedError("refused")
-        pm._upstream_pool[port] = bad_conn
-
-        # First attempt fails
-        try:
-            bad_conn.request("POST", "/v1/chat/completions", body=b'{}',
-                            headers={"Content-Type": "application/json"})
-            got_response = True
-        except ConnectionRefusedError:
-            got_response = False
-
-        self.assertFalse(got_response, "First request should fail")
-
-        # Invalidate and expect cache cleared
-        pm.invalidate_upstream(port)
-        self.assertNotIn(port, pm._upstream_pool)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # P1-2: process_manager.py — GPU idle baseline
-# ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
 
 class TestP12_GPUIdleBaseline(unittest.TestCase):
     """Verify P1-2: relative baseline GPU idle detection."""

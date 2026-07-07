@@ -4,7 +4,7 @@ type: alias_map
 
 aliases:
   fast: llama3-1b
-  powerful: qwen36-27b
+  powerful: qwen36-27b-vl
   cheap: llama3-1b
-  code: qwen36-27b
+  code: qwen36-27b-vl
   balanced: qwen35-9b
