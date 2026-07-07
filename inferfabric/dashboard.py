@@ -420,6 +420,124 @@ body {
   .status-bar { grid-template-columns:1fr; }
   .main { padding:16px; }
 }
+
+/* ── Usage Chart Panel (P1) ── */
+.usage-panel {
+  background:var(--card); border-radius:var(--radius);
+  border:1px solid var(--border); box-shadow:var(--shadow);
+  padding:20px; margin-bottom:18px; transition:box-shadow .2s;
+}
+.usage-panel:hover { box-shadow:0 4px 16px rgba(0,0,0,.06); }
+.usage-hdr { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+.usage-toggle { display:flex; gap:4px; margin-left:auto; }
+.usage-tab {
+  padding:5px 12px; border:none; border-radius:8px;
+  font-size:12px; font-weight:600; cursor:pointer;
+  background:var(--bg); color:var(--text3); transition:all .15s;
+}
+.usage-tab.active { background:var(--blue-s); color:var(--blue); }
+.usage-bar-wrap {
+  display:grid; grid-template-columns:140px 1fr 90px; gap:10px;
+  align-items:center; padding:8px 0; border-bottom:1px solid var(--bg);
+}
+.usage-bar-wrap:last-child { border-bottom:none; }
+.usage-model-name { font-size:13px; font-weight:600; color:var(--text1); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.usage-bar-track { height:22px; border-radius:6px; background:var(--bg); overflow:hidden; position:relative; }
+.usage-bar-f {
+  height:100%; border-radius:6px; background:var(--blue-g);
+  transition:width .6s cubic-bezier(.4,0,.2,1);
+  min-width:2px;
+}
+.usage-bar-f.alt { background:var(--green-g); }
+.usage-bar-f.alt2 { background:var(--purple-g); }
+.usage-bar-f.alt3 { background:var(--orange-g); }
+.usage-tok-val { font-size:12px; color:var(--text2); font-variant-numeric:tabular-nums; text-align:right; font-weight:500; }
+.usage-empty { font-size:13px; color:var(--text4); padding:14px 0; text-align:center; }
+.usage-legend { display:flex; gap:14px; margin-top:12px; font-size:11px; color:var(--text3); }
+.usage-legend span { display:inline-flex; align-items:center; gap:5px; }
+.usage-legend .dot { width:8px; height:8px; border-radius:2px; }
+
+/* ── GPU Metrics Panel (P1) ── */
+.gpu-panel {
+  background:var(--card); border-radius:var(--radius);
+  border:1px solid var(--border); box-shadow:var(--shadow);
+  padding:20px; margin-bottom:18px; transition:box-shadow .2s;
+}
+.gpu-panel:hover { box-shadow:0 4px 16px rgba(0,0,0,.06); }
+.gpu-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+@media (max-width:900px) { .gpu-grid { grid-template-columns:repeat(2,1fr); } }
+@media (max-width:600px) { .gpu-grid { grid-template-columns:1fr; } }
+.gpu-card {
+  background:var(--bg); border-radius:10px; padding:14px 16px;
+  display:flex; flex-direction:column; gap:4px;
+}
+.gpu-card-label { font-size:12px; font-weight:600; color:var(--text3); text-transform:uppercase; letter-spacing:.04em; }
+.gpu-card-val { font-size:22px; font-weight:700; letter-spacing:-.03em; color:var(--text1); line-height:1; font-variant-numeric:tabular-nums; }
+.gpu-card-unit { font-size:13px; font-weight:500; color:var(--text3); margin-left:3px; }
+.gpu-card-sub { font-size:11px; color:var(--text4); margin-top:3px; }
+
+/* ── Tab Bar (v4.4) ── */
+.tab-bar {
+  display:flex; align-items:center; gap:24px;
+  height:44px; padding:0 20px;
+  background:var(--card); border-bottom:1px solid var(--border);
+  max-width:1000px; margin:0 auto 18px;
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+}
+.tab-item {
+  position:relative;
+  font-size:15px; font-weight:600; color:var(--text3);
+  padding:0 2px; cursor:pointer; transition:color .2s;
+  letter-spacing:-.01em; user-select:none;
+  display:inline-flex; align-items:center; gap:6px;
+}
+.tab-item:hover { color:var(--text2); }
+.tab-item.active { color:var(--text1); }
+.tab-item.active::after {
+  content:''; position:absolute;
+  left:0; right:0; bottom:-13px;
+  height:2px; border-radius:2px;
+  background:var(--blue-g);
+}
+.tab-content { display:none; }
+.tab-content.active { display:block; }
+
+/* ── Coming Soon Cards (v4.4) ── */
+.cs-grid {
+  display:grid; grid-template-columns:repeat(2, 1fr); gap:14px;
+  margin-top:14px;
+}
+@media (max-width:700px) { .cs-grid { grid-template-columns:1fr; } }
+.cs-card {
+  background:var(--card); border:1.5px dashed var(--text4);
+  border-radius:var(--radius); padding:20px;
+  display:flex; flex-direction:column; gap:10px;
+  transition:all .2s;
+  position:relative;
+}
+.cs-card:hover {
+  border-color:var(--blue); background:rgba(10,132,255,.02);
+  box-shadow:0 4px 16px rgba(0,0,0,.04);
+}
+.cs-hdr { display:flex; align-items:center; gap:12px; }
+.cs-icon {
+  width:44px; height:44px; border-radius:12px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:22px; color:#fff; flex-shrink:0;
+  background:var(--blue-g); box-shadow:0 2px 8px rgba(10,132,255,.2);
+}
+.cs-icon.purple { background:var(--purple-g); box-shadow:0 2px 8px rgba(191,90,242,.2); }
+.cs-icon.green  { background:var(--green-g);  box-shadow:0 2px 8px rgba(48,209,88,.2); }
+.cs-title { font-size:16px; font-weight:700; color:var(--text1); letter-spacing:-.01em; }
+.cs-desc { font-size:13px; color:var(--text3); line-height:1.5; }
+.cs-badge {
+  display:inline-flex; align-items:center; gap:4px;
+  padding:3px 10px; border-radius:8px;
+  font-size:11px; font-weight:600; letter-spacing:.02em;
+  background:var(--orange-s); color:var(--orange);
+  margin-top:auto; align-self:flex-start;
+}
 </style>
 </head>
 <body>
@@ -488,6 +606,48 @@ body {
     </div>
   </div>
 
+  <!-- Tab Bar -->
+  <div class="tab-bar">
+    <span class="tab-item active" data-tab="tab-inference" onclick="switchTab('tab-inference')">🔄 模型推理</span>
+    <span class="tab-item" data-tab="tab-monitor" onclick="switchTab('tab-monitor')">📊 指标监控</span>
+    <span class="tab-item" data-tab="tab-deploy" onclick="switchTab('tab-deploy')">📦 模型部署</span>
+  </div>
+
+  <!-- ════════ Tab 1: 模型推理 (default active) ════════ -->
+  <div class="tab-content active" id="tab-inference">
+
+  <!-- Active Services -->
+  <div class="panel" id="svcCard" style="margin-bottom:18px;padding:16px 20px;min-height:40px"></div>
+
+  <!-- Model Panels -->
+  <div class="panels">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-icon excl">🔒</div>
+        <span class="panel-title">独占模型</span>
+      </div>
+      <div id="exclList" class="model-grid"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-icon shrd">🔓</div>
+        <span class="panel-title">共享服务</span>
+      </div>
+      <div id="shrdList" class="model-grid"></div>
+    </div>
+  </div>
+
+  <div class="act-row">
+    <button class="act-btn pri" onclick="doSwitch('idle')">释放 GPU</button>
+    <button class="act-btn sec" onclick="doReconcile()">Reconcile</button>
+    <button class="act-btn warn" onclick="doReset()">强制重置</button>
+  </div>
+
+  </div><!-- /tab-inference -->
+
+  <!-- ════════ Tab 2: 指标监控 ════════ -->
+  <div class="tab-content" id="tab-monitor">
+
   <!-- vLLM Perf Panel -->
   <div class="perf-panel" id="perfPanel" style="display:none">
     <div class="perf-hdr">
@@ -530,38 +690,32 @@ body {
     </div>
   </div>
 
-  <!-- Active Services -->
-  <div class="panel" id="svcCard" style="margin-bottom:18px;padding:16px 20px;min-height:40px"></div>
-
-  <!-- Model Panels -->
-  <div class="panels">
-    <div class="panel">
-      <div class="panel-hdr">
-        <div class="panel-icon excl">🔒</div>
-        <span class="panel-title">独占模型</span>
+  <!-- Usage Chart (P1) -->
+  <div class="usage-panel" id="usagePanel">
+    <div class="usage-hdr">
+      <div class="panel-icon" style="background:var(--green-g);box-shadow:0 2px 6px rgba(48,209,88,.2)">📈</div>
+      <span class="panel-title">Token 用量</span>
+      <div class="usage-toggle">
+        <button class="usage-tab" data-w="daily">24h</button>
+        <button class="usage-tab active" data-w="weekly">7d</button>
+        <button class="usage-tab" data-w="all">全部</button>
       </div>
-      <div id="exclList" class="model-grid"></div>
     </div>
-    <div class="panel">
-      <div class="panel-hdr">
-        <div class="panel-icon shrd">🔓</div>
-        <span class="panel-title">共享服务</span>
-      </div>
-      <div id="shrdList" class="model-grid"></div>
+    <div id="usageBody"><div class="usage-empty">加载中…</div></div>
+    <div class="usage-legend">
+      <span><span class="dot" style="background:var(--blue-g)"></span>tokens</span>
+      <span id="usageTotal" style="margin-left:auto"></span>
     </div>
   </div>
 
-  <!-- Discovered Local Models (by framework) -->
-  <div class="panel" id="localModels" style="margin-bottom:18px;padding:16px 20px;display:none">
-    <div style="font-size:14px;font-weight:600;color:var(--text2);margin-bottom:14px">📦 本地未配置模型</div>
-    <div id="localModelsList"></div>
-  </div>
-
-  </div>
-  <div class="act-row">
-    <button class="act-btn pri" onclick="doSwitch('idle')">释放 GPU</button>
-    <button class="act-btn sec" onclick="doReconcile()">Reconcile</button>
-    <button class="act-btn warn" onclick="doReset()">强制重置</button>
+  <!-- GPU Metrics (P1) -->
+  <div class="gpu-panel" id="gpuPanel">
+    <div class="panel-hdr">
+      <div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(10,132,255,.2)">📊</div>
+      <span class="panel-title">GPU 实时指标</span>
+      <span style="margin-left:auto;font-size:11px;color:var(--text3)" id="gpuTs">—</span>
+    </div>
+    <div class="gpu-grid" id="gpuGrid"></div>
   </div>
 
   <!-- History -->
@@ -575,7 +729,37 @@ body {
       <div id="hBody"><div style="text-align:center;padding:20px;color:var(--text4);font-size:14px">加载中…</div></div>
     </div>
   </div>
-</div>
+  </div><!-- /tab-monitor -->
+
+  <!-- ════════ Tab 3: 模型部署 ════════ -->
+  <div class="tab-content" id="tab-deploy">
+    <div class="panel" id="localModels" style="margin-bottom:18px;padding:16px 20px;display:none">
+      <div style="font-size:14px;font-weight:600;color:var(--text2);margin-bottom:14px">📦 本地未配置模型</div>
+      <div id="localModelsList"></div>
+    </div>
+    <div class="cs-grid">
+      <div class="cs-card">
+        <div class="cs-icon">🔧</div><div class="cs-title">框架选择</div>
+        <div class="cs-desc">支持 vLLM / Ollama / ComfyUI 等推理后端</div>
+        <div class="cs-badge">Coming Soon</div>
+      </div>
+      <div class="cs-card">
+        <div class="cs-icon">⚙️</div><div class="cs-title">参数配置</div>
+        <div class="cs-desc">温度、Top-P、上下文长度等推理参数可视化设置</div>
+        <div class="cs-badge">Coming Soon</div>
+      </div>
+      <div class="cs-card">
+        <div class="cs-icon">📋</div><div class="cs-title">模型卡片</div>
+        <div class="cs-desc">一键生成模型 YAML 配置并部署到 models.d/</div>
+        <div class="cs-badge">Coming Soon</div>
+      </div>
+      <div class="cs-card">
+        <div class="cs-icon">🔄</div><div class="cs-title">模型切换</div>
+        <div class="cs-desc">可视化模型热切换与 GPU 资源调度</div>
+        <div class="cs-badge">Coming Soon</div>
+      </div>
+    </div>
+  </div><!-- /tab-deploy -->
 
 <div class="toast" id="toast"></div>
 
@@ -593,6 +777,14 @@ function swLock() {
 }
 function swUnlock() {
   try { localStorage.removeItem('inferfabric_sw_lock'); } catch(e) {}
+}
+function switchTab(tabId) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+  const target = document.getElementById(tabId);
+  if (target) target.classList.add('active');
+  const btn = document.querySelector(`.tab-item[data-tab="${tabId}"]`);
+  if (btn) btn.classList.add('active');
 }
 // Cleanup on tab close
 window.addEventListener('beforeunload', swUnlock);
@@ -1022,8 +1214,63 @@ async function doReconcile() {
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
-Promise.all([load(),loadModels(),loadLocalModels()]);
-setInterval(()=>{load();loadModels();loadLocalModels();},5000);
+// ── Usage Chart (P1) ──
+let usageWindow='weekly';
+async function loadUsage() {
+  try {
+    const rows=await j('/usage?window='+usageWindow);
+    const body=document.getElementById('usageBody');
+    const tot=document.getElementById('usageTotal');
+    if(!rows||!rows.length){ body.innerHTML='<div class="usage-empty">暂无用量数据</div>'; tot.textContent='0 requests'; return; }
+    const maxTok=Math.max(...rows.map(r=>r.total_tokens))||1;
+    const totalReq=rows.reduce((s,r)=>s+r.requests,0);
+    const totalTok=rows.reduce((s,r)=>s+r.total_tokens,0);
+    tot.textContent=totalReq.toLocaleString()+' reqs · '+totalTok.toLocaleString()+' tokens';
+    const altCls=['','alt','alt2','alt3'];
+    body.innerHTML=rows.map((r,i)=>{
+      const pct=(r.total_tokens/maxTok*100).toFixed(1);
+      const cls=altCls[i%altCls.length];
+      return '<div class="usage-bar-wrap">'+
+        '<span class="usage-model-name" title="'+r.model+'">'+r.model+'</span>'+
+        '<div class="usage-bar-track"><div class="usage-bar-f '+cls+'" style="width:'+pct+'%"></div></div>'+
+        '<span class="usage-tok-val">'+r.total_tokens.toLocaleString()+' · '+r.requests+' reqs</span>'+
+      '</div>';
+    }).join('');
+  }catch(e){ /* ignore */ }
+}
+document.addEventListener('click',e=>{
+  const t=e.target.closest('.usage-tab');
+  if(!t)return;
+  document.querySelectorAll('.usage-tab').forEach(b=>b.classList.remove('active'));
+  t.classList.add('active');
+  usageWindow=t.dataset.w;
+  loadUsage();
+});
+
+// ── GPU Metrics (P1) ──
+async function loadGpuMetrics() {
+  try {
+    const sys=await j('/system').catch(()=>({}));
+    const g=document.getElementById('gpuGrid');
+    const ts=document.getElementById('gpuTs');
+    ts.textContent=new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const cards=[
+      ['利用率', (sys.gpu_util_pct||0).toFixed(1), '%', sys.gpu_util_pct<30?'优秀':sys.gpu_util_pct<70?'中等':'高负载'],
+      ['核心频率', sys.gpu_clock_mhz||'—', 'MHz', '实时'],
+      ['功耗', (sys.gpu_power_w||0).toFixed(1), 'W', '实时'],
+      ['显存负载', (((sys.gpu_used_mb||0)/(sys.gpu_total_mb||32607))*100||0).toFixed(1), '%', (sys.gpu_used_mb||0).toLocaleString()+' / '+(sys.gpu_total_mb||32607).toLocaleString()+' MB'],
+    ];
+    g.innerHTML=cards.map(c=>
+      '<div class="gpu-card"><span class="gpu-card-label">'+c[0]+'</span>'+
+      '<div><span class="gpu-card-val">'+c[1]+'</span><span class="gpu-card-unit">'+c[2]+'</span></div>'+
+      '<span class="gpu-card-sub">'+c[3]+'</span></div>'
+    ).join('');
+  }catch(e){ /* ignore */ }
+}
+
+Promise.all([load(),loadModels(),loadLocalModels(),loadUsage(),loadGpuMetrics()]);
+setInterval(()=>{load();loadModels();loadLocalModels();loadGpuMetrics();},5000);
+setInterval(loadUsage,30000);
 </script>
 </body>
 </html>"""
