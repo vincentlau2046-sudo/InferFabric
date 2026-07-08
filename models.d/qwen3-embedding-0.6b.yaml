@@ -1,0 +1,12 @@
+name: qwen3-embedding-0.6b
+description: "Qwen3 Embedding 0.6B Q4_K_M — Ollama.cpp CPU embedding (multilingual)"
+type: ollama_cpp
+gpu_role: none
+model_type: embedding
+quantization: Q4_K_M
+ollama_cpp:
+  model_path: ~/models/gguf/Qwen3-Embedding-0.6B-Q4_K_M/Qwen3-Embedding-0.6B-Q4_K_M.gguf
+  port: 11440
+  threads: 8
+  context_size: 8192
+  gpu_layers: 0

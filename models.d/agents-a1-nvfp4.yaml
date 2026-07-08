@@ -7,11 +7,11 @@ quantization: NVFP4
 vllm:
   model_dir: models/r0b0tlab--Agents-A1-NVFP4/snapshots/master
   served_name: vllm_agents_a1_nvfp4
-  port: 8004
+  port: 8003
   conda_env: qwen36-27b-vllm-vl
-  max_model_len: 131072
+  max_model_len: 204800
   gpu_memory_utilization: 0.85
-  max_num_seqs: 6
+  max_num_seqs: 10
   kv_cache_dtype: fp8
   extra_flags: >-
     --max-num-batched-tokens 8192

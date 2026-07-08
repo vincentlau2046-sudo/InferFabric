@@ -808,6 +808,51 @@ class ModelManager:
             "remaining": remaining,
         }
 
+    # ── Independent Model Management (gpu_role: none) ──────────
+
+    def stop_independent(self, name: str) -> dict:
+        """Stop a GPU-independent model (gpu_role: none).
+
+        Unlike stop_service(), this method:
+        - Only accepts models with gpu_role == "none"
+        - Does NOT change the GPU mode (idle/exclusive/shared tri-state)
+        - Does NOT auto-transition to idle when last service is removed
+
+        Use stop_service() for GPU-bound models (exclusive/shared).
+        """
+        if name not in self.active_services:
+            return {"status": "error", "message": f"Independent model '{name}' is not running"}
+
+        model = self._models.get(name)
+        if not model:
+            return {"status": "error", "message": f"Unknown model: {name}"}
+
+        if not model.is_gpu_none:
+            return {"status": "error", "message": f"Model '{name}' is not an independent model (gpu_role={model.gpu_role})"}
+
+        # Stop the process — dispatch by type (same pattern as stop_service)
+        if model.is_ollama_cpp:
+            self._proc.stop_ollama_cpp(port=model.ollama_cpp.port)
+        elif model.is_ollama:
+            log.info("Unregistering Ollama independent model %s", name)
+        elif model.is_ollama_daemon:
+            log.info("Ollama daemon stop: use 'ollama serve' externally")
+        elif model.is_vllm:
+            self._proc.stop_vllm(port=model.vllm.port)
+        elif model.is_comfyui:
+            self._proc.stop_comfyui_with_config(model.comfyui, port=model.comfyui.port)
+
+        # Remove from active_services (gpu_mode stays unchanged)
+        remaining = [s for s in self.active_services if s != name]
+        self.state.set_active_services(remaining)
+
+        return {"status": "stopped", "model": name, "gpu_mode": self.gpu_mode}
+
+    def list_independent(self) -> list[str]:
+        """Return names of currently running GPU-independent models (gpu_role: none)."""
+        return [name for name in self.active_services
+                if (m := self._models.get(name)) and m.is_gpu_none]
+
     # ── Sleep / Wake (L2 only) ─────────────────────────────────
 
     def sleep_model(self, name: str) -> dict:

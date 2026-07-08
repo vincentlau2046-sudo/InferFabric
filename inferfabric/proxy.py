@@ -305,6 +305,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._handle_reconcile(pm)
             elif path == "/deploy":
                 self._handle_deploy(pm)
+            elif path == "/v1/embeddings":
+                self._handle_embeddings(pm)
             else:
                 self._send_json({"error": "not found"}, 404)
         except (BrokenPipeError, ConnectionResetError):
@@ -1006,6 +1008,79 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
         result = pm.mgr.auto_deploy(name, model_type)
         self._send_json(result)
+
+    def _handle_embeddings(self, pm):
+        """Handle OpenAI-compatible /v1/embeddings requests.
+
+        Looks up the embedding model by served_name, starts it if not running,
+        and forwards the request to the upstream service.
+
+        Timeout: 30s per phase (health check, forward request). Worst case ~60s total.
+        """
+        data = self._read_body()
+        if data is None:
+            return
+
+        model_name = data.get("model", "")
+        if not model_name:
+            self._send_json({"error": "model field is required"}, 400)
+            return
+
+        # Resolve served model name → service (config) name
+        svc_name = pm.model_to_service(model_name)
+        if not svc_name:
+            self._send_json({"error": f"Unknown model: {model_name}"}, 404)
+            return
+
+        model_obj = pm.mgr.get_model(svc_name)
+        if not model_obj or model_obj.model_type != "embedding":
+            self._send_json({"error": f"Model '{model_name}' is not an embedding model"}, 400)
+            return
+
+        port = model_obj.port
+        if not port:
+            self._send_json({"error": f"No port configured for model '{model_name}'"}, 500)
+            return
+
+        # Auto-start if not running (embedding models are GPU-independent)
+        if svc_name not in pm.mgr.active_services:
+            log.info("Embedding model %s not running — auto-starting", svc_name)
+            result = pm.mgr.switch(svc_name)
+            if result.get("status") != "switched":
+                msg = result.get("message", "unknown error")
+                log.error("Failed to start embedding model %s: %s", svc_name, msg)
+                self._send_json({"error": f"Failed to start embedding model: {msg}"}, 503)
+                return
+            # Wait for healthy (30s timeout)
+            if not pm._wait_healthy(svc_name, timeout=30):
+                self._send_json({"error": f"Embedding model '{svc_name}' failed health check within 30s"}, 503)
+                return
+        elif not pm._wait_healthy(svc_name, timeout=10):
+            log.warning("Embedding model %s not healthy, attempting restart", svc_name)
+            pm.mgr.stop_independent(svc_name)
+            result = pm.mgr.switch(svc_name)
+            if result.get("status") != "switched" or not pm._wait_healthy(svc_name, timeout=30):
+                self._send_json({"error": f"Embedding model '{svc_name}' failed to restart"}, 503)
+                return
+
+        # Forward the request to upstream /v1/embeddings
+        body = json.dumps(data).encode("utf-8")
+        conn = pm.make_conn(port, timeout=30)
+        try:
+            conn.request("POST", "/v1/embeddings", body=body,
+                         headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
+            resp_body = resp.read()
+            self.send_response(resp.status)
+            for k, v in resp.getheaders():
+                self.send_header(k, v)
+            self.end_headers()
+            self._safe_write(resp_body)
+        except Exception as e:
+            log.error("Embedding request failed: %s", e)
+            self._send_json({"error": "Upstream unavailable", "detail": str(e)}, 503)
+        finally:
+            conn.close()
 
     def _send_json(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False).encode()

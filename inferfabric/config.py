@@ -137,6 +137,17 @@ class OllamaDaemonConfig:
     data_dir: str = ""
 
 
+class PortPool:
+    """Port range conventions for different service types.
+
+    Each range reserves 10 ports (e.g. 11440-11449 for embeddings).
+    Ports are configured statically in model YAML files; this class
+    documents the convention for administrators.
+    """
+    EMBEDDING_START = 11440
+    # Future ranges: OLLAMA_CPP_START = 11430, etc.
+
+
 @dataclass
 class ModelConfig:
     """A deployable model/service — one per YAML in models.d/.
@@ -151,7 +162,7 @@ class ModelConfig:
       ollama:      OllamaModelConfig if type='ollama'
       ollama_cpp:  OllamaCppConfig if type='ollama_cpp'
       ollama_daemon: OllamaDaemonConfig if type='ollama_daemon'
-      model_type:  'llm' | 'vl' | 'omni' | 'aigc' — capability classification
+      model_type:  'llm' | 'vl' | 'omni' | 'aigc' | 'embedding' — capability classification
       quantization: quantization format string (e.g. 'NVFP4', 'GPTQ-4bit', 'Q8_0')
     """
     name: str
@@ -164,7 +175,7 @@ class ModelConfig:
     ollama_cpp: Optional[OllamaCppConfig] = None
     ollama_daemon: Optional[OllamaDaemonConfig] = None
     typical_vram_pct: float = 0.0
-    model_type: str = "llm"  # 'llm' | 'vl' | 'omni' | 'aigc'
+    model_type: str = "llm"  # 'llm' | 'vl' | 'omni' | 'aigc' | 'embedding'
     quantization: str = ""  # quantization format: 'NVFP4', 'GPTQ-4bit', 'Q8_0', etc.
 
     # Fields excluded from config hash (runtime / non-startup)
