@@ -152,44 +152,39 @@ class ModelManager:
             return int(m.group(1)) if m else None
         return None
 
-    def reconcile(self) -> dict:
-        """Compare DB state against actual running processes. Fix inconsistencies."""
-        db_gpu_mode = self.gpu_mode
-        db_services = self.active_services
+    # ── Sub-methods for reconcile ─────────────────────────────────
 
-        # Scan all known model ports
-        actual_services = []
+    def _scan_actual_services(self) -> list[str]:
+        """Scan all known model ports and return names of actually-running services."""
+        actual = []
         for name, m in self._models.items():
             if m.is_vllm:
                 status = self.check_vllm_health(m.vllm.port)
                 if status in ("✅", "⏳"):
-                    actual_services.append(name)
+                    actual.append(name)
                 else:
-                    # Health check failed — cross-verify via fuser before marking dead
                     if self._port_pid(m.vllm.port) is not None:
-                        actual_services.append(name)
+                        actual.append(name)
             elif m.is_comfyui:
                 health_url = m.comfyui.health_url or f"http://localhost:{m.comfyui.port}/system_stats"
                 status = self.check_comfyui_health(health_url)
                 if status in ("✅", "⏳"):
-                    actual_services.append(name)
+                    actual.append(name)
             elif m.is_ollama_daemon:
                 status = self.check_ollama_health(m.ollama_daemon.port)
                 if status in ("✅", "⏳"):
-                    actual_services.append(name)
+                    actual.append(name)
             elif m.is_ollama_cpp:
                 status = self.check_http_health(m.ollama_cpp.port, "/health")
                 if status in ("✅", "⏳"):
-                    actual_services.append(name)
-            # Note: ollama model type doesn't have its own process — it's served by ollama-daemon
+                    actual.append(name)
+        return actual
 
-        actions: list[str] = []
-
-        # Determine actual gpu_mode from running services (gpu_none services don't count)
+    def _derive_gpu_mode(self, actual_services: list[str]) -> GPUMode:
+        """Determine actual gpu_mode from running services (gpu_none services don't count)."""
         actual_gpu_mode = GPUMode.IDLE
         gpu_services = [s for s in actual_services if not (self._models.get(s) and self._models[s].is_gpu_none)]
         if gpu_services:
-            # Check if any exclusive model is running
             for svc_name in actual_services:
                 m = self._models.get(svc_name)
                 if m and m.is_exclusive:
@@ -197,6 +192,59 @@ class ModelManager:
                     break
             if actual_gpu_mode == GPUMode.IDLE:
                 actual_gpu_mode = GPUMode.SHARED
+        return actual_gpu_mode
+
+    def _detect_orphan_pids(self, actual_services: list[str], actions: list[str]) -> None:
+        """P0-4/P0-5: Clean up orphan or stale vllm_pid entries."""
+        if self._proc.vllm_pid:
+            try:
+                os.killpg(self._proc.vllm_pid, 0)
+            except (ProcessLookupError, PermissionError):
+                has_live_vllm = False
+                for svc_name in actual_services:
+                    m = self._models.get(svc_name)
+                    if m and m.is_vllm:
+                        if self._port_pid(m.vllm.port) is not None:
+                            has_live_vllm = True
+                            break
+                if not has_live_vllm:
+                    actions.append(f"Orphan vllm_pid={self._proc.vllm_pid} dead — clearing")
+                    self.state.set("vllm_pid", "")
+
+        if self._proc.vllm_pid and not actual_services:
+            has_live_vllm = False
+            for name, m in self._models.items():
+                if m.is_vllm:
+                    if self._port_pid(m.vllm.port) is not None:
+                        has_live_vllm = True
+                        break
+            if not has_live_vllm:
+                actions.append(f"Stale vllm_pid={self._proc.vllm_pid} with no active services — clearing")
+                self.state.set("vllm_pid", "")
+            else:
+                actions.append(f"vllm_pid={self._proc.vllm_pid} still owns port — keeping (health check false negative)")
+
+    def _restore_dead_pids(self, actual_services: list[str], actions: list[str]) -> None:
+        """P0-5: If a vLLM is actually running but PID is not tracked, recover via fuser."""
+        if not self._proc.vllm_pid:
+            for svc_name in actual_services:
+                m = self._models.get(svc_name)
+                if m and m.is_vllm:
+                    pid = self._port_pid(m.vllm.port)
+                    if pid is not None:
+                        self.state.set("vllm_pid", str(pid))
+                        actions.append(f"Recovered vllm_pid={pid} for {svc_name} via fuser")
+                        break
+
+    def reconcile(self) -> dict:
+        """Compare DB state against actual running processes. Fix inconsistencies."""
+        db_gpu_mode = self.gpu_mode
+        db_services = self.active_services
+
+        actual_services = self._scan_actual_services()
+        actual_gpu_mode = self._derive_gpu_mode(actual_services)
+
+        actions: list[str] = []
 
         # Fix state inconsistencies
         if actual_gpu_mode != db_gpu_mode:
@@ -216,49 +264,8 @@ class ModelManager:
             actions.append(f"profile_state was '{db_profile_state}', no services → idle")
             self.state.set("profile_state", ProfileState.IDLE)
 
-        # P0-4: Fix orphan PID detection — check if PID process actually exists and owns a running port
-        if self._proc.vllm_pid:
-            try:
-                os.killpg(self._proc.vllm_pid, 0)
-            except (ProcessLookupError, PermissionError):
-                # PID doesn't exist — check if any vLLM service is actually running
-                # P0-4 fix: check if port has a live process via fuser
-                has_live_vllm = False
-                for svc_name in actual_services:
-                    m = self._models.get(svc_name)
-                    if m and m.is_vllm:
-                        if self._port_pid(m.vllm.port) is not None:
-                            has_live_vllm = True
-                            break
-                if not has_live_vllm:
-                    actions.append(f"Orphan vllm_pid={self._proc.vllm_pid} dead — clearing")
-                    self.state.set("vllm_pid", "")
-
-        # P0-5: Check if PID exists but no services running — stale
-        # P0-5 fix: verify via fuser before clearing to avoid health-check false negatives
-        if self._proc.vllm_pid and not actual_services:
-            has_live_vllm = False
-            for name, m in self._models.items():
-                if m.is_vllm:
-                    if self._port_pid(m.vllm.port) is not None:
-                        has_live_vllm = True
-                        break
-            if not has_live_vllm:
-                actions.append(f"Stale vllm_pid={self._proc.vllm_pid} with no active services — clearing")
-                self.state.set("vllm_pid", "")
-            else:
-                actions.append(f"vllm_pid={self._proc.vllm_pid} still owns port — keeping (health check false negative)")
-
-        # P0-5: If a vLLM is actually running but PID is not tracked, recover via fuser
-        if not self._proc.vllm_pid:
-            for svc_name in actual_services:
-                m = self._models.get(svc_name)
-                if m and m.is_vllm:
-                    pid = self._port_pid(m.vllm.port)
-                    if pid is not None:
-                        self.state.set("vllm_pid", str(pid))
-                        actions.append(f"Recovered vllm_pid={pid} for {svc_name} via fuser")
-                        break
+        self._detect_orphan_pids(actual_services, actions)
+        self._restore_dead_pids(actual_services, actions)
 
         return {
             "db_gpu_mode": db_gpu_mode,
@@ -285,11 +292,11 @@ class ModelManager:
               exclusive → shared:    ❌ must idle first
               shared → exclusive:    ❌ must idle first
         """
-        # Handle idle — stops ALL services including gpu_none models
+        # ── Handle idle ──────────────────────────────────────────────
         if target == "idle":
             return self._switch_to_idle()
 
-        # Look up model
+        # ── Model lookup & already-running check ──────────────────────
         model = self._models.get(target)
         if not model:
             return {"status": "error", "message": f"Unknown model: {target}. Available: {list(self._models.keys())}"}
@@ -321,6 +328,7 @@ class ModelManager:
         target_mode = model.gpu_role  # 'exclusive' or 'shared'
         current_mode = self.gpu_mode
 
+        # ── Validate GPU mode transition ──────────────────────────────
         # Validate transition — allow exclusive → exclusive (same-port swap)
         if not validate_transition(current_mode, target_mode):
             # Allow exclusive → exclusive: stop old, start new
@@ -329,18 +337,19 @@ class ModelManager:
             elif current_mode == GPUMode.EXCLUSIVE:
                 return {
                     "status": "error",
-                    "message": f"GPU is in exclusive mode ({running[0] if running else 'unknown'} running). "
+                    "message": f"GPU is in exclusive mode ({self.active_services[0] if self.active_services else 'unknown'} running). "
                                f"Run 'iff switch idle' first.",
                 }
             elif current_mode == GPUMode.SHARED and target_mode == GPUMode.EXCLUSIVE:
                 return {
                     "status": "error",
-                    "message": f"GPU is in shared mode ({running} running). "
+                    "message": f"GPU is in shared mode ({', '.join(self.active_services) if self.active_services else 'none'} running). "
                                f"Run 'iff switch idle' first to deploy exclusive model.",
                 }
             else:
                 return {"status": "error", "message": f"Invalid transition: {current_mode} → {target_mode}"}
 
+        # ── Acquire lock, deploy, and record ──────────────────────────
         # Acquire GPU lock
         if not self._lock.acquire():
             return {"status": "error", "message": "GPU switch in progress (lock held)"}
@@ -410,7 +419,11 @@ class ModelManager:
         current = list(self.active_services)
         for svc_name in current:
             log.info("Stopping current exclusive service: %s", svc_name)
-            self._stop_service(svc_name)
+            svc_model = self._models.get(svc_name)
+            if svc_model:
+                self._stop_model_process(svc_model, svc_name)
+            else:
+                log.warning("No model config for exclusive service %s, skipping stop", svc_name)
 
         # Clear active state before deploying new model
         self.state.set("active_services", json.dumps([]))
@@ -490,7 +503,7 @@ class ModelManager:
             self._proc.stop_all(
                 comfyui_cfg=comfyui_cfg,
                 vllm_ports=[p for t, p in ports if t == "vllm"],
-                comfyui_port=ports[-1][1] if ports and ports[-1][0] == "comfyui" else None,
+                comfyui_port=comfyui_cfg.port if comfyui_cfg else None,
             )
 
             # ── Stop GPU-independent services (gpu_role == "none") ──
@@ -740,6 +753,21 @@ class ModelManager:
             "results": results,
         }
 
+    # ── Common process-stop dispatch ──────────────────────────────
+
+    def _stop_model_process(self, model: ModelConfig, name: str) -> None:
+        """Dispatch process stop by model type. Shared helper for stop_service and stop_independent."""
+        if model.is_vllm:
+            self._proc.stop_vllm(port=model.vllm.port)
+        elif model.is_comfyui:
+            self._proc.stop_comfyui_with_config(model.comfyui, port=model.comfyui.port)
+        elif model.is_ollama:
+            log.info("Unregistering Ollama model %s", name)
+        elif model.is_ollama_daemon:
+            log.info("Ollama daemon stop: use 'ollama serve' externally")
+        elif model.is_ollama_cpp:
+            self._proc.stop_ollama_cpp(port=model.ollama_cpp.port)
+
     # ── Stop Single Service ──────────────────────────────────────
 
     def stop_service(self, name: str) -> dict:
@@ -763,17 +791,7 @@ class ModelManager:
             return {"status": "error", "message": "Cannot stop individual service in exclusive mode. Use 'switch idle'."}
 
         # Stop the specific service (pass port for port-based cleanup)
-        if model.is_vllm:
-            self._proc.stop_vllm(port=model.vllm.port)
-        elif model.is_comfyui:
-            self._proc.stop_comfyui_with_config(model.comfyui, port=model.comfyui.port)
-        elif model.is_ollama:
-            # Ollama models are served by daemon — just unregister
-            log.info("Unregistering Ollama model %s", name)
-        elif model.is_ollama_daemon:
-            log.info("Ollama daemon stop: use 'ollama serve' externally")
-        elif model.is_ollama_cpp:
-            self._proc.stop_ollama_cpp(port=model.ollama_cpp.port)
+        self._stop_model_process(model, name)
 
         # Verify GPU actually freed — catch orphaned processes (skip CPU-only models)
         if model.needs_gpu:
@@ -828,17 +846,8 @@ class ModelManager:
         if not model.is_gpu_none:
             return {"status": "error", "message": f"Model '{name}' is not an independent model (gpu_role={model.gpu_role})"}
 
-        # Stop the process — dispatch by type (same pattern as stop_service)
-        if model.is_ollama_cpp:
-            self._proc.stop_ollama_cpp(port=model.ollama_cpp.port)
-        elif model.is_ollama:
-            log.info("Unregistering Ollama independent model %s", name)
-        elif model.is_ollama_daemon:
-            log.info("Ollama daemon stop: use 'ollama serve' externally")
-        elif model.is_vllm:
-            self._proc.stop_vllm(port=model.vllm.port)
-        elif model.is_comfyui:
-            self._proc.stop_comfyui_with_config(model.comfyui, port=model.comfyui.port)
+        # Stop the process — dispatch by type (shared helper)
+        self._stop_model_process(model, name)
 
         # Remove from active_services (gpu_mode stays unchanged)
         remaining = [s for s in self.active_services if s != name]
@@ -995,24 +1004,15 @@ class ModelManager:
                 health = f"{health} (sleeping {sleep_label.upper()})"
             services_status[svc_name] = health
             services_info[svc_name] = info
-            # Track dead services for auto-cleanup
+            # Collect dead services (excluded from returned active list)
             if health == "❌":
                 dead_services.append(svc_name)
 
-        # Auto-cleanup: remove dead services from state to avoid stale dashboard state
-        if dead_services:
-            log.warning("Auto-cleanup: removing dead services %s from state", dead_services)
-            remaining = [s for s in active if s not in dead_services]
-            self.state.set_active_services(remaining)
-            active = remaining
-            # If no services left, also reset GPU mode to idle
-            if not active and self.gpu_mode != GPUMode.IDLE:
-                log.info("No active services — resetting gpu_mode to idle")
-                self.state.gpu_mode = GPUMode.IDLE
+        active_services = [s for s in active if s not in dead_services]
 
         return {
             "gpu_mode": self.gpu_mode,
-            "active_services": active,
+            "active_services": active_services,
             "services_health": services_status,
             "services_info": services_info,
             "sleep_states": sleep_states,
@@ -1021,6 +1021,42 @@ class ModelManager:
             "vllm_pid": self._proc.vllm_pid,
             "comfyui_pid": self._proc.comfyui_pid,
         }
+
+    # ── Cleanup Dead Services ─────────────────────────────────────
+
+    def cleanup_dead_services(self) -> list[str]:
+        """Remove dead services from state and reset GPU mode to idle if all gone."""
+        active = list(self.active_services)
+        dead_services = []
+        for svc_name in active:
+            m = self._models.get(svc_name)
+            if not m:
+                dead_services.append(svc_name)
+                continue
+            if m.is_vllm:
+                health = self.check_vllm_health(m.vllm.port)
+            elif m.is_comfyui:
+                health_url = m.comfyui.health_url or f"http://localhost:{m.comfyui.port}/system_stats"
+                health = self.check_comfyui_health(health_url)
+            elif m.is_ollama_daemon:
+                health = self.check_ollama_health(m.ollama_daemon.port)
+            elif m.is_ollama:
+                health = self.check_ollama_health(11434)
+            elif m.is_ollama_cpp:
+                health = self.check_http_health(m.ollama_cpp.port, "/health")
+            else:
+                health = "?"
+            if health == "❌":
+                dead_services.append(svc_name)
+
+        if dead_services:
+            log.warning("Cleanup: removing dead services %s from state", dead_services)
+            remaining = [s for s in active if s not in dead_services]
+            self.state.set_active_services(remaining)
+            if not remaining and self.gpu_mode != GPUMode.IDLE:
+                log.info("No active services — resetting gpu_mode to idle")
+                self.state.gpu_mode = GPUMode.IDLE
+        return dead_services
 
     # ── Force Reset ───────────────────────────────────────────────
 

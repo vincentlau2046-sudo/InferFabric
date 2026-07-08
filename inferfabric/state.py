@@ -126,12 +126,13 @@ class StateDB:
             c.close()
 
     def get(self, key: str) -> Optional[str]:
-        c = self._conn()
-        try:
-            row = c.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
-            return row[0] if row else None
-        finally:
-            c.close()
+        with self._lock:
+            c = self._conn()
+            try:
+                row = c.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
+                return row[0] if row else None
+            finally:
+                c.close()
 
     def set(self, key: str, value: str):
         with self._lock:
@@ -166,22 +167,25 @@ class StateDB:
             return []
 
     def set_active_services(self, services: list[str]):
-        """Set active services list."""
-        self.set("active_services", json.dumps(services))
+        """Set active services list (atomic)."""
+        with self._lock:
+            self.set("active_services", json.dumps(services))
 
     def add_active_service(self, name: str):
-        """Add a service to the active list."""
-        services = self.get_active_services()
-        if name not in services:
-            services.append(name)
-            self.set_active_services(services)
+        """Add a service to the active list (atomic)."""
+        with self._lock:
+            services = self.get_active_services()
+            if name not in services:
+                services.append(name)
+                self.set_active_services(services)
 
     def remove_active_service(self, name: str):
-        """Remove a service from the active list."""
-        services = self.get_active_services()
-        if name in services:
-            services.remove(name)
-            self.set_active_services(services)
+        """Remove a service from the active list (atomic)."""
+        with self._lock:
+            services = self.get_active_services()
+            if name in services:
+                services.remove(name)
+                self.set_active_services(services)
 
     # ─── Manual Stop Protection ────────────────────────────────
 
@@ -189,27 +193,30 @@ class StateDB:
 
     def record_manual_stop(self, name: str):
         """Record that user manually stopped a model (blocks auto-switch)."""
-        stops = json.loads(self.get("manual_stops") or "{}")
-        stops[name] = time.time()
-        self.set("manual_stops", json.dumps(stops))
+        with self._lock:
+            stops = json.loads(self.get("manual_stops") or "{}")
+            stops[name] = time.time()
+            self.set("manual_stops", json.dumps(stops))
 
     def is_manually_stopped(self, name: str) -> bool:
         """Check if model was manually stopped within TTL."""
-        stops = json.loads(self.get("manual_stops") or "{}")
-        ts = stops.get(name)
-        if ts is None:
-            return False
-        if time.time() - ts > self.MANUAL_STOP_TTL:
-            del stops[name]
-            self.set("manual_stops", json.dumps(stops))
-            return False
-        return True
+        with self._lock:
+            stops = json.loads(self.get("manual_stops") or "{}")
+            ts = stops.get(name)
+            if ts is None:
+                return False
+            if time.time() - ts > self.MANUAL_STOP_TTL:
+                del stops[name]
+                self.set("manual_stops", json.dumps(stops))
+                return False
+            return True
 
     def clear_manual_stop(self, name: str):
         """Clear manual stop record (e.g. when user explicitly switches TO this model)."""
-        stops = json.loads(self.get("manual_stops") or "{}")
-        stops.pop(name, None)
-        self.set("manual_stops", json.dumps(stops))
+        with self._lock:
+            stops = json.loads(self.get("manual_stops") or "{}")
+            stops.pop(name, None)
+            self.set("manual_stops", json.dumps(stops))
 
     # ─── GPU Mode ───────────────────────────────────────────────
 
