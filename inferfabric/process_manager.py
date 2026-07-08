@@ -531,6 +531,8 @@ class ProcessManager:
             "-c", str(cfg.context_size),
             "-t", str(cfg.threads),
         ]
+        # Enable embeddings endpoint for embedding models
+        cmd.append("--embeddings")
         if cfg.gpu_layers != 0:
             cmd.extend(["-ngl", str(cfg.gpu_layers)])
 
