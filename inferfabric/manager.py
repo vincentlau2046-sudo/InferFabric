@@ -755,6 +755,10 @@ class ModelManager:
         if not model:
             return {"status": "error", "message": f"Unknown model: {name}"}
 
+        # gpu-none models use stop_independent (not blocked by exclusive GPU)
+        if model.is_gpu_none:
+            return self.stop_independent(name)
+
         if self.gpu_mode == GPUMode.EXCLUSIVE:
             return {"status": "error", "message": "Cannot stop individual service in exclusive mode. Use 'switch idle'."}
 
