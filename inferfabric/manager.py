@@ -427,13 +427,7 @@ class ModelManager:
           - Launch the model process directly — framework determined by type
         """
         t0 = time.time()
-
-        if self.gpu_mode == GPUMode.EXCLUSIVE:
-            return {
-                "status": "error",
-                "message": "GPU is in exclusive mode. GPU-None models cannot start "
-                            "while an exclusive GPU model is active. Run 'iff switch idle' first.",
-            }
+        # GPU-independent models (cpu-only) can coexist with any GPU mode.
 
         # Reload YAML to detect config drift against disk (parity with GPU-bound path)
         model_name = model.name
