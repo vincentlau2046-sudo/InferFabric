@@ -428,6 +428,13 @@ class ModelManager:
         """
         t0 = time.time()
 
+        if self.gpu_mode == GPUMode.EXCLUSIVE:
+            return {
+                "status": "error",
+                "message": "GPU is in exclusive mode. GPU-None models cannot start "
+                            "while an exclusive GPU model is active. Run 'iff switch idle' first.",
+            }
+
         # Reload YAML to detect config drift against disk (parity with GPU-bound path)
         model_name = model.name
         self._models = load_models(self.models_dir)
@@ -754,7 +761,7 @@ class ModelManager:
         if not model:
             return {"status": "error", "message": f"Unknown model: {name}"}
 
-        if self.gpu_mode == GPUMode.EXCLUSIVE and not model.is_gpu_none:
+        if self.gpu_mode == GPUMode.EXCLUSIVE:
             return {"status": "error", "message": "Cannot stop individual service in exclusive mode. Use 'switch idle'."}
 
         # Stop the specific service (pass port for port-based cleanup)

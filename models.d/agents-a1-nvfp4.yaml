@@ -1,0 +1,28 @@
+name: agents-a1-nvfp4
+description: "Agents-A1 35B MoE NVFP4 (Qwen3.5 MoE)"
+gpu_role: exclusive
+model_type: vl
+quantization: NVFP4
+
+vllm:
+  model_dir: models/r0b0tlab--Agents-A1-NVFP4/snapshots/master
+  served_name: vllm_agents_a1_nvfp4
+  port: 8004
+  conda_env: qwen36-27b-vllm-vl
+  max_model_len: 131072
+  gpu_memory_utilization: 0.85
+  max_num_seqs: 6
+  kv_cache_dtype: fp8
+  extra_flags: >-
+    --max-num-batched-tokens 8192
+    --moe-backend marlin
+    --enable-prefix-caching
+    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 8, 16, 32]}'
+    --enable-chunked-prefill
+    --async-scheduling
+    --enable-auto-tool-choice
+    --tool-call-parser qwen3_coder
+    --reasoning-parser qwen3
+    --trust-remote-code
+    --kv-offloading-backend native
+    --kv-offloading-size 16
