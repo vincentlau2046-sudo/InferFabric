@@ -266,7 +266,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": "invalid port"}, 400)
             return
         try:
-            result = handle_vllm_metrics(port)
+            result = handle_vllm_metrics(f"port={port}")
         except RuntimeError as e:
             self._send_json({"error": str(e)}, 502)
             return
