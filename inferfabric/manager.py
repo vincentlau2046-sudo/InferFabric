@@ -292,6 +292,10 @@ class ModelManager:
                 dead_services.append(svc_name)
                 continue
             info = {"mode": m.gpu_role, "type": m.type}
+            if m.port:
+                info["port"] = m.port
+            if m.vllm and m.vllm.port:
+                info["port"] = m.vllm.port
             health = self._health.check_model(m)
             # Append sleep state if applicable
             sleep_label = sleep_states.get(svc_name, "")
