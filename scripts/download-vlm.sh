@@ -1,4 +1,14 @@
 #!/bin/bash
+# ============================================================
+# [DEPRECATED] download-vlm.sh
+#
+# This script is DEPRECATED. Use `iff download` instead.
+#   iff download <model_name>
+#
+# The script is kept for reference but will be removed in a
+# future phase. Do not rely on it for new workflows.
+# ============================================================
+#
 # Download Huihui-Qwen3.6-27B-abliterated-NVFP4-MTP (VLM + MTP)
 # Source: sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4-MTP
 # Size: ~21 GB (vision encoder included)

@@ -15,10 +15,10 @@ echo "[$(date '+%H:%M:%S')] Starting recovery..."
 # Step 1: Stop via iff
 echo "[1/6] Stopping via iff..."
 iff reset idle 2>/dev/null || {
-    # Fallback to old scripts if iff not installed
-    # switch_vllm.sh 已废弃
+    # Fallback: switch_vllm.sh 已废弃 (removed), switch_comfyui.sh 已废弃
+    # Use iff directly for all operations
     iff switch idle 2>/dev/null || true
-    ~/inferfabric/scripts/switch_comfyui.sh stop 2>/dev/null || true
+    iff stop comfyui 2>/dev/null || true
 }
 sleep 2
 

@@ -156,6 +156,8 @@ body {
 .panel-icon.excl { background:var(--red-g); box-shadow:0 2px 6px rgba(220,38,38,.2); }
 .panel-icon.shrd { background:var(--green-g); box-shadow:0 2px 6px rgba(22,163,74,.2); }
 .panel-icon.free { background:var(--orange-g); box-shadow:0 2px 8px rgba(245,158,11,.2); }
+.panel-icon.vllm { background:var(--red-g); box-shadow:0 2px 6px rgba(220,38,38,.2); }
+.panel-icon.ollama { background:var(--green-g); box-shadow:0 2px 6px rgba(22,163,74,.2); }
 .panel-title { font-size:14px; font-weight:600; color:var(--text1); letter-spacing:-.01em; font-family:var(--font-mono); }
 .panel-content { padding:14px 16px; }
 .model-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; min-height:60px; }
@@ -178,7 +180,7 @@ body {
 .spec-tag {
   display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:4px;
   background:var(--bg); border:1px solid var(--border);
-  font-size:11px; color:var(--text2); font-family:var(--font-mono); white-space:nowrap;
+  font-size:11px; color:var(--text2); font-family:var(--font-mono); white-space:nowrap; font-variant-numeric:tabular-nums;
 }
 .model-badge { padding:3px 10px; border-radius:6px; font-size:11px; font-weight:600; font-family:var(--font-mono); }
 .model-badge.excl { background:var(--red-s); color:var(--red); border:1px solid rgba(220,38,38,0.3); }
@@ -257,7 +259,7 @@ body {
 .perf-main { font-size:24px; font-weight:700; letter-spacing:-.03em; color:var(--green); line-height:1; font-variant-numeric:tabular-nums; }
 .perf-card.crit .perf-main { color:var(--red); }
 .perf-card.warn .perf-main { color:var(--orange); }
-.perf-sub { font-size:12px; color:var(--text2); font-weight:500; font-family:var(--font-mono); }
+.perf-sub { font-size:12px; color:var(--text2); font-weight:500; font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
 .perf-tip { display:none; position:absolute; bottom:calc(100% + 6px); left:0; right:0;
   background:var(--text1); color:var(--bg); font-size:11px; line-height:1.4;
   padding:6px 10px; border-radius:6px; z-index:10; pointer-events:none;
@@ -490,7 +492,7 @@ body {
 .gpu-card-val { font-size:22px; font-weight:700; color:var(--text1); letter-spacing:-.02em; font-variant-numeric:tabular-nums; }
 .gpu-card-unit { font-size:12px; color:var(--text3); margin-left:4px; }
 .gpu-card-label { font-size:11px; font-weight:600; color:var(--text3); text-transform:uppercase; letter-spacing:.04em; margin-top:4px; }
-.gpu-card-sub { font-size:11px; color:var(--text2); margin-top:2px; }
+.gpu-card-sub { font-size:11px; color:var(--text2); margin-top:2px; font-variant-numeric:tabular-nums; }
 .gpu-card-meter { height:4px; background:var(--border); border-radius:2px; margin-top:8px; overflow:hidden; }
 .gpu-card-meter-f { height:100%; border-radius:2px; background:var(--green); transition:width .6s; }
 .gpu-card-meter-f.warn { background:var(--orange); }
@@ -503,6 +505,81 @@ body {
 .gpu-card-name { font-size:13px; font-weight:600; color:var(--text1); font-family:var(--font-mono); }
 .gpu-card-body { display:flex; flex-direction:column; gap:4px; }
 .gpu-card-row { display:flex; justify-content:space-between; align-items:center; }
+.disc-models-scroll { max-height:360px; overflow-y:auto; }
+.disc-models-scroll::-webkit-scrollbar { width:5px; }
+.disc-models-scroll::-webkit-scrollbar-track { background:transparent; }
+.disc-models-scroll::-webkit-scrollbar-thumb { background:var(--border-l); border-radius:2.5px; }
+.disc-model-card {
+  display:flex; align-items:center; gap:8px; height:48px;
+  padding:0 10px; margin-bottom:4px;
+  background:var(--bg-code); border:1px solid var(--border);
+  border-radius:8px; transition:all .15s;
+}
+.disc-model-card:hover { border-color:var(--primary); background:var(--bg-card); }
+.disc-model-card:last-child { margin-bottom:0; }
+.disc-model-name { font-size:13px; font-weight:600; color:var(--text1); font-family:var(--font-mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; max-width:180px; }
+.disc-model-tag {
+  display:inline-flex; align-items:center; gap:3px; padding:2px 8px; border-radius:4px;
+  font-size:10px; font-weight:600; font-family:var(--font-mono); white-space:nowrap; flex-shrink:0;
+}
+.disc-model-tag.vllm { background:var(--red-s); color:var(--red); }
+.disc-model-tag.ollama { background:var(--green-s); color:var(--green); }
+.disc-model-tag.ollama_cpp { background:var(--blue-s); color:var(--blue); }
+.disc-model-tag.comfyui { background:var(--purple-s); color:var(--purple); }
+.disc-model-tag.webui { background:var(--orange-s); color:var(--orange); }
+.disc-model-size { font-size:11px; color:var(--text3); font-family:var(--font-mono); white-space:nowrap; flex-shrink:0; font-variant-numeric:tabular-nums; }
+.disc-model-status {
+  display:inline-flex; align-items:center; gap:3px; padding:2px 8px; border-radius:4px;
+  font-size:10px; font-weight:600; font-family:var(--font-mono); white-space:nowrap; margin-left:auto;
+}
+.disc-model-status.deployed { background:var(--green-s); color:var(--green); }
+.disc-model-status.undeployed { background:var(--bg); color:var(--text3); border:1px solid var(--border); }
+.disc-model-actions { display:flex; gap:4px; flex-shrink:0; }
+.disc-model-btn {
+  padding:3px 10px; border:1px solid var(--border); border-radius:5px;
+  font-size:11px; font-weight:600; cursor:pointer; transition:all .15s;
+  font-family:var(--font-mono); white-space:nowrap; font-variant-numeric:tabular-nums;
+}
+.disc-model-btn.deploy { background:var(--green-s); color:var(--green); }
+.disc-model-btn.deploy:hover { background:rgba(22,163,74,.20); border-color:var(--green); }
+.disc-model-btn.pull { background:var(--primary-s); color:var(--primary); }
+.disc-model-btn.pull:hover { background:rgba(204,122,96,.20); border-color:var(--primary); }
+.disc-empty { font-size:13px; color:var(--text3); padding:10px 0; text-align:center; font-family:var(--font-mono); }
+.deploy-form-field { margin-bottom:10px; }
+.deploy-form-label { display:block; font-size:12px; font-weight:600; color:var(--text2); margin-bottom:4px; font-family:var(--font-mono); }
+.deploy-form-input {
+  width:100%; padding:6px 10px; border:1px solid var(--border); border-radius:6px;
+  font-size:13px; font-family:var(--font-mono); color:var(--text1); background:var(--bg);
+  outline:none; transition:border-color .15s; font-variant-numeric:tabular-nums;
+}
+.deploy-form-input:focus { border-color:var(--primary); }
+.deploy-form-slider {
+  width:100%; height:6px; -webkit-appearance:none; appearance:none;
+  background:var(--bg-code); border-radius:3px; outline:none; cursor:pointer;
+}
+.deploy-form-slider::-webkit-slider-thumb {
+  -webkit-appearance:none; width:16px; height:16px; border-radius:50%;
+  background:var(--primary); cursor:pointer; border:2px solid #fff; box-shadow:0 1px 3px rgba(0,0,0,.2);
+}
+.deploy-form-slider::-moz-range-thumb {
+  width:16px; height:16px; border-radius:50%;
+  background:var(--primary); cursor:pointer; border:2px solid #fff; box-shadow:0 1px 3px rgba(0,0,0,.2);
+}
+.deploy-form-select {
+  width:100%; padding:6px 10px; border:1px solid var(--border); border-radius:6px;
+  font-size:13px; font-family:var(--font-mono); color:var(--text1); background:var(--bg);
+  outline:none; cursor:pointer; transition:border-color .15s; font-variant-numeric:tabular-nums;
+}
+.deploy-form-select:focus { border-color:var(--primary); }
+.deploy-form-btn {
+  width:100%; padding:8px 0; border:none; border-radius:6px;
+  font-size:13px; font-weight:600; cursor:pointer; transition:all .15s;
+  font-family:var(--font-mono); color:#fff; margin-top:6px;
+}
+.deploy-form-btn.vllm { background:var(--red-g); box-shadow:0 2px 6px rgba(220,38,38,.2); }
+.deploy-form-btn.vllm:hover { filter:brightness(1.1); }
+.deploy-form-btn.ollama { background:var(--green-g); box-shadow:0 2px 6px rgba(22,163,74,.2); }
+.deploy-form-btn.ollama:hover { filter:brightness(1.1); }
 </style>
 </head>
 <body>
@@ -705,30 +782,95 @@ body {
 
   <!-- ════════ Tab 3: 模型部署 ════════ -->
   <div class="tab-content" id="tab-deploy">
-    <div class="panel" id="localModels" style="margin-bottom:18px;padding:16px 20px;display:none">
-      <div style="font-size:14px;font-weight:600;color:var(--text2);margin-bottom:14px">📦 本地未配置模型</div>
-      <div id="localModelsList"></div>
+    <div class="panel" id="localModels" style="display:none">
+      <div class="panel-hdr" style="padding:6px 12px">
+        <div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(10,132,255,.2);width:22px;height:22px;font-size:11px">📦</div>
+        <span class="panel-title" style="font-size:13px">本地模型发现</span>
+      </div>
+      <div class="panel-content" style="padding:6px 10px" id="localModelsList"></div>
     </div>
-    <div class="cs-grid">
-      <div class="cs-card">
-        <div class="cs-icon">🔧</div><div class="cs-title">框架选择</div>
-        <div class="cs-desc">支持 vLLM / Ollama / ComfyUI 等推理后端</div>
-        <div class="cs-badge">Coming Soon</div>
-      </div>
-      <div class="cs-card">
-        <div class="cs-icon">⚙️</div><div class="cs-title">参数配置</div>
-        <div class="cs-desc">温度、Top-P、上下文长度等推理参数可视化设置</div>
-        <div class="cs-badge">Coming Soon</div>
-      </div>
-      <div class="cs-card">
-        <div class="cs-icon">📋</div><div class="cs-title">模型卡片</div>
-        <div class="cs-desc">一键生成模型 YAML 配置并部署到 models.d/</div>
-        <div class="cs-badge">Coming Soon</div>
-      </div>
-      <div class="cs-card">
-        <div class="cs-icon">🔄</div><div class="cs-title">模型切换</div>
-        <div class="cs-desc">可视化模型热切换与 GPU 资源调度</div>
-        <div class="cs-badge">Coming Soon</div>
+
+    <!-- Deploy form toggle -->
+    <button class="act-btn sec" onclick="toggleDeployForm()" id="deployFormToggle" style="margin-bottom:14px">展开部署表单</button>
+    <div id="deployFormArea" style="display:none">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <!-- vLLM Deploy Form -->
+        <div class="panel">
+          <div class="panel-hdr">
+            <div class="panel-icon vllm">🔥</div>
+            <span class="panel-title">vLLM 部署</span>
+          </div>
+          <div class="panel-content" style="padding:12px 14px">
+            <form id="vllmDeployForm" onsubmit="return submitVllmDeploy(event)">
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">模型名称</label>
+                <input class="deploy-form-input" name="name" type="text" placeholder="例: Qwen2.5-7B" required>
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">模型目录</label>
+                <input class="deploy-form-input" name="model_dir" type="text" value="~/models/">
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">服务端口</label>
+                <input class="deploy-form-input" name="port" type="number" placeholder="自动分配" min="1024" max="65535">
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">GPU 显存利用率 <span id="vllmGpuMemVal">0.80</span></label>
+                <input class="deploy-form-slider" name="gpu_mem" type="range" min="0.50" max="0.95" step="0.01" value="0.80" oninput="document.getElementById('vllmGpuMemVal').textContent=parseFloat(this.value).toFixed(2)">
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">最大上下文长度</label>
+                <input class="deploy-form-input" name="max_ctx" type="number" value="4096" min="512" max="131072">
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">量化格式</label>
+                <select class="deploy-form-select" name="quantization">
+                  <option value="">无</option>
+                  <option value="NVFP4">NVFP4</option>
+                  <option value="GPTQ-4bit">GPTQ-4bit</option>
+                  <option value="Q8_0">Q8_0</option>
+                </select>
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">推理模式</label>
+                <select class="deploy-form-select" name="inference_mode">
+                  <option value="auto">auto</option>
+                  <option value="eager">eager</option>
+                </select>
+              </div>
+              <button type="submit" class="deploy-form-btn vllm">部署 vLLM 模型</button>
+            </form>
+          </div>
+        </div>
+        <!-- Ollama Deploy Form -->
+        <div class="panel">
+          <div class="panel-hdr">
+            <div class="panel-icon ollama">🦙</div>
+            <span class="panel-title">Ollama 部署</span>
+          </div>
+          <div class="panel-content" style="padding:12px 14px">
+            <form id="ollamaDeployForm" onsubmit="return submitOllamaDeploy(event)">
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">模型名称</label>
+                <input class="deploy-form-input" name="name" type="text" placeholder="例: llama3" required>
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">Ollama 模型引用</label>
+                <input class="deploy-form-input" name="ollama_ref" type="text" placeholder="例: llama3.2:3b">
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">服务端口（ollama.cpp）</label>
+                <input class="deploy-form-input" name="port" type="number" placeholder="自动分配" min="1024" max="65535">
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">GPU 卸载层数</label>
+                <input class="deploy-form-input" name="gpu_layers" type="number" value="-1" min="-1" max="200">
+                <div style="font-size:11px;color:var(--text3);margin-top:4px">-1 = 全部卸载到 GPU</div>
+              </div>
+              <button type="submit" class="deploy-form-btn ollama">部署 Ollama 模型</button>
+            </form>
+          </div>
+        </div>
       </div>
     </div>
   </div><!-- /tab-deploy -->
@@ -1084,12 +1226,15 @@ async function doStop(n) {
 
 async function loadLocalModels() {
   try {
-    const d = await j('/local-models');
+    const [d, st] = await Promise.all([j('/local-models'), j('/status')]);
     const list = d.discovered || [];
     const el = document.getElementById('localModels');
     const listEl = document.getElementById('localModelsList');
 
-    // Framework metadata (fixed order, always show all)
+    // Active services names for deploy-status check
+    const activeNames = new Set(st.active_services || []);
+
+    // Framework metadata
     const fwMeta = {
       vllm:      { icon: '\uD83D\uDD25', label: 'vLLM',        canDeploy: true  },
       ollama:     { icon: '\uD83E\uDD99', label: 'Ollama',      canDeploy: true  },
@@ -1107,49 +1252,42 @@ async function loadLocalModels() {
       groups[fw].push(m);
     }
 
-    // Always show panel (even if all empty)
+    const totalCount = list.length;
+
+    // Always show panel
     el.style.display = 'block';
 
-    let html = '';
+    if (totalCount === 0) {
+      listEl.innerHTML = '<div class="disc-empty">暂无未配置的本地模型</div>';
+      return;
+    }
+
+    let html = '<div class="disc-models-scroll">';
     for (const fw of fwOrder) {
       const models = groups[fw] || [];
+      if (models.length === 0) continue;
       const meta = fwMeta[fw] || { icon: '\uD83D\uDCE6', label: fw, canDeploy: false };
-      const hasItems = models.length > 0;
-      // Default: open if has items, closed if empty
-      const initOpen = hasItems ? 'open' : '';
+      for (const m of models) {
+        const gb = m.size_mb >= 1024 ? (m.size_mb/1024).toFixed(1)+' GB' : m.size_mb+' MB';
+        const isDeployed = activeNames.has(m.name);
+        const statusCls = isDeployed ? 'deployed' : 'undeployed';
+        const statusLabel = isDeployed ? '已部署' : '未部署';
+        const tagCls = fw === 'vllm' ? 'vllm' : fw === 'ollama' ? 'ollama' : fw === 'ollama_cpp' ? 'ollama_cpp' : fw === 'comfyui' ? 'comfyui' : 'webui';
 
-      html += '<div class="fw-group" data-fw="' + fw + '">';
-      // Header (clickable to toggle)
-      html += '<div class="fw-hdr ' + initOpen + '" onclick="toggleFw(this)">';
-      html += '<span class="fw-chevron">▶</span>';
-      html += '<div class="fw-icon ' + fw + '">' + meta.icon + '</div>';
-      html += '<span class="fw-label">' + meta.label + '</span>';
-      html += '<span class="fw-count">(' + models.length + ')</span>';
-      html += '<span class="fw-deploy-tag ' + (meta.canDeploy ? 'yes' : 'no') + '">' + (meta.canDeploy ? '可部署' : '仅列举') + '</span>';
-      html += '</div>';
-
-      // Body (collapsible)
-      html += '<div class="fw-body ' + initOpen + '">';
-      if (!hasItems) {
-        html += '<div class="fw-empty">暂无未配置模型</div>';
-      } else {
-        for (const m of models) {
-          const gb = m.size_mb >= 1024 ? (m.size_mb/1024).toFixed(1)+' GB' : m.size_mb+' MB';
-          const shortPath = m.path.length > 50 ? '...' + m.path.slice(-47) : m.path;
-          html += '<div class="disc-card">';
-          html += '<div class="disc-info">';
-          html += '<div class="disc-name">' + m.name + '</div>';
-          html += '<div class="disc-meta">' + meta.label + ' · ' + gb + ' · ' + shortPath + '</div>';
-          html += '</div>';
-          if (meta.canDeploy) {
-            html += '<button class="disc-deploy" onclick="event.stopPropagation();doDeploy(\''+m.name+'\',\''+fw+'\')">Deploy</button>';
-          }
-          html += '</div>';
+        html += '<div class="disc-model-card">';
+        html += '<span class="disc-model-name" title="' + m.name + '">' + m.name + '</span>';
+        html += '<span class="disc-model-tag ' + tagCls + '">' + meta.label + '</span>';
+        if (m.size_mb) html += '<span class="disc-model-size">' + gb + '</span>';
+        html += '<span class="disc-model-status ' + statusCls + '">' + statusLabel + '</span>';
+        html += '<div class="disc-model-actions">';
+        if (meta.canDeploy) {
+          html += '<button class="disc-model-btn deploy" onclick="event.stopPropagation();doDeploy(\''+m.name+'\',\''+fw+'\')">Deploy</button>';
+          html += '<button class="disc-model-btn pull" onclick="event.stopPropagation();doPullAndDeploy(\''+m.name+'\',\''+fw+'\')">Pull & Deploy</button>';
         }
+        html += '</div></div>';
       }
-      html += '</div>'; // fw-body
-      html += '</div>'; // fw-group
     }
+    html += '</div>';
     listEl.innerHTML = html;
   } catch(e) { /* ignore */ }
 }
@@ -1174,7 +1312,30 @@ async function doDeploy(name, framework) {
       toast(r.message || '部署失败', 'err');
     }
   } catch(e) { toast(e.message, 'err'); }
-  finally { sw = false; }
+  finally { swUnlock(); }
+  await Promise.all([load(), loadModels(), loadLocalModels()]);
+}
+
+async function doPullAndDeploy(name, framework) {
+  if (!swLock()) return;
+  try {
+    // Try /pull first; if not found, fall back to /deploy
+    const typeMap = { vllm: 'vllm', ollama: 'ollama', ollama_cpp: 'ollama_cpp' };
+    const modelType = typeMap[framework] || framework;
+    let r;
+    try {
+      r = await j('/pull', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:name, framework:framework})});
+    } catch(e) {
+      // /pull not available, fall back to /deploy (pull+deploy merged)
+      r = await j('/deploy', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:name, type:modelType})});
+    }
+    if (r.status === 'switched' || r.status === 'already_active') {
+      toast(name+' Pull & Deploy ✓', 'ok');
+    } else {
+      toast(r.message || '操作失败', 'err');
+    }
+  } catch(e) { toast(e.message, 'err'); }
+  finally { swUnlock(); }
   await Promise.all([load(), loadModels(), loadLocalModels()]);
 }
 
@@ -1190,6 +1351,66 @@ async function doReconcile() {
   const a=r.actions||[];
   toast(a.length===0?'状态一致 ✓':'修复: '+a.join('; '),'ok');
   await Promise.all([load(),loadModels(),loadLocalModels()]);
+}
+
+// ── Deploy Form Toggle ──
+function toggleDeployForm() {
+  const area = document.getElementById('deployFormArea');
+  const btn = document.getElementById('deployFormToggle');
+  const isOpen = area.style.display !== 'none';
+  area.style.display = isOpen ? 'none' : '';
+  btn.textContent = isOpen ? '展开部署表单' : '收起部署表单';
+}
+
+async function submitVllmDeploy(event) {
+  event.preventDefault();
+  if (!swLock()) return false;
+  const form = event.target;
+  const data = {
+    name: form.name.value.trim(),
+    type: 'vllm',
+    model_dir: form.model_dir.value.trim(),
+    gpu_memory_utilization: parseFloat(form.gpu_mem.value),
+    max_context_length: parseInt(form.max_ctx.value, 10),
+    quantization: form.quantization.value,
+    inference_mode: form.inference_mode.value,
+  };
+  if (form.port.value) data.port = parseInt(form.port.value, 10);
+  try {
+    const r = await j('/deploy', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    if (r.status === 'switched' || r.status === 'already_active') {
+      toast('vLLM ['+data.name+'] 已部署 ✓', 'ok');
+    } else {
+      toast(r.message || '部署失败', 'err');
+    }
+  } catch(e) { toast(e.message, 'err'); }
+  finally { swUnlock(); }
+  await Promise.all([load(), loadModels(), loadLocalModels()]);
+  return false;
+}
+
+async function submitOllamaDeploy(event) {
+  event.preventDefault();
+  if (!swLock()) return false;
+  const form = event.target;
+  const data = {
+    name: form.name.value.trim(),
+    type: 'ollama',
+    ollama_ref: form.ollama_ref.value.trim(),
+    gpu_layers: parseInt(form.gpu_layers.value, 10),
+  };
+  if (form.port.value) data.port = parseInt(form.port.value, 10);
+  try {
+    const r = await j('/deploy', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    if (r.status === 'switched' || r.status === 'already_active') {
+      toast('Ollama ['+data.name+'] 已部署 ✓', 'ok');
+    } else {
+      toast(r.message || '部署失败', 'err');
+    }
+  } catch(e) { toast(e.message, 'err'); }
+  finally { swUnlock(); }
+  await Promise.all([load(), loadModels(), loadLocalModels()]);
+  return false;
 }
 
 // ── Usage Chart (P1) ──

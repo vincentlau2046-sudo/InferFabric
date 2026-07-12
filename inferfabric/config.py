@@ -28,10 +28,6 @@ MODEL_BASE = Path.home() / "models"
 CONDA_ENVS = Path.home() / "miniconda3" / "envs"
 COMFYUI_DIR = Path.home() / "ComfyUI"
 
-# Legacy (backward compat)
-DEFAULT_PROFILES = BASE_DIR / "profiles.yaml"
-
-
 # ─── Process Management Constants ────────────────────────────────
 
 STOP_SIGTERM_TIMEOUT = 10       # seconds to wait after SIGTERM before SIGKILL
@@ -176,6 +172,7 @@ class ModelConfig:
     ollama_daemon: Optional[OllamaDaemonConfig] = None
     typical_vram_pct: float = 0.0
     model_type: str = "llm"  # 'llm' | 'vl' | 'omni' | 'aigc' | 'embedding'
+    modality: str = "text"  # 'text' | 'text-vision' | 'multimodal' | 'aigc' | 'embedding'
     quantization: str = ""  # quantization format: 'NVFP4', 'GPTQ-4bit', 'Q8_0', etc.
 
     # Fields excluded from config hash (runtime / non-startup)
@@ -391,6 +388,7 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             typical_vram_pct=float(raw.get("typical_vram_pct", 0)),
             model_type=raw.get("model_type", "llm"),
             quantization=raw.get("quantization", ""),
+            modality=raw.get("modality", "text"),
         )
 
     return result
