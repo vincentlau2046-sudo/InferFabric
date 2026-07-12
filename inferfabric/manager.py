@@ -317,6 +317,7 @@ class ModelManager:
             "sleep_states": sleep_states,
             "gpu_used_mb": gpu_used_mb(),
             "gpu_total_mb": gpu_total_mb(),
+            "gpu_util_pct": gpu_used_mb() / gpu_total_mb() * 100 if gpu_total_mb() > 0 else 0.0,
             "vllm_pid": self._proc.vllm_pid,
             "comfyui_pid": self._proc.comfyui_pid,
         }

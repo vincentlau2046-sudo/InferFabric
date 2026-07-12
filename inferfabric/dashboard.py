@@ -747,6 +747,7 @@ body {
       <div class="usage-toggle">
         <button class="usage-tab" data-w="daily">24h</button>
         <button class="usage-tab active" data-w="weekly">7d</button>
+        <button class="usage-tab" data-w="monthly">1m</button>
         <button class="usage-tab" data-w="all">全部</button>
       </div>
     </div>
@@ -1417,26 +1418,60 @@ async function submitOllamaDeploy(event) {
 // ── Usage Chart (P1) ──
 let usageWindow='weekly';
 async function loadUsage() {
-  try {
-    const rows=await j('/usage?window='+usageWindow);
-    const body=document.getElementById('usageBody');
-    const tot=document.getElementById('usageTotal');
-    if(!rows||!rows.length){ body.innerHTML='<div class="usage-empty">暂无用量数据</div>'; tot.textContent='0 requests'; return; }
-    const maxTok=Math.max(...rows.map(r=>r.total_tokens))||1;
-    const totalReq=rows.reduce((s,r)=>s+r.requests,0);
-    const totalTok=rows.reduce((s,r)=>s+r.total_tokens,0);
-    tot.textContent=totalReq.toLocaleString()+' reqs · '+totalTok.toLocaleString()+' tokens';
-    const altCls=['','alt','alt2','alt3'];
-    body.innerHTML=rows.map((r,i)=>{
-      const pct=(r.total_tokens/maxTok*100).toFixed(1);
-      const cls=altCls[i%altCls.length];
-      return '<div class="usage-bar-wrap">'+
-        '<span class="usage-model-name" title="'+r.model+'">'+r.model+'</span>'+
-        '<div class="usage-bar-track"><div class="usage-bar-f '+cls+'" style="width:'+pct+'%"></div></div>'+
-        '<span class="usage-tok-val">'+r.total_tokens.toLocaleString()+' · '+r.requests+' reqs</span>'+
-      '</div>';
-    }).join('');
-  }catch(e){ /* ignore */ }
+  const stats = window.__TOKEN_STATS__ || {};
+  const body = document.getElementById('usageBody');
+  const tot = document.getElementById('usageTotal');
+  
+  if (!stats || !Object.keys(stats).length) {
+    body.innerHTML = '<div class="usage-empty">暂无用量数据</div>';
+    tot.textContent = '0 requests';
+    return;
+  }
+
+  const now = new Date();
+  const tz = 8; // UTC+8
+  const windowMap = {
+    daily: new Date(now - 24 * 3600 * 1000),
+    weekly: new Date(now - 7 * 24 * 3600 * 1000),
+    monthly: new Date(now - 30 * 24 * 3600 * 1000),
+    all: null
+  };
+  const since = windowMap[usageWindow] || null;
+  const sinceStr = since ? since.toISOString().split('T')[0] : null;
+
+  // Aggregate by model
+  const totals = {};
+  for (const [date, models] of Object.entries(stats)) {
+    if (sinceStr && date < sinceStr) continue;
+    for (const [model, vals] of Object.entries(models)) {
+      if (!totals[model]) totals[model] = { total_tokens: 0, requests: 0 };
+      totals[model].total_tokens += (vals.prompt_tokens || 0) + (vals.generation_tokens || 0);
+      totals[model].requests += (vals.requests || 0);
+    }
+  }
+
+  const rows = Object.entries(totals).map(([m, d]) => ({ model: m, ...d }));
+  if (!rows.length) {
+    body.innerHTML = '<div class="usage-empty">暂无用量数据</div>';
+    tot.textContent = '0 requests';
+    return;
+  }
+
+  const maxTok = Math.max(...rows.map(r => r.total_tokens)) || 1;
+  const totalReq = rows.reduce((s, r) => s + r.requests, 0);
+  const totalTok = rows.reduce((s, r) => s + r.total_tokens, 0);
+  tot.textContent = totalReq.toLocaleString() + ' reqs · ' + totalTok.toLocaleString() + ' tokens';
+
+  const altCls = ['', 'alt', 'alt2', 'alt3'];
+  body.innerHTML = rows.map((r, i) => {
+    const pct = (r.total_tokens / maxTok * 100).toFixed(1);
+    const cls = altCls[i % altCls.length];
+    return '<div class="usage-bar-wrap">' +
+      '<span class="usage-model-name" title="' + r.model + '">' + r.model + '</span>' +
+      '<div class="usage-bar-track"><div class="usage-bar-f ' + cls + '" style="width:' + pct + '%"></div></div>' +
+      '<span class="usage-tok-val">' + r.total_tokens.toLocaleString() + ' · ' + r.requests + ' reqs</span>' +
+    '</div>';
+  }).join('');
 }
 document.addEventListener('click',e=>{
   const t=e.target.closest('.usage-tab');

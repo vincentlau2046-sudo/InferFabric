@@ -30,6 +30,7 @@ from inferfabric.proxy_manager import (
 from inferfabric import forwarder
 from inferfabric.proxy.chat_handlers import handle_chat, handle_ollama_native
 from inferfabric.proxy.metrics import handle_vllm_metrics
+from inferfabric.token_stats import TokenStatsCollector
 
 log = logging.getLogger("inferfabric.proxy")
 
@@ -132,7 +133,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         body = None
         try:
             from inferfabric.dashboard import DASHBOARD_HTML
-            body = DASHBOARD_HTML.encode("utf-8")
+            html = DASHBOARD_HTML
+            # Inject token stats (full raw state, JS filters by window)
+            try:
+                collector = TokenStatsCollector()
+                stats_json = json.dumps(collector._load_full_state())
+                html = html.replace(
+                    '</head>',
+                    '<script>window.__TOKEN_STATS__ = ' + stats_json + ';</script></head>'
+                )
+            except Exception as e:
+                log.warning("Failed to inject token stats: %s", e)
+            body = html.encode("utf-8")
         except ImportError:
             pass
         if body is None:
@@ -523,19 +535,18 @@ def main():
             if not shutdown_event.is_set():
                 mgr.health_check()
 
-    # Startup reconcile: disabled by default to avoid auto-loading models on boot
-    # Set IF_PROXY_AUTO_RECONCILE=1 to enable
-    if os.environ.get("IF_PROXY_AUTO_RECONCILE") == "1":
-        try:
-            rec = mgr.mgr.reconcile()
-            if rec.get("actions"):
-                log.info("Startup reconcile: %s", rec["actions"])
-        except Exception as e:
-            log.warning("Startup reconcile failed: %s", e)
-    else:
-        log.info("Startup reconcile skipped (set IF_PROXY_AUTO_RECONCILE=1 to enable)")
+    try:
+        rec = mgr.mgr.reconcile()
+        if rec.get("actions"):
+            log.info("Startup reconcile: %s", rec["actions"])
+    except Exception as e:
+        log.warning("Startup reconcile failed: %s", e)
 
     threading.Thread(target=health_loop, daemon=True, name="health").start()
+
+    # Start token stats collector (5 min interval)
+    token_collector = TokenStatsCollector(manager_ref=lambda: mgr.mgr, interval=300)
+    token_collector.start()
 
     sd_notify("READY=1")
     log.info("InferFabric Proxy: %s:%d (auto_switch=%s, threaded, v4.0)",

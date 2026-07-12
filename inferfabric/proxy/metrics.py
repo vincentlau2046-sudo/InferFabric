@@ -146,6 +146,12 @@ class VllmMetricsCollector:
             result["seq_generation"] = avg_gen
             result["seq_count"] = total_reqs
 
+        # Token sums for external stats collector
+        if prompt_h and "sum" in prompt_h:
+            result["prompt_tokens_sum"] = int(prompt_h["sum"])
+        if gen_h and "sum" in gen_h:
+            result["generation_tokens_sum"] = int(gen_h["sum"])
+
         # Throughput (EMA)
         gen_key = "vllm:generation_tokens"
         gen_counter = counters.get(gen_key)
