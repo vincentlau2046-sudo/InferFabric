@@ -17,7 +17,7 @@ vllm:
   extra_flags: >-
     --max-num-batched-tokens 8192
     --enable-prefix-caching
-    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 8, 16, 32]}'
+    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 8]}'
     --enable-chunked-prefill
     --async-scheduling
     --enable-auto-tool-choice

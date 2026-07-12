@@ -14,7 +14,7 @@ from typing import Optional
 
 from inferfabric.manager import ModelManager
 from inferfabric.state import GPUMode
-from inferfabric.config import load_aliases
+from inferfabric.config import load_aliases, MODELS_DIR
 
 log = logging.getLogger("inferfabric.proxy_manager")
 
@@ -31,8 +31,8 @@ WATCHDOG_INTERVAL = 20
 class ProxyManager:
     """Manages model switching + request routing (v4.0: model-plugin)."""
 
-    def __init__(self):
-        self.mgr = ModelManager()
+    def __init__(self, mgr: Optional["ModelManager"] = None, models_dir: str | None = None):
+        self.mgr = mgr if mgr is not None else ModelManager(models_dir or str(MODELS_DIR))
         self._aliases = load_aliases()
         self._last_switch = 0.0
         self._cooldown = 10

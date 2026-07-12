@@ -21,6 +21,7 @@ log = logging.getLogger("inferfabric")
 
 BASE_DIR = Path(__file__).parent.parent
 MODELS_DIR = BASE_DIR / "models.d"
+DEFAULT_PROFILES = Path.home() / ".local" / "share" / "inferfabric" / "profiles.yaml"
 DEFAULT_STATE_DB = Path.home() / ".inferfabric" / "state.db"
 DEFAULT_LOG_DIR = Path.home() / ".inferfabric" / "logs"
 GPU_LOCK_PATH = Path("/tmp/inferfabric_gpu.lock")
@@ -57,8 +58,8 @@ class VLLMConfig:
     conda_env: str
     max_model_len: int
     gpu_memory_utilization: float
-    max_num_seqs: int
-    kv_cache_dtype: str
+    max_num_seqs: int = 4
+    kv_cache_dtype: str = "auto"
     speculative_config: Optional[str] = None
     extra_flags: str = ""
     sleep_mode: Optional[SleepModeConfig] = None
@@ -164,6 +165,12 @@ class ModelConfig:
     name: str
     description: str
     gpu_role: str = "exclusive"  # 'exclusive' | 'shared' | 'none'
+
+    @property
+    def mode(self) -> str:
+        """Alias for gpu_role for backward compatibility."""
+        return self.gpu_role
+
     type: str = "vllm"  # 'vllm' | 'comfyui' | 'ollama' | 'ollama_cpp' | 'ollama_daemon'
     vllm: Optional[VLLMConfig] = None
     comfyui: Optional[ComfyUIConfig] = None
@@ -375,10 +382,12 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             if daemon_fields:
                 ollama_daemon_cfg = OllamaDaemonConfig(**daemon_fields)
 
+        # Backward compat: YAML 'mode' → gpu_role
+        mode_val = raw.get("mode", raw.get("gpu_role", "none"))
         result[model_name] = ModelConfig(
             name=model_name,
             description=raw.get("description", model_name),
-            gpu_role=raw.get("gpu_role", "none"),
+            gpu_role=mode_val,
             type=model_type,
             vllm=vllm_cfg,
             comfyui=comfy_cfg,

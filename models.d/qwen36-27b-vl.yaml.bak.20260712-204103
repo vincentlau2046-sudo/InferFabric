@@ -1,12 +1,12 @@
 name: qwen36-27b-vl
-description: "Qwen3.6-27B NVFP4 + MTP + Vision (Huihui abliterated)"
+description: "Qwen3.6-27B Unsloth NVFP4 W4A4 + MTP + Vision"
 gpu_role: exclusive
 model_type: vl
 modality: text-vision
 quantization: NVFP4
 
 vllm:
-  model_dir: Huihui-Qwen3.6-27B-abliterated-NVFP4-MTP
+  model_dir: Unsloth-Qwen3.6-27B-NVFP4
   served_name: vllm_qwen27b_vl
   port: 8003
   conda_env: qwen36-27b-vllm-vl
@@ -18,7 +18,7 @@ vllm:
   extra_flags: >-
     --max-num-batched-tokens 8192
     --enable-prefix-caching
-    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 8, 16, 32]}'
+    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 8]}'
     --enable-chunked-prefill
     --async-scheduling
     --enable-auto-tool-choice

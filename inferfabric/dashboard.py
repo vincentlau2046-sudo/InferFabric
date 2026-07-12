@@ -882,10 +882,11 @@ function swLock() {
   // Cross-tab lock via localStorage (shared across tabs)
   try {
     const key = 'inferfabric_sw_lock';
-    const now = Date.now();
+    const swT=Date.now();
     const stored = localStorage.getItem(key);
-    if (stored && (now - parseInt(stored, 10)) < 30000) return false;
-    localStorage.setItem(key, String(now));
+    if (stored && (swT - parseInt(stored, 10)) < 30000) return false;
+    localStorage.setItem(key, String(swT));
+    sw=true;
     return true;
   } catch(e) { return true; } // localStorage unavailable → allow
 }
@@ -1171,7 +1172,7 @@ async function doRelease(n,isExcl) {
       }
     }
   }catch(e){toast(e.message,'err');}
-  finally{swUnlock();}
+  finally{sw=false;}
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
@@ -1183,7 +1184,7 @@ async function doSleep(n) {
     else if(r.status==='already_sleeping') toast(n+' 已在休眠','info');
     else toast(r.message||'失败','err');
   }catch(e){toast(e.message,'err');}
-  finally{swUnlock();}
+  finally{sw=false;}
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
@@ -1195,7 +1196,7 @@ async function doWake(n) {
     else if(r.status==='already_awake') toast(n+' 未休眠','info');
     else toast(r.message||'失败','err');
   }catch(e){toast(e.message,'err');}
-  finally{swUnlock();}
+  finally{sw=false;}
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
@@ -1208,7 +1209,7 @@ async function doSwitch(n) {
     else if(r.status==='already_active') toast('已在 '+n,'info');
     else toast(r.message||'失败','err');
   }catch(e){toast(e.message,'err');}
-  finally{swUnlock();}
+  finally{sw=false;}
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
@@ -1220,7 +1221,7 @@ async function doStop(n) {
     else if(r.status==='already_stopped') toast(n+' 未运行','info');
     else toast(r.message||'停止失败','err');
   }catch(e){toast(e.message,'err');}
-  finally{swUnlock();}
+  finally{sw=false;}
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
@@ -1312,7 +1313,7 @@ async function doDeploy(name, framework) {
       toast(r.message || '部署失败', 'err');
     }
   } catch(e) { toast(e.message, 'err'); }
-  finally { swUnlock(); }
+  finally { sw=false; }
   await Promise.all([load(), loadModels(), loadLocalModels()]);
 }
 
@@ -1335,7 +1336,7 @@ async function doPullAndDeploy(name, framework) {
       toast(r.message || '操作失败', 'err');
     }
   } catch(e) { toast(e.message, 'err'); }
-  finally { swUnlock(); }
+  finally { sw=false; }
   await Promise.all([load(), loadModels(), loadLocalModels()]);
 }
 
@@ -1384,7 +1385,7 @@ async function submitVllmDeploy(event) {
       toast(r.message || '部署失败', 'err');
     }
   } catch(e) { toast(e.message, 'err'); }
-  finally { swUnlock(); }
+  finally { sw=false; }
   await Promise.all([load(), loadModels(), loadLocalModels()]);
   return false;
 }
@@ -1408,7 +1409,7 @@ async function submitOllamaDeploy(event) {
       toast(r.message || '部署失败', 'err');
     }
   } catch(e) { toast(e.message, 'err'); }
-  finally { swUnlock(); }
+  finally { sw=false; }
   await Promise.all([load(), loadModels(), loadLocalModels()]);
   return false;
 }
