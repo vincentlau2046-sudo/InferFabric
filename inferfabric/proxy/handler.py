@@ -523,12 +523,17 @@ def main():
             if not shutdown_event.is_set():
                 mgr.health_check()
 
-    try:
-        rec = mgr.mgr.reconcile()
-        if rec.get("actions"):
-            log.info("Startup reconcile: %s", rec["actions"])
-    except Exception as e:
-        log.warning("Startup reconcile failed: %s", e)
+    # Startup reconcile: disabled by default to avoid auto-loading models on boot
+    # Set IF_PROXY_AUTO_RECONCILE=1 to enable
+    if os.environ.get("IF_PROXY_AUTO_RECONCILE") == "1":
+        try:
+            rec = mgr.mgr.reconcile()
+            if rec.get("actions"):
+                log.info("Startup reconcile: %s", rec["actions"])
+        except Exception as e:
+            log.warning("Startup reconcile failed: %s", e)
+    else:
+        log.info("Startup reconcile skipped (set IF_PROXY_AUTO_RECONCILE=1 to enable)")
 
     threading.Thread(target=health_loop, daemon=True, name="health").start()
 
