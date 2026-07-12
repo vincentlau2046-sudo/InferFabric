@@ -3,6 +3,7 @@ description: "BGE-M3 Q4_K_M — Ollama.cpp CPU embedding (multi-function, multi-
 type: ollama_cpp
 gpu_role: none
 model_type: embedding
+modality: embedding
 quantization: Q4_K_M
 ollama_cpp:
   model_path: ~/models/gguf/bge-m3-Q4_K_M/bge-m3-Q4_K_M.gguf

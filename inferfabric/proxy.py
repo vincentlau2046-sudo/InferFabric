@@ -278,18 +278,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
 
         model = data.get("model", "vllm_qwen27b")
+        log.debug("Incoming request: model=%s", model)
         stream = data.get("stream", False)
 
-        # Enable Qwen3 thinking/reasoning mode by default (vLLM only)
-        svc_name = pm.model_to_service(model)
-        model_obj = pm.mgr.get_model(svc_name) if svc_name else None
-        if model_obj and model_obj.is_vllm:
-            if "chat_template_kwargs" not in data:
-                data["chat_template_kwargs"] = {}
-            if "enable_thinking" not in data.get("chat_template_kwargs", {}):
-                data["chat_template_kwargs"]["enable_thinking"] = True
-
-        # Dynamic model lookup
+        # Auto-switch
         service_name = pm.model_to_service(model)
         if service_name and AUTO_SWITCH:
             switched = pm.ensure_service(service_name)

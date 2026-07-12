@@ -167,6 +167,9 @@ def cmd_history(args):
     print("-" * 80)
     for i, h in enumerate(history):
         ts = datetime.datetime.fromisoformat(h["timestamp"])
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=datetime.timezone.utc)
+        ts = ts.astimezone()
         dur = f"{h['duration']:.1f}s" if h["duration"] else "-"
         status = h.get("status", "?")
         print(f"{i+1:<4} {h['from']:<20} {h['to']:<20} {dur:<8} {status:<8} {ts.strftime('%Y-%m-%d %H:%M:%S')}")

@@ -3,6 +3,7 @@ description: "Phi-3 Mini 3.8B (Ollama)"
 type: ollama
 gpu_role: shared
 model_type: llm
+modality: text
 quantization: Q4_0
 typical_vram_pct: 4.2
 ollama:

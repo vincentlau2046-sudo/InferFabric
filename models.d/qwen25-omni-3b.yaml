@@ -3,6 +3,7 @@ description: "Qwen2.5 Omni 3B Q8_0 — Ollama.cpp CPU 推理 (Vision-Language)"
 type: ollama_cpp
 gpu_role: none
 model_type: vl
+modality: multimodal
 quantization: Q8_0
 ollama_cpp:
   model_path: ~/models/gguf/Qwen2.5-Omni-3B-Q8_0/Qwen2.5-Omni-3B-Q8_0.gguf

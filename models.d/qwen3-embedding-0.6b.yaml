@@ -3,6 +3,7 @@ description: "Qwen3 Embedding 0.6B Q4_K_M — Ollama.cpp CPU embedding (multilin
 type: ollama_cpp
 gpu_role: none
 model_type: embedding
+modality: embedding
 quantization: Q4_K_M
 ollama_cpp:
   model_path: ~/models/gguf/Qwen3-Embedding-0.6B-Q4_K_M/Qwen3-Embedding-0.6B-Q4_K_M.gguf

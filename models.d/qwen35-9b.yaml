@@ -2,6 +2,7 @@ name: qwen35-9b
 description: "Qwen3.5-9B GPTQ-4bit"
 gpu_role: shared
 model_type: vl
+modality: text-vision
 quantization: GPTQ-4bit
 
 vllm:

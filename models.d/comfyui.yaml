@@ -3,6 +3,7 @@ description: "ComfyUI 图像生成"
 gpu_role: shared
 type: comfyui
 model_type: aigc
+modality: aigc
 typical_vram_pct: 50
 
 conda_env: comfyui
