@@ -14,7 +14,7 @@ from typing import Optional
 
 from inferfabric.manager import ModelManager
 from inferfabric.state import GPUMode
-from inferfabric.config import load_aliases, MODELS_DIR
+from inferfabric.config import MODELS_DIR
 
 log = logging.getLogger("inferfabric.proxy_manager")
 
@@ -33,11 +33,9 @@ class ProxyManager:
 
     def __init__(self, mgr: Optional["ModelManager"] = None, models_dir: str | None = None):
         self.mgr = mgr if mgr is not None else ModelManager(models_dir or str(MODELS_DIR))
-        self._aliases = load_aliases()
         self._last_switch = 0.0
         self._cooldown = 10
         self._switch_lock = threading.Lock()
-        log.info("Loaded %d model aliases: %s", len(self._aliases), list(self._aliases.keys()))
 
     @property
     def current(self) -> str:
@@ -45,16 +43,11 @@ class ProxyManager:
         return self.mgr.current_service
 
     def model_to_service(self, model_name: str):
-        """Map served_model_name to model config name. Resolves aliases first."""
-        resolved = self._aliases.get(model_name, model_name)
-        m = self.mgr.find_model_by_served_name(resolved)
+        """Map served_model_name to model config name."""
+        m = self.mgr.find_model_by_served_name(model_name)
         if m:
-            log.debug("model_to_service: %s → %s (served=%s)", model_name, resolved, m.name)
+            log.debug("model_to_service: %s → %s", model_name, m.name)
             return m.name
-        if resolved != model_name:
-            m2 = self.mgr.find_model_by_served_name(model_name)
-            if m2:
-                return m2.name
         return None
 
     def _wait_healthy(self, target: str, timeout: float = 180) -> bool:
@@ -116,10 +109,7 @@ class ProxyManager:
 
     def get_target_port(self, model_name: str):
         """Get port for a served_model_name."""
-        resolved = self._aliases.get(model_name, model_name)
-        m = self.mgr.find_model_by_served_name(resolved)
-        if not m and resolved != model_name:
-            m = self.mgr.find_model_by_served_name(model_name)
+        m = self.mgr.find_model_by_served_name(model_name)
         return m.port if m else None
 
     def make_conn(self, port: int, timeout: int = 300) -> HTTPConnection:

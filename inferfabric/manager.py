@@ -112,7 +112,7 @@ class ModelManager:
         return self._models.get(name)
 
     def list_models(self) -> list[dict]:
-        """List all available models from models.d/. Skips alias_map and ollama_daemon entries."""
+        """List all available models from models.d/. Skips ollama_daemon entries."""
         def _get_context(m):
             """Get context window in K units."""
             if m.vllm:
@@ -134,7 +134,7 @@ class ModelManager:
                 "context_window": _get_context(m),
             }
             for m in self._models.values()
-            if m.type not in ("alias_map", "ollama_daemon")
+            if m.type != "ollama_daemon"
         ]
 
     def find_model_by_served_name(self, served_name: str) -> Optional[ModelConfig]:
@@ -247,7 +247,7 @@ class ModelManager:
         from_services = list(self.active_services)
         log.info("Switch: %s → %s (gpu_mode: %s → %s)", from_services, target, current_mode, target_mode)
 
-        self.state.set("profile_state", ProfileState.SWITCHING)
+        self.state.set_multi({"profile_state": ProfileState.SWITCHING, "switching_target": target})
 
         try:
             if current_mode == GPUMode.IDLE:
@@ -276,6 +276,7 @@ class ModelManager:
             self.state.add_history(",".join(from_services), target, time.time() - t0, "error")
             return {"status": "error", "message": str(e)}
         finally:
+            self.state.set("switching_target", "")
             self._lock.release()
 
     # ── Status ────────────────────────────────────────────────────

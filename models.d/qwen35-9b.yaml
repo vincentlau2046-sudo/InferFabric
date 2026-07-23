@@ -4,6 +4,7 @@ gpu_role: shared
 model_type: vl
 modality: text-vision
 quantization: GPTQ-4bit
+peak_vram_mb: 14000  # 实测加载峰值 13362MB + 安全边际
 
 vllm:
   model_dir: Qwen3.5-9B-GPTQ-4bit/Qwen3.5-9B-GPTQ-4bit

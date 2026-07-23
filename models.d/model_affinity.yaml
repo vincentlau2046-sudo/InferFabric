@@ -1,0 +1,19 @@
+# Model Affinity — static routing hints for proxy
+# Maps request model names to routing targets when no local model matches.
+# Used by _handle_messages() and handle_chat() to resolve cloud-only models.
+
+# Baidu Qianfan cloud models — always route to Baidu API
+baidu:
+  - "deepseek-v4-flash"
+  - "deepseek-v4-pro"
+  - "glm-5"
+  - "glm-5.1"
+  - "glm-5-plus"
+  - "qianfan-code-latest"
+  - "ernie-4.0"
+  - "ernie-3.5"
+
+# Future: add other cloud providers here
+# ali_cloud:
+#   - "qwen-max"
+#   - "qwen-plus"

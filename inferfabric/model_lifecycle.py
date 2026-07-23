@@ -26,7 +26,6 @@ from .health import (
     check_http_status,
     gpu_used_mb,
     gpu_total_mb,
-    wait_gpu_free,
 )
 from .state import GPUMode, ProfileState, StateDB, validate_transition
 
@@ -126,6 +125,27 @@ class ModelLifecycle:
         if model is None:
             return {"status": "error", "message": f"Model {model_name} not found in YAML after reload"}
 
+        # PR-1: VRAM budget guard — reject if peak would exceed 95% of GPU
+        if model.gpu_role != "none":
+            if model.peak_vram_mb > 0:
+                current_vram = gpu_used_mb()
+                gpu_total = gpu_total_mb()
+                budget = int(gpu_total * 0.95)
+                if current_vram + model.peak_vram_mb > budget:
+                    msg = (f"VRAM budget exceeded: current {current_vram}MB + "
+                           f"peak {model.peak_vram_mb}MB = {current_vram + model.peak_vram_mb}MB "
+                           f"> budget {budget}MB (95% of {gpu_total}MB)")
+                    log.warning(msg)
+                    return {"status": "error", "message": msg}
+            elif model.typical_vram_pct > 0:
+                # Fallback to legacy pct-based check
+                current_pct = self._gpu_state._get_current_vram_pct()
+                if current_pct + model.typical_vram_pct > 95:
+                    msg = (f"VRAM budget exceeded: current ~{current_pct:.0f}% + "
+                           f"~{model.typical_vram_pct}% > 95%")
+                    log.warning(msg)
+                    return {"status": "error", "message": msg}
+
         results = {}
         services_to_start = [model.name]
 
@@ -213,8 +233,22 @@ class ModelLifecycle:
                 "gpu_mode": GPUMode.SHARED,
             }
 
-        # ── VRAM headroom check ──
-        if model.typical_vram_pct > 0:
+        # ── VRAM headroom check (unified with _deploy_model peak_vram_mb guard) ──
+        if model.peak_vram_mb > 0:
+            current_vram = gpu_used_mb()
+            gpu_total = gpu_total_mb()
+            budget = int(gpu_total * 0.95)
+            if current_vram + model.peak_vram_mb > budget:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"VRAM budget exceeded: current {current_vram}MB + "
+                        f"peak {model.peak_vram_mb}MB = {current_vram + model.peak_vram_mb}MB "
+                        f"> budget {budget}MB (95% of {gpu_total}MB)"
+                    ),
+                }
+        elif model.typical_vram_pct > 0:
+            # Fallback to legacy pct-based check for models without peak_vram_mb
             current_pct = self._gpu_state._get_current_vram_pct()
             if current_pct + model.typical_vram_pct > 95:
                 return {
@@ -274,13 +308,17 @@ class ModelLifecycle:
         """Switch from one exclusive model to another (same-port swap).
 
         Stops the currently active exclusive model, clears active_services,
-        then deploys the new one. Reuses the same port so proxy mapping is stable.
+        then deploys the new one. If deployment fails, attempts rollback to the
+        previous model to avoid service interruption.
         """
-        # Stop current active exclusive model
+        # Record old model info for rollback
         current = list(self.state.get_active_services())
+        old_models = {svc: self._models.get(svc) for svc in current}
+
+        # Stop current active exclusive model
         for svc_name in current:
             log.info("Stopping current exclusive service: %s", svc_name)
-            svc_model = self._models.get(svc_name)
+            svc_model = old_models.get(svc_name)
             if svc_model:
                 self._stop_model_process(svc_model, svc_name)
             else:
@@ -290,7 +328,37 @@ class ModelLifecycle:
         self.state.set("active_services", json.dumps([]))
 
         # Deploy the new model
-        return self._deploy_model(model, GPUMode.EXCLUSIVE)
+        result = self._deploy_model(model, GPUMode.EXCLUSIVE)
+
+        # If deployment failed, attempt rollback to old model
+        if result.get("status") not in ("switched", "already_active"):
+            log.warning("Deploy of %s failed, attempting rollback to %s", model.name, list(old_models.keys()))
+            rollback_ok = False
+            rollback_svc = None
+            for svc_name, svc_model in old_models.items():
+                if svc_model and svc_model.gpu_role != "none":
+                    # Reload YAML to get fresh config for rollback
+                    self._models = load_models(self.models_dir)
+                    fresh_model = self._models.get(svc_name)
+                    if fresh_model:
+                        rb = self._deploy_model(fresh_model, fresh_model.gpu_role)
+                        if rb.get("status") == "switched":
+                            rollback_ok = True
+                            rollback_svc = svc_name
+                            log.info("Rollback to %s succeeded", svc_name)
+                            break
+            if rollback_ok:
+                # Clean result — caller gets a coherent rollback-success dict
+                result = {"status": "switched", "model": rollback_svc, "rollback": "succeeded"}
+            else:
+                self.state.set_multi({
+                    "gpu_mode": GPUMode.IDLE,
+                    "profile_state": ProfileState.ERROR,
+                })
+                log.error("Rollback failed — system in ERROR state, no model available")
+                result["rollback"] = "failed"
+
+        return result
 
     def _switch_independent(self, model: ModelConfig) -> dict:
         """Switch to a GPU-independent model — does NOT change the GPU state machine.
@@ -378,9 +446,11 @@ class ModelLifecycle:
                 # type=ollama and ollama_daemon are served by an external daemon —
                 # unregister by dropping them from active_services below.
 
-            if not wait_gpu_free():
+            gpu_idle = self._proc._wait_gpu_idle(timeout=30)
+            if gpu_idle.get("status") not in ("ok", "force"):
                 self._proc.force_kill_all()
-                if not wait_gpu_free(timeout=15):
+                gpu_idle2 = self._proc._wait_gpu_idle(timeout=15)
+                if gpu_idle2.get("status") not in ("ok", "force"):
                     self.state.set("profile_state", ProfileState.ERROR)
                     return {"status": "error", "message": "GPU not freed after force kill"}
 
@@ -436,10 +506,11 @@ class ModelLifecycle:
 
         # Verify GPU actually freed — catch orphaned processes (skip CPU-only models)
         if model.needs_gpu:
-            if not wait_gpu_free(timeout=20):
+            gpu_idle = self._proc._wait_gpu_idle(timeout=20)
+            if gpu_idle.get("status") not in ("ok", "force"):
                 log.warning("GPU not freed after stop %s — force kill remaining processes", name)
                 self._proc.force_kill_all()
-                wait_gpu_free(timeout=15)
+                self._proc._wait_gpu_idle(timeout=15)
 
         # Update active services
         remaining = [s for s in self.state.get_active_services() if s != name]

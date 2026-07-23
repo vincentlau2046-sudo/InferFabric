@@ -157,8 +157,9 @@ class ProcessManager:
 
             time.sleep(VLLM_STARTUP_CHECK_INTERVAL)
 
-        # Wait for vLLM to become healthy
-        healthy = wait_http(f"http://localhost:{cfg.port}/health", timeout=HEALTH_CHECK_TIMEOUT)
+        # Wait for vLLM to become healthy (use model-specific timeout if configured)
+        health_timeout = cfg.startup_timeout if cfg.startup_timeout > 0 else HEALTH_CHECK_TIMEOUT
+        healthy = wait_http(f"http://localhost:{cfg.port}/health", timeout=health_timeout)
         if healthy:
             return {"status": "healthy", "port": cfg.port, "pid": proc.pid}
         else:
@@ -170,7 +171,7 @@ class ProcessManager:
                 return {"status": "error", "message": "vLLM crashed during loading", "log": str(log_file)}
             else:
                 self.stop_vllm()
-                return {"status": "timeout", "message": "vLLM didn't become healthy within 5 minutes"}
+                return {"status": "timeout", "message": f"vLLM didn't become healthy within {health_timeout}s"}
 
     def stop_vllm(self, port: Optional[int] = None) -> dict:
         """Stop vLLM using process group kill. SIGTERM → wait → SIGKILL entire group.

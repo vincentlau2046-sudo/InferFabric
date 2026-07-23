@@ -127,11 +127,11 @@ class StateDB:
             c.execute("INSERT OR IGNORE INTO state VALUES ('sleep_state', '{}')")
             c.commit()
 
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str, default: Optional[str] = None) -> Optional[str]:
         with self._lock:
             c = self._conn()
             row = c.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
-            return row[0] if row else None
+            return row[0] if row else default
 
     def set(self, key: str, value: str):
         with self._lock:

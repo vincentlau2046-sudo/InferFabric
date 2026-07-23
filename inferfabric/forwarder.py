@@ -39,11 +39,16 @@ LOCAL_LLM_TYPES = {"llm", "vl"}
 # ── Response helpers ──
 
 
-def send_json(handler, body_d, status=200):
+def send_json(handler, body_d, status=200, extra_headers=None):
     """Send JSON response with CORS headers."""
     body = json.dumps(body_d, ensure_ascii=False).encode()
     try:
         handler.send_response(status)
+        if extra_headers:
+            for k, v in extra_headers.items():
+                if v is None:
+                    continue
+                handler.send_header(k, str(v))
         handler.send_header("Content-Type", "application/json; charset=utf-8")
         handler.send_header("Content-Length", str(len(body)))
         handler.send_header("Access-Control-Allow-Origin", "*")

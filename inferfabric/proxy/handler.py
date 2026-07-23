@@ -31,6 +31,7 @@ from inferfabric import forwarder
 from inferfabric.proxy.chat_handlers import handle_chat, handle_ollama_native
 from inferfabric.proxy.metrics import handle_vllm_metrics
 from inferfabric.token_stats import TokenStatsCollector
+from inferfabric.watchdog import ModelWatchdog
 
 log = logging.getLogger("inferfabric.proxy")
 
@@ -86,6 +87,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(pm.mgr.state.get_history(limit=30))
             elif path == "/vllm_metrics":
                 self._handle_vllm_metrics(pm)
+            elif path == "/watchdog_status":
+                wd = getattr(self.server, "watchdog", None)
+                if wd:
+                    self._send_json({"fail_counts": wd.fail_counts, "running": wd.running})
+                else:
+                    self._send_json({"error": "watchdog not initialized"}, 503)
             else:
                 self._send_json({"error": "not found"}, 404)
         except (BrokenPipeError, ConnectionResetError):
@@ -174,7 +181,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     # ─── Anthropic Messages handler ───────────────────────────────
 
     def _handle_messages(self, pm):
-        """Handle Anthropic Messages API requests."""
+        """Handle Anthropic Messages API requests with model-name routing.
+
+        Routing priority (PR-2a):
+          1. If profile_state == SWITCHING → 503 + Retry-After
+          2. Parse `model` field → find_model_by_served_name()
+             a. Model is active → route to its port
+             b. Model is not active → fallback to first active LLM (backward compat)
+          3. Model matches model_affinity (e.g. cloud model) → Baidu
+          4. No match → fallback to first active LLM, then Baidu
+        """
         data = self._read_body()
         if data is None:
             return
@@ -188,6 +204,89 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                  len(data.get("tools", [])),
                  len(json.dumps(data)))
 
+        # PR-6e/PR-2b: SWITCHING guard — only 503 if request is NOT for the switching target
+        from inferfabric.state import ProfileState
+        profile_state = pm.mgr.state.get("profile_state", "")
+        if profile_state == ProfileState.SWITCHING:
+            switching_target = pm.mgr.state.get("switching_target") or ""
+            requested_model_early = data.get("model", "")
+            target_early = pm.mgr.find_model_by_served_name(requested_model_early) if requested_model_early else None
+            if target_early and target_early.name == switching_target:
+                # Request is for the switching target → let it proceed (will route once active)
+                log.info("/v1/messages → target %s is switching, proceeding", switching_target)
+            else:
+                # Not the switching target → 503
+                log.info("/v1/messages → 503 (switching to %s, not %s)", switching_target, requested_model_early)
+                self._send_json(
+                    {"error": "Model is switching, please retry", "status": "switching", "retry_after": 30},
+                    503,
+                    extra_headers={"Retry-After": "30"},
+                )
+                return
+
+        # PR-2a: Model-name routing
+        requested_model = data.get("model", "")
+
+        # Step 1: Try to match requested model to a known local model
+        target_model = pm.mgr.find_model_by_served_name(requested_model) if requested_model else None
+
+        if target_model and target_model.port and target_model.name in pm.mgr.active_services:
+            # Requested model is active → route directly
+            log.info("/v1/messages → LOCAL %s (port %d) [matched by model=%s]",
+                     target_model.name, target_model.port, requested_model)
+            self._forward_local(pm, data, auth_header, target_model, original_model)
+            return
+
+        # PR-2b: Auto-switch on demand — if model is known but not active
+        if target_model and target_model.port and target_model.name not in pm.mgr.active_services:
+            from inferfabric.proxy_manager import AUTO_SWITCH
+            if AUTO_SWITCH:
+                log.info("/v1/messages → auto-switch to %s [model=%s not active]",
+                         target_model.name, requested_model)
+                switched = pm.ensure_service(target_model.name)
+                if switched is None:
+                    self._send_json({"error": "switch already in progress", "status": "conflict"}, 409)
+                    return
+                if switched:
+                    # Switch succeeded (ensure_service already verified healthy)
+                    log.info("/v1/messages → LOCAL %s (port %d) [after auto-switch]",
+                             target_model.name, target_model.port)
+                    self._forward_local(pm, data, auth_header, target_model, original_model)
+                    return
+                else:
+                    # Switch failed or model not healthy → 503
+                    log.warning("/v1/messages → 503 auto-switch to %s failed", target_model.name)
+                    self._send_json(
+                        {"error": f"Auto-switch to {target_model.name} failed, retry later",
+                         "status": "switch_failed", "retry_after": 30},
+                        503,
+                        extra_headers={"Retry-After": "30"},
+                    )
+                    return
+            else:
+                log.info("/v1/messages → model %s known but not active, AUTO_SWITCH=off",
+                         target_model.name)
+                self._send_json(
+                    {"error": f"Model {target_model.name} not active, auto-switch disabled",
+                     "status": "not_active", "retry_after": 30},
+                    503,
+                    extra_headers={"Retry-After": "30"},
+                )
+                return
+
+        # Step 2: Check model_affinity for cloud routing
+        if requested_model:
+            from inferfabric.config import load_model_affinity
+            affinity = load_model_affinity()
+            # Strip provider prefix (e.g. "baidu-codingplan/deepseek-v4-flash" → "deepseek-v4-flash")
+            model_short = requested_model.split("/")[-1] if "/" in requested_model else requested_model
+            route_target = affinity.get(model_short) or affinity.get(requested_model)
+            if route_target == "baidu":
+                log.info("/v1/messages → BAIDU [model_affinity: %s → baidu]", requested_model)
+                forwarder.forward_to_baidu(self, data, auth_header, original_model)
+                return
+
+        # Step 3: Fallback to first active LLM (backward compat)
         active_llm = None
         for svc in pm.mgr.active_services:
             model_obj = pm.mgr.get_model(svc)
@@ -197,25 +296,30 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     break
 
         if active_llm:
-            log.info("/v1/messages → LOCAL %s (port %d)", active_llm.name, active_llm.port)
-            model_name = data.get("model", "vllm_qwen27b")
-            from inferfabric.ratelimit import _get_model_rate_limiter
-            limiter = _get_model_rate_limiter(pm, model_name)
-            if not limiter.acquire():
-                self._send_json(
-                    {"error": "vLLM at capacity, try again later", "status": "rate_limit"},
-                    429,
-                )
-                return
-            try:
-                forwarder.forward_anthropic_local(
-                    self, pm, data, auth_header, active_llm, original_model
-                )
-            finally:
-                limiter.release()
+            log.info("/v1/messages → LOCAL %s (port %d) [fallback: no model match for %s]",
+                     active_llm.name, active_llm.port, requested_model or "<empty>")
+            self._forward_local(pm, data, auth_header, active_llm, original_model)
         else:
-            log.info("/v1/messages → BAIDU fallback")
+            log.info("/v1/messages → BAIDU fallback [no active LLM]")
             forwarder.forward_to_baidu(self, data, auth_header, original_model)
+
+    def _forward_local(self, pm, data, auth_header, model_obj, original_model):
+        """Forward request to a local model with rate limiting."""
+        model_name = data.get("model", "vllm_qwen27b")
+        from inferfabric.ratelimit import _get_model_rate_limiter
+        limiter = _get_model_rate_limiter(pm, model_name)
+        if not limiter.acquire():
+            self._send_json(
+                {"error": "vLLM at capacity, try again later", "status": "rate_limit"},
+                429,
+            )
+            return
+        try:
+            forwarder.forward_anthropic_local(
+                self, pm, data, auth_header, model_obj, original_model
+            )
+        finally:
+            limiter.release()
 
     # ─── v1 Models ────────────────────────────────────────────────
 
@@ -331,8 +435,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def _read_body(self):
         return forwarder.read_body(self)
 
-    def _send_json(self, data, status=200):
-        forwarder.send_json(self, data, status)
+    def _send_json(self, data, status=200, extra_headers=None):
+        forwarder.send_json(self, data, status, extra_headers=extra_headers)
 
     def _handle_switch(self, pm):
         data = self._read_body()
@@ -496,8 +600,13 @@ def main():
     mgr = ProxyManager()
     shutdown_event = threading.Event()
 
+    # Start runtime health watchdog
+    watchdog = ModelWatchdog(mgr.mgr, check_interval=30, auto_restart=True)
+    watchdog.start()
+
     server = ThreadedHTTPServer((PROXY_HOST, PROXY_PORT), ProxyHandler)
     server.proxy_mgr = mgr
+    server.watchdog = watchdog
 
     _notify_socket = os.environ.get('NOTIFY_SOCKET')
     _notify_enabled = bool(_notify_socket)
@@ -561,6 +670,7 @@ def main():
         pass
     finally:
         log.info("Closing server...")
+        watchdog.stop()
         try:
             server.server_close()
         except Exception:

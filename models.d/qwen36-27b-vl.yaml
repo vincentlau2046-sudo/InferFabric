@@ -4,6 +4,7 @@ gpu_role: exclusive
 model_type: vl
 modality: text-vision
 quantization: NVFP4
+peak_vram_mb: 30500
 
 vllm:
   model_dir: Huihui-Qwen3.6-27B-abliterated-NVFP4-MTP
@@ -15,6 +16,7 @@ vllm:
   max_num_seqs: 8
   kv_cache_dtype: fp8
   speculative_config: '{"method": "mtp", "num_speculative_tokens": 2}'
+  # prometheus metrics: requires vLLM >= 0.25 (add --prometheus-port 8004 when available)
   extra_flags: >-
     --max-num-batched-tokens 8192
     --enable-prefix-caching
@@ -28,3 +30,4 @@ vllm:
     --attention-backend flashinfer
     --kv-offloading-backend native
     --kv-offloading-size 16
+  startup_timeout: 240

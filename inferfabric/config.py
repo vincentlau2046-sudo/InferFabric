@@ -14,6 +14,7 @@ import yaml
 import hashlib
 import dataclasses
 import logging
+import threading
 
 log = logging.getLogger("inferfabric")
 
@@ -34,7 +35,7 @@ COMFYUI_DIR = Path.home() / "ComfyUI"
 STOP_SIGTERM_TIMEOUT = 10       # seconds to wait after SIGTERM before SIGKILL
 VLLM_STARTUP_CHECK_INTERVAL = 0.5  # seconds between startup checks
 VLLM_STARTUP_CHECK_ROUNDS = 20  # 10 seconds total for immediate-failure detection
-HEALTH_CHECK_TIMEOUT = 300      # 5 minutes for vLLM to become healthy
+HEALTH_CHECK_TIMEOUT = 300      # 5 minutes default for vLLM to become healthy (overridden by model startup_timeout)
 GPU_FREE_TIMEOUT = 30           # seconds to wait for GPU memory release
 GPU_FREE_THRESHOLD_MB = 2048    # MB below which GPU is considered "free"
 
@@ -63,6 +64,7 @@ class VLLMConfig:
     speculative_config: Optional[str] = None
     extra_flags: str = ""
     sleep_mode: Optional[SleepModeConfig] = None
+    startup_timeout: int = 0  # seconds for health check; 0 = use global HEALTH_CHECK_TIMEOUT
 
     def build_cmd(self) -> list[str]:
         """Build vLLM command. JSON args stay as single elements."""
@@ -178,12 +180,13 @@ class ModelConfig:
     ollama_cpp: Optional[OllamaCppConfig] = None
     ollama_daemon: Optional[OllamaDaemonConfig] = None
     typical_vram_pct: float = 0.0
+    peak_vram_mb: int = 0  # measured peak VRAM + safety margin; 0 = unknown/unchecked
     model_type: str = "llm"  # 'llm' | 'vl' | 'omni' | 'aigc' | 'embedding'
     modality: str = "text"  # 'text' | 'text-vision' | 'multimodal' | 'aigc' | 'embedding'
     quantization: str = ""  # quantization format: 'NVFP4', 'GPTQ-4bit', 'Q8_0', etc.
 
     # Fields excluded from config hash (runtime / non-startup)
-    _HASH_EXCLUDE_FIELDS = frozenset({"typical_vram_pct"})
+    _HASH_EXCLUDE_FIELDS = frozenset({"typical_vram_pct", "peak_vram_mb", "startup_timeout"})
 
     def config_hash(self) -> str:
         """Deterministic hash of all config fields that affect startup behavior.
@@ -203,6 +206,9 @@ class ModelConfig:
             # Recurse into nested dataclasses (VLLMConfig, ComfyUIConfig, etc.)
             if dataclasses.is_dataclass(val) and not isinstance(val, type):
                 val = dataclasses.asdict(val)
+                # Exclude runtime-only fields from nested dataclasses
+                for excl in ("startup_timeout",):
+                    val.pop(excl, None)
             payload[f.name] = val
         raw = json.dumps(payload, sort_keys=True, default=str)
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
@@ -303,6 +309,11 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             log.warning("Skipping empty YAML: %s", yaml_file.name)
             continue
 
+        # Skip non-model YAML files (e.g. model_affinity.yaml)
+        if not isinstance(raw, dict) or "name" not in raw:
+            log.debug("Skipping non-model YAML: %s", yaml_file.name)
+            continue
+
         # Validate name matches filename
         if raw.get("name") != model_name:
             raise ValueError(
@@ -325,6 +336,9 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
                     sleep_cfg = SleepModeConfig(**sleep_raw)
             vllm_cfg = VLLMConfig(**vllm_raw)
             vllm_cfg.sleep_mode = sleep_cfg
+            # Parse startup_timeout from vllm section (overrides global)
+            if "startup_timeout" in vllm_raw:
+                vllm_cfg.startup_timeout = int(vllm_raw["startup_timeout"])
 
         # Parse comfyui config if present
         comfy_cfg = None
@@ -395,26 +409,13 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             ollama_cpp=ollama_cpp_cfg,
             ollama_daemon=ollama_daemon_cfg,
             typical_vram_pct=float(raw.get("typical_vram_pct", 0)),
+            peak_vram_mb=int(raw.get("peak_vram_mb", 0)),
             model_type=raw.get("model_type", "llm"),
             quantization=raw.get("quantization", ""),
             modality=raw.get("modality", "text"),
         )
 
     return result
-
-
-# ─── Model Aliases ─────────────────────────────────────────────
-
-def load_aliases(models_dir: Path = MODELS_DIR) -> dict[str, str]:
-    """Load model aliases from models.d/aliases.yaml.
-    Returns dict of alias_name → concrete_model_name."""
-    alias_file = models_dir / "aliases.yaml"
-    if not alias_file.exists():
-        return {}
-    raw = yaml.safe_load(alias_file.read_text())
-    if not raw or "aliases" not in raw:
-        return {}
-    return {k: v for k, v in raw["aliases"].items() if isinstance(v, str)}
 
 
 # ─── Legacy Profile Loading (backward compat, will be removed in Phase 7) ──
@@ -477,3 +478,54 @@ def parse_retry_after_ms(headers: dict) -> float | None:
     except ValueError:
         pass
     return None
+
+
+# ─── Model Affinity (static routing) ──────────────────────────────
+
+def load_model_affinity(models_dir: Path = MODELS_DIR) -> dict[str, str]:
+    """Load model_affinity.yaml → {model_name_pattern: routing_target}.
+
+    Cached with mtime invalidation — called on every request (hot path).
+    Thread-safe: uses module-level lock for cache reads/writes.
+
+    Example YAML:
+      baidu:
+        - "deepseek-v4-flash"
+        - "glm-5"
+
+    Returns: {"deepseek-v4-flash": "baidu", "glm-5": "baidu", ...}
+    """
+    affinity_file = models_dir / "model_affinity.yaml"
+    if not affinity_file.exists():
+        return {}
+
+    # Cache with mtime invalidation (thread-safe)
+    try:
+        current_mtime = affinity_file.stat().st_mtime
+    except OSError:
+        return {}
+
+    with _affinity_lock:
+        if load_model_affinity._cache is not None and load_model_affinity._mtime == current_mtime:
+            return load_model_affinity._cache
+
+    # I/O outside lock
+    raw = yaml.safe_load(affinity_file.read_text())
+    if not raw or not isinstance(raw, dict):
+        result = {}
+    else:
+        result = {}
+        for target, patterns in raw.items():
+            if isinstance(patterns, list):
+                for p in patterns:
+                    result[p] = target
+
+    with _affinity_lock:
+        load_model_affinity._cache = result
+        load_model_affinity._mtime = current_mtime
+    return result
+
+
+_affinity_lock = threading.Lock()
+load_model_affinity._cache = None
+load_model_affinity._mtime = 0.0

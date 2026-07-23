@@ -4,6 +4,7 @@ gpu_role: exclusive
 model_type: vl
 modality: text-vision
 quantization: NVFP4
+peak_vram_mb: 32000
 
 vllm:
   model_dir: Qwen3.6-35B-A3B-NVFP4
@@ -28,3 +29,4 @@ vllm:
     --attention-backend flashinfer
     --kv-offloading-backend native
     --kv-offloading-size 16
+  startup_timeout: 420
