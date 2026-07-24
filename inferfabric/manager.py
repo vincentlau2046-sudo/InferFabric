@@ -264,14 +264,33 @@ class ModelManager:
 
             # Record history
             elapsed = round(time.time() - t0, 1)
-            status = "ok" if result.get("status") in ("switched", "already_active") else "error"
+            result_status = result.get("status")
+            status = "ok" if result_status in ("switched", "already_active") else "error"
             from_label = ",".join(from_services) if from_services else "idle"
             self.state.add_history(from_label, target, elapsed, status)
+
+            # P2-4: Guard against leaked gpu_mode on non-exception failure.
+            if status == "error" and current_mode != GPUMode.IDLE:
+                actual = self.state.gpu_mode
+                if actual == target_mode:
+                    log.warning("Switch failed but gpu_mode leaked as %s — rolling back to %s",
+                                actual, current_mode)
+                    self.state.set("gpu_mode", current_mode)
+
+            # P2-4: Ensure profile_state is reset on non-exception failure
+            # (lifecycle may leave it at SWITCHING if it returned error without setting it).
+            if status == "error":
+                try:
+                    self.state.set("profile_state", ProfileState.ERROR)
+                except Exception:
+                    log.warning("Failed to set profile_state=ERROR after switch failure")
 
             return result
 
         except Exception as e:
             log.exception("Switch failed")
+            # P2-4: Roll back gpu_mode to the pre-switch value.
+            self.state.set("gpu_mode", current_mode)
             self.state.set("profile_state", ProfileState.ERROR)
             self.state.add_history(",".join(from_services), target, time.time() - t0, "error")
             return {"status": "error", "message": str(e)}
@@ -367,6 +386,28 @@ class ModelManager:
         then reloads config and switches.
         """
         return _auto_deploy(name, model_type, self.models_dir, self._models, self.switch)
+
+    def pull_model(self, name: str, framework: str) -> dict:
+        """Pull/download a model before deployment."""
+        import subprocess, re
+        # Validate name format to prevent abuse (allow ollama tags like qwen2.5:7b, library/model:tag)
+        # Disallow path traversal (..) even though subprocess list form prevents shell injection
+        if not re.match(r'^(?!.*\.\.)[\w.\-:/]+$', name):
+            return {"status": "error", "message": f"Invalid model name: {name!r}"}
+        if framework == "ollama":
+            try:
+                result = subprocess.run(["ollama", "pull", name], capture_output=True, text=True, timeout=1800)
+                if result.returncode == 0:
+                    return {"status": "pulled", "message": f"ollama model {name} pulled"}
+                return {"status": "error", "message": result.stderr[:200]}
+            except FileNotFoundError:
+                return {"status": "error", "message": "ollama command not found on PATH"}
+            except subprocess.TimeoutExpired:
+                return {"status": "error", "message": "ollama pull timed out after 1800s"}
+        elif framework in ("vllm", "ollama_cpp"):
+            return {"status": "error", "message": f"{framework} pull not supported yet — download manually"}
+        else:
+            return {"status": "error", "message": f"Unknown framework: {framework}"}
 
 
 # ─── Backward Compatibility ──────────────────────────────────────

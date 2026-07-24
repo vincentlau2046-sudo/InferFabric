@@ -167,6 +167,7 @@ body {
   background:var(--bg-code); border:1.5px solid var(--border);
   border-radius:var(--radius-lg); padding:12px 14px;
   cursor:pointer; transition:all .2s ease;
+  min-height:140px; display:flex; flex-direction:column;
 }
 .model-card:hover { border-color:var(--primary); box-shadow:var(--shadow-md); transform:translateY(-1px); }
 .model-card.active { border-color:var(--green); border-left:3px solid var(--green); background:var(--green-s); }
@@ -783,15 +784,7 @@ body {
 
   <!-- ════════ Tab 3: 模型部署 ════════ -->
   <div class="tab-content" id="tab-deploy">
-    <div class="panel" id="localModels" style="display:none">
-      <div class="panel-hdr" style="padding:6px 12px">
-        <div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(10,132,255,.2);width:22px;height:22px;font-size:11px">📦</div>
-        <span class="panel-title" style="font-size:13px">本地模型发现</span>
-      </div>
-      <div class="panel-content" style="padding:6px 10px" id="localModelsList"></div>
-    </div>
-
-    <!-- Deploy form toggle -->
+    <!-- Deploy form toggle — at top for quick access -->
     <button class="act-btn sec" onclick="toggleDeployForm()" id="deployFormToggle" style="margin-bottom:14px">展开部署表单</button>
     <div id="deployFormArea" style="display:none">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
@@ -873,6 +866,13 @@ body {
           </div>
         </div>
       </div>
+    </div>
+    <div class="panel" id="localModels" style="display:none">
+      <div class="panel-hdr" style="padding:6px 12px">
+        <div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(10,132,255,.2);width:22px;height:22px;font-size:11px">📦</div>
+        <span class="panel-title" style="font-size:13px">本地模型发现</span>
+      </div>
+      <div class="panel-content" style="padding:6px 10px" id="localModelsList"></div>
     </div>
   </div><!-- /tab-deploy -->
 
@@ -1112,7 +1112,7 @@ async function loadModels() {
       btns+='<button class="btn-card start" onclick="event.stopPropagation();doSwitch(\''+m.name+'\')">启动</button>';
     }
 
-    // Specs row: framework + model type + context window + quantization
+    // Specs row: framework + model type + context window + quantization — always 4 slots for alignment
     const fwIcons = { vllm:'🔥', ollama:'🦙', ollama_cpp:'📦', comfyui:'🖼️' };
     const fwLabels = { vllm:'vLLM', ollama:'Ollama', ollama_cpp:'ollama.cpp', comfyui:'ComfyUI' };
     const framework = fwLabels[m.type] || m.type;
@@ -1125,11 +1125,16 @@ async function loadModels() {
     // Legacy model_type → modality mapping for backward compatibility
     const legacyModality = { llm:'text', vl:'text-vision', omni:'multimodal', aigc:'aigc', multimodal:'multimodal' };
     const modality = m.modality ?? legacyModality[m.model_type] ?? 'text';
-    let specs = '<span class="spec-tag">'+fwIcon+' '+framework+'</span>';
-    // Always show modality tag for consistent card layout
-    if(typeIcon[modality]) specs += '<span class="spec-tag">'+typeIcon[modality]+' '+(typeLabel[modality]||modality)+'</span>';
-    if(ctxStr) specs += '<span class="spec-tag">📐 '+ctxStr+'</span>';
-    if(m.quantization) specs += '<span class="spec-tag">⚡ '+m.quantization+'</span>';
+    // Always render 4 spec slots; missing ones get hidden placeholders for alignment
+    const specSlots = [];
+    specSlots.push('<span class="spec-tag">'+fwIcon+' '+framework+'</span>');
+    if(typeIcon[modality]) specSlots.push('<span class="spec-tag">'+typeIcon[modality]+' '+(typeLabel[modality]||modality)+'</span>');
+    else specSlots.push('<span class="spec-tag" style="visibility:hidden">—</span>');
+    if(ctxStr) specSlots.push('<span class="spec-tag">📐 '+ctxStr+'</span>');
+    else specSlots.push('<span class="spec-tag" style="visibility:hidden">—</span>');
+    if(m.quantization) specSlots.push('<span class="spec-tag">⚡ '+m.quantization+'</span>');
+    else specSlots.push('<span class="spec-tag" style="visibility:hidden">—</span>');
+    const specs = specSlots.join('');
 
     return '<div class="'+cls+'" id="sw-'+m.name+'">'+
       '<div class="model-top">'+
@@ -1264,32 +1269,45 @@ async function loadLocalModels() {
       return;
     }
 
-    let html = '<div class="disc-models-scroll">';
+    // Use fw-group/fw-hdr/fw-body collapsible structure (CSS already defined)
+    let html = '';
     for (const fw of fwOrder) {
       const models = groups[fw] || [];
       if (models.length === 0) continue;
       const meta = fwMeta[fw] || { icon: '\uD83D\uDCE6', label: fw, canDeploy: false };
+      const fwIconCls = fw === 'vllm' ? 'vllm' : fw === 'ollama' ? 'ollama' : fw === 'ollama_cpp' ? 'ollama_cpp' : fw === 'comfyui' ? 'comfyui' : 'webui';
+      const deployTag = meta.canDeploy ? '<span class="fw-deploy-tag yes">可部署</span>' : '<span class="fw-deploy-tag no">仅发现</span>';
+
+      html += '<div class="fw-group">';
+      html += '<div class="fw-hdr open" onclick="toggleFw(this)">';
+      html += '<span class="fw-chevron">\u25B6</span>';
+      html += '<span class="fw-icon ' + fwIconCls + '">' + meta.icon + '</span>';
+      html += '<span class="fw-label">' + meta.label + '</span>';
+      html += '<span class="fw-count">(' + models.length + ')</span>';
+      html += deployTag;
+      html += '</div>';
+      html += '<div class="fw-body open">';
       for (const m of models) {
         const gb = m.size_mb >= 1024 ? (m.size_mb/1024).toFixed(1)+' GB' : m.size_mb+' MB';
         const isDeployed = activeNames.has(m.name);
         const statusCls = isDeployed ? 'deployed' : 'undeployed';
         const statusLabel = isDeployed ? '已部署' : '未部署';
-        const tagCls = fw === 'vllm' ? 'vllm' : fw === 'ollama' ? 'ollama' : fw === 'ollama_cpp' ? 'ollama_cpp' : fw === 'comfyui' ? 'comfyui' : 'webui';
 
-        html += '<div class="disc-model-card">';
-        html += '<span class="disc-model-name" title="' + m.name + '">' + m.name + '</span>';
-        html += '<span class="disc-model-tag ' + tagCls + '">' + meta.label + '</span>';
-        if (m.size_mb) html += '<span class="disc-model-size">' + gb + '</span>';
-        html += '<span class="disc-model-status ' + statusCls + '">' + statusLabel + '</span>';
-        html += '<div class="disc-model-actions">';
+        // Simplified card: name + size + Deploy button only
+        html += '<div class="disc-card">';
+        html += '<div class="disc-info">';
+        html += '<div class="disc-name">' + m.name + '</div>';
+        html += '<div class="disc-meta">' + gb + ' · <span class="disc-model-status ' + statusCls + '">' + statusLabel + '</span></div>';
+        html += '</div>';
         if (meta.canDeploy) {
-          html += '<button class="disc-model-btn deploy" onclick="event.stopPropagation();doDeploy(\''+m.name+'\',\''+fw+'\')">Deploy</button>';
-          html += '<button class="disc-model-btn pull" onclick="event.stopPropagation();doPullAndDeploy(\''+m.name+'\',\''+fw+'\')">Pull & Deploy</button>';
+          html += '<button class="disc-deploy" onclick="event.stopPropagation();doDeploy(\''+m.name+'\',\''+fw+'\')">Deploy</button>';
         }
-        html += '</div></div>';
+        html += '</div>';
       }
+      html += '</div>';
+      html += '</div>';
     }
-    html += '</div>';
+
     listEl.innerHTML = html;
   } catch(e) { /* ignore */ }
 }
@@ -1321,20 +1339,20 @@ async function doDeploy(name, framework) {
 async function doPullAndDeploy(name, framework) {
   if (!swLock()) return;
   try {
-    // Try /pull first; if not found, fall back to /deploy
     const typeMap = { vllm: 'vllm', ollama: 'ollama', ollama_cpp: 'ollama_cpp' };
     const modelType = typeMap[framework] || framework;
-    let r;
-    try {
-      r = await j('/pull', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:name, framework:framework})});
-    } catch(e) {
-      // /pull not available, fall back to /deploy (pull+deploy merged)
-      r = await j('/deploy', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:name, type:modelType})});
+    // Phase 1: Pull
+    const pullResult = await j('/pull', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:name, framework:framework})});
+    if (pullResult.status === 'error') {
+      toast(pullResult.message || 'Pull 失败', 'err');
+      return;
     }
-    if (r.status === 'switched' || r.status === 'already_active') {
+    // Phase 2: Deploy (only after successful pull)
+    const deployResult = await j('/deploy', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:name, type:modelType})});
+    if (deployResult.status === 'switched' || deployResult.status === 'already_active') {
       toast(name+' Pull & Deploy ✓', 'ok');
     } else {
-      toast(r.message || '操作失败', 'err');
+      toast(deployResult.message || '部署失败', 'err');
     }
   } catch(e) { toast(e.message, 'err'); }
   finally { sw=false; }

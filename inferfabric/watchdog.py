@@ -83,8 +83,14 @@ class ModelWatchdog:
 
             with self._lock:
                 # Skip if a restart is already in progress for this model
+                # P2-2: Add timeout — if a model stays in _restarting > 120s,
+                # treat as stuck and allow retry.
                 if svc_name in self._restarting:
-                    continue
+                    _restart_deadline = getattr(self, "_restart_started", {}).get(svc_name, 0)
+                    if _restart_deadline and (time.time() - _restart_deadline < 120):
+                        continue
+                    log.warning("Watchdog: restart of %s appears stuck (>120s), retrying", svc_name)
+                    self._restarting.discard(svc_name)
 
             health_url = f"http://localhost:{model.port}/health"
             status = check_http_status(health_url)
@@ -114,28 +120,55 @@ class ModelWatchdog:
     def _restart_model(self, name: str):
         """Attempt to restart a failed model.
 
-        Must reconcile state first — if the model is in active_services but
-        the process is dead, switch() would short-circuit to 'already_active'
-        without actually restarting.
+        P2-2: When invoked from a restart-triggered context, "already_active"
+        from switch() is NOT a success — it means reconcile() failed to clean
+        up a stale entry, or the process was still registered but non-responsive.
+        Only "switched" counts as a successful restart.
         """
         try:
+            with self._lock:
+                if not hasattr(self, "_restart_started"):
+                    self._restart_started = {}
+                self._restart_started[name] = time.time()
             log.info("Watchdog: reconciling before restart of %s", name)
             self._manager.reconcile()  # Clean up dead service entries
             if name not in self._manager.active_services:
                 # Reconcile removed it — now switch will actually deploy
-                log.info("Watchdog: restarting %s (after reconcile)", name)
+                log.info("Watchdog: deploying %s after reconcile", name)
                 result = self._manager.switch(name)
-                if result.get("status") in ("switched", "already_active"):
+                if result.get("status") == "switched":
                     log.info("Watchdog: %s restart succeeded", name)
                     with self._lock:
                         self._fail_counts[name] = 0
                 else:
-                    # Lock held or deploy failed — don't clear fail_counts
-                    # so next _check_all cycle will retry
-                    log.error("Watchdog: %s restart failed: %s", name, result)
+                    # P2-2: "already_active" in restart context = stale entry.
+                    # Do not clear fail count — let the next cycle retry.
+                    if result.get("status") == "already_active":
+                        log.warning(
+                            "Watchdog: %s returned already_active after reconcile — "
+                            "stale entry, will force-clean and retry", name
+                        )
+                        # Stop the process first to avoid orphan / port conflict,
+                        # then remove the stale active_services entry.
+                        try:
+                            self._manager.stop_service(name)
+                        except Exception:
+                            pass
+                        self._manager.state.remove_active_service(name)
+                    else:
+                        log.error("Watchdog: %s restart failed: %s", name, result)
             else:
-                # Still active after reconcile — process might have recovered
-                log.info("Watchdog: %s still active after reconcile, skipping restart", name)
+                # P2-2: Still active after reconcile — could be a zombie.
+                # Stop the process first to avoid orphan, then force-clean state.
+                log.warning(
+                    "Watchdog: %s still in active_services after reconcile — "
+                    "force-stopping and retrying in next cycle", name
+                )
+                try:
+                    self._manager.stop_service(name)
+                except Exception:
+                    pass
+                self._manager.state.remove_active_service(name)
         except Exception as e:
             log.error("Watchdog: %s restart exception: %s", name, e)
         finally:

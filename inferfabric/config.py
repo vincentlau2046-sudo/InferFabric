@@ -22,7 +22,6 @@ log = logging.getLogger("inferfabric")
 
 BASE_DIR = Path(__file__).parent.parent
 MODELS_DIR = BASE_DIR / "models.d"
-DEFAULT_PROFILES = Path.home() / ".local" / "share" / "inferfabric" / "profiles.yaml"
 DEFAULT_STATE_DB = Path.home() / ".inferfabric" / "state.db"
 DEFAULT_LOG_DIR = Path.home() / ".inferfabric" / "logs"
 GPU_LOCK_PATH = Path("/tmp/inferfabric_gpu.lock")
@@ -521,6 +520,9 @@ def load_model_affinity(models_dir: Path = MODELS_DIR) -> dict[str, str]:
                     result[p] = target
 
     with _affinity_lock:
+        # Double-check: another thread may have populated cache during I/O
+        if load_model_affinity._cache is not None and load_model_affinity._mtime == current_mtime:
+            return load_model_affinity._cache
         load_model_affinity._cache = result
         load_model_affinity._mtime = current_mtime
     return result

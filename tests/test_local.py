@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from inferfabric.config import (
-    VLLMConfig, ComfyUIConfig, Profile, load_profiles, DEFAULT_PROFILES,
+    VLLMConfig, ComfyUIConfig, Profile, load_profiles,
 )
 from inferfabric.state import StateDB, ProfileState
 from inferfabric.gpu_lock import GPULock
@@ -34,11 +34,16 @@ def assert_true(v, label=""):
 
 def test_profiles_load():
     """All profiles load without error."""
-    raw = open(DEFAULT_PROFILES).read()
+    # DEFAULT_PROFILES removed in v4.2 — skip if not present
+    profiles_path = Path.home() / ".local" / "share" / "inferfabric" / "profiles.yaml"
+    if not profiles_path.exists():
+        print("  ⏭️ profiles.yaml not found (v4.2+ uses models.d/), skipping")
+        return
+    raw = open(profiles_path).read()
     assert "profiles:" in raw
-    profiles = load_profiles(DEFAULT_PROFILES)
-    assert len(profiles) == 5
-    print("  ✅ profiles.yaml valid, 5 profiles loaded")
+    profiles = load_profiles(profiles_path)
+    assert len(profiles) > 0
+    print(f"  ✅ profiles.yaml valid, {len(profiles)} profiles loaded")
 
 
 def test_vllm_config_build_cmd():

@@ -15,8 +15,7 @@ echo "[$(date '+%H:%M:%S')] Starting recovery..."
 # Step 1: Stop via iff
 echo "[1/6] Stopping via iff..."
 iff reset idle 2>/dev/null || {
-    # Fallback: switch_vllm.sh 已废弃 (removed), switch_comfyui.sh 已废弃
-    # Use iff directly for all operations
+    # Fallback: use iff directly (legacy scripts removed/deprecated)
     iff switch idle 2>/dev/null || true
     iff stop comfyui 2>/dev/null || true
 }

@@ -23,6 +23,11 @@ from http.client import HTTPConnection
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from inferfabric.state import GPUMode
+
+# Admin token for control-plane routes (/switch, /stop, /deploy, /pull, etc.)
+# If set, requests must include X-Admin-Token header matching this value.
+# If not set (default), all control routes are open (localhost-only binding is the security boundary).
+_ADMIN_TOKEN = os.environ.get("IFF_ADMIN_TOKEN", "")
 from inferfabric.proxy_manager import (
     ProxyManager, AUTO_SWITCH, PROXY_HOST, PROXY_PORT,
     HEALTH_CHECK_INTERVAL, WATCHDOG_INTERVAL,
@@ -110,21 +115,31 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             elif path == "/v1/messages":
                 self._handle_messages(pm)
             elif path == "/switch":
+                if not self._check_admin(): return
                 self._handle_switch(pm)
             elif path == "/stop":
+                if not self._check_admin(): return
                 self._handle_stop(pm)
             elif path == "/sleep":
+                if not self._check_admin(): return
                 self._handle_sleep(pm)
             elif path == "/wake":
+                if not self._check_admin(): return
                 self._handle_wake(pm)
             elif path in ("/api/chat", "/api/generate"):
                 self._handle_chat(pm)
             elif path == "/reset":
+                if not self._check_admin(): return
                 self._handle_reset(pm)
             elif path == "/reconcile":
+                if not self._check_admin(): return
                 self._handle_reconcile(pm)
             elif path == "/deploy":
+                if not self._check_admin(): return
                 self._handle_deploy(pm)
+            elif path == "/pull":
+                if not self._check_admin(): return
+                self._handle_pull(pm)
             elif path == "/v1/embeddings":
                 self._handle_embeddings(pm)
             else:
@@ -207,16 +222,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # PR-6e/PR-2b: SWITCHING guard — only 503 if request is NOT for the switching target
         from inferfabric.state import ProfileState
         profile_state = pm.mgr.state.get("profile_state", "")
+        requested_model = data.get("model", "")
         if profile_state == ProfileState.SWITCHING:
             switching_target = pm.mgr.state.get("switching_target") or ""
-            requested_model_early = data.get("model", "")
-            target_early = pm.mgr.find_model_by_served_name(requested_model_early) if requested_model_early else None
-            if target_early and target_early.name == switching_target:
+            target_model = pm.mgr.find_model_by_served_name(requested_model) if requested_model else None
+            if target_model and target_model.name == switching_target:
                 # Request is for the switching target → let it proceed (will route once active)
                 log.info("/v1/messages → target %s is switching, proceeding", switching_target)
             else:
                 # Not the switching target → 503
-                log.info("/v1/messages → 503 (switching to %s, not %s)", switching_target, requested_model_early)
+                log.info("/v1/messages → 503 (switching to %s, not %s)", switching_target, requested_model)
                 self._send_json(
                     {"error": "Model is switching, please retry", "status": "switching", "retry_after": 30},
                     503,
@@ -225,10 +240,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 return
 
         # PR-2a: Model-name routing
-        requested_model = data.get("model", "")
-
-        # Step 1: Try to match requested model to a known local model
-        target_model = pm.mgr.find_model_by_served_name(requested_model) if requested_model else None
+        # (target_model already resolved above if SWITCHING; re-resolve only if not)
+        if profile_state != ProfileState.SWITCHING:
+            target_model = pm.mgr.find_model_by_served_name(requested_model) if requested_model else None
 
         if target_model and target_model.port and target_model.name in pm.mgr.active_services:
             # Requested model is active → route directly
@@ -438,6 +452,19 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def _send_json(self, data, status=200, extra_headers=None):
         forwarder.send_json(self, data, status, extra_headers=extra_headers)
 
+    # ─── Admin Auth ─────────────────────────────────────────────
+
+    def _check_admin(self) -> bool:
+        """Check admin token for control-plane routes.
+        Returns True if allowed, False if denied (401 sent)."""
+        if not _ADMIN_TOKEN:
+            return True  # No token configured → open (localhost-only binding is security)
+        token = self.headers.get("X-Admin-Token", "")
+        if token == _ADMIN_TOKEN:
+            return True
+        self._send_json({"error": "Unauthorized", "status": "unauthorized"}, 401)
+        return False
+
     def _handle_switch(self, pm):
         data = self._read_body()
         if data is None:
@@ -509,6 +536,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": "Missing name"}, 400)
             return
         result = pm.mgr.auto_deploy(name, model_type)
+        self._send_json(result)
+
+    def _handle_pull(self, pm):
+        data = self._read_body()
+        if data is None:
+            return
+        name = data.get("name")
+        framework = data.get("framework", "")
+        if not name:
+            self._send_json({"error": "Missing name"}, 400)
+            return
+        result = pm.mgr.pull_model(name, framework)
         self._send_json(result)
 
     def _handle_embeddings(self, pm):

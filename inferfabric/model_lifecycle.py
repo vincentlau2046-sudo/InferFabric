@@ -435,17 +435,6 @@ class ModelLifecycle:
                 comfyui_port=comfyui_cfg.port if comfyui_cfg else None,
             )
 
-            # ── Stop GPU-independent services (gpu_role == "none") ──
-            # These bypass the GPU state machine but must still be stopped on idle.
-            for svc_name in from_services:
-                m = self._models.get(svc_name)
-                if not m or m.gpu_role != "none":
-                    continue
-                if m.is_ollama_cpp:
-                    self._proc.stop_ollama_cpp(port=m.ollama_cpp.port)
-                # type=ollama and ollama_daemon are served by an external daemon —
-                # unregister by dropping them from active_services below.
-
             gpu_idle = self._proc._wait_gpu_idle(timeout=30)
             if gpu_idle.get("status") not in ("ok", "force"):
                 self._proc.force_kill_all()
@@ -457,7 +446,8 @@ class ModelLifecycle:
             # Update state
             self.state.set_multi({
                 "gpu_mode": GPUMode.IDLE,
-                "active_services": json.dumps([]),
+                "active_services": json.dumps([s for s in from_services
+                                               if (m := self._models.get(s)) and m.is_gpu_none]),
                 "vllm_pid": "",
                 "comfyui_pid": "",
                 "profile_state": ProfileState.IDLE,
