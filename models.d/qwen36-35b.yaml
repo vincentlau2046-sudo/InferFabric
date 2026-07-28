@@ -1,24 +1,24 @@
 name: qwen36-35b
-description: "Qwen3.6-35B A3B MoE NVFP4 + Visual"
+description: "Qwen3.6-35B A3B MoE NVFP4 + MTP (nvidia modelopt)"
 gpu_role: exclusive
 model_type: vl
 modality: text-vision
 quantization: NVFP4
-peak_vram_mb: 27500
+peak_vram_mb: 28000
 
 vllm:
-  model_dir: Qwen3.6-35B-A3B-NVFP4
+  model_dir: Qwen3.6-35B-A3B-NVFP4-nvidia
   served_name: vllm_qwen36_35b
   port: 8001
   conda_env: qwen36-35b-vllm
   max_model_len: 131072
   gpu_memory_utilization: 0.85
-  max_num_seqs: 12
+  max_num_seqs: 4
   kv_cache_dtype: fp8
+  speculative_config: '{"method":"mtp","num_speculative_tokens":3,"moe_backend":"triton"}'
   extra_flags: >-
     --max-num-batched-tokens 8192
     --moe-backend marlin
-    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 8, 16, 32]}'
     --enable-prefix-caching
     --enable-chunked-prefill
     --async-scheduling
@@ -27,9 +27,7 @@ vllm:
     --reasoning-parser qwen3
     --trust-remote-code
     --attention-backend flashinfer
-    --kv-offloading-backend native
-    --kv-offloading-size 16
   extra_env:
     FLASHINFER_DISABLE_VERSION_CHECK: "1"
     VLLM_USE_DEEP_GEMM: "0"
-  startup_timeout: 420
+  startup_timeout: 480
