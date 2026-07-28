@@ -29,4 +29,6 @@ vllm:
     --attention-backend flashinfer
     --kv-offloading-backend native
     --kv-offloading-size 16
+  extra_env:
+    VLLM_USE_DEEP_GEMM: "0"
   startup_timeout: 420

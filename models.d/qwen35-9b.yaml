@@ -28,3 +28,5 @@ vllm:
     --trust-remote-code
     --kv-offloading-backend native
     --kv-offloading-size 8
+  extra_env:
+    VLLM_USE_DEEP_GEMM: "0"
