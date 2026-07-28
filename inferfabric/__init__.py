@@ -1,4 +1,4 @@
-"""InferFabric — Local LLM Model Switcher (v4.5)"""
+"""InferFabric — Local LLM Model Switcher (v4.5.1)"""
 
 from .manager import ModelManager, ProfileManager
 from .state import GPUMode, ServiceState, ProfileState, StateDB, validate_transition
@@ -18,4 +18,4 @@ from .health import (
     check_http_status,
 )
 
-__version__ = "4.5.0"
+__version__ = "4.5.1"
