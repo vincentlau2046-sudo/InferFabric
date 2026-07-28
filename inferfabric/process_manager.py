@@ -33,6 +33,7 @@ from .config import (
     STOP_SIGTERM_TIMEOUT,
     VLLMConfig,
     ComfyUIConfig,
+    ConfigError,
     SleepModeConfig,
 )
 from .state import StateDB
@@ -113,9 +114,9 @@ class ProcessManager:
         # Inject extra_env from model YAML config (highest priority)
         if cfg.extra_env:
             if cfg.sleep_mode and cfg.sleep_mode.enabled and "VLLM_SERVER_DEV_MODE" in cfg.extra_env:
-                log.warning(
-                    "extra_env overrides VLLM_SERVER_DEV_MODE for %s — sleep mode may not work",
-                    cfg.served_name,
+                raise ConfigError(
+                    f"extra_env overrides VLLM_SERVER_DEV_MODE for {cfg.served_name} — "
+                    f"sleep mode will not work. Remove VLLM_SERVER_DEV_MODE from extra_env or disable sleep_mode."
                 )
             for k, v in cfg.extra_env.items():
                 env[k] = v

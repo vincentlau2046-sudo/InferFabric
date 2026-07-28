@@ -24,7 +24,7 @@ class ConfigError(ValueError):
 
 
 # Environment variable keys that extra_env must not override
-_PROTECTED_ENV_KEYS = frozenset({"PATH", "HOME", "CONDA_DEFAULT_ENV"})
+_PROTECTED_ENV_KEYS = frozenset({"PATH", "HOME", "CONDA_DEFAULT_ENV", "CUDA_VISIBLE_DEVICES", "PYTHONPATH", "LD_LIBRARY_PATH"})
 
 # ─── Path Constants ──────────────────────────────────────────────
 
