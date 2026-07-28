@@ -1,21 +1,19 @@
 name: gemma-4-31B-it-NVFP4
-description: "Gemma4-31B IT NVFP4 Dense (auto-deployed)"
+description: "Huihui Gemma4-31B IT Abliterated v2 NVFP4 Dense"
 type: vllm
 gpu_role: exclusive
 modality: text-vision
 quantization: NVFP4
 vllm:
-  model_dir: gemma-4-31B-it-NVFP4
+  model_dir: Huihui-gemma-4-31B-it-abliterated-v2-NVFP4
   served_name: gemma-4-31B-it-NVFP4
   port: 8005
   conda_env: gemma-4-31b
-  gpu_memory_utilization: 0.85
-  max_model_len: 131072
+  gpu_memory_utilization: 0.90
+  max_model_len: 32768
   max_num_seqs: 4
   kv_cache_dtype: fp8
-  speculative_config: '{"model": "gemma-4-31B-it-assistant", "num_speculative_tokens": 7}'
   extra_flags: >-
-    --max-num-batched-tokens 8192
     --enable-prefix-caching
     --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 8]}'
     --enable-chunked-prefill
@@ -24,9 +22,9 @@ vllm:
     --tool-call-parser gemma4
     --reasoning-parser gemma4
     --trust-remote-code
+    --limit-mm-per-prompt '{"image": 2, "audio": 0}'
     --kv-offloading-backend native
     --kv-offloading-size 16
-    --attention-backend flashinfer
   extra_env:
     FLASHINFER_DISABLE_VERSION_CHECK: "1"
     VLLM_USE_DEEP_GEMM: "0"
