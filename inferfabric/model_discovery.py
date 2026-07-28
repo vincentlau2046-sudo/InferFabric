@@ -71,9 +71,7 @@ def discover_local_models(models_dir: Path) -> dict:
                 except Exception:
                     size_mb = 0
                 discovered.append({
-                    "name": scan_dir.name, "path": str(scan_dir),
-                    "type": "vllm", "framework": "vllm", "size_mb": size_mb,
-                    "files": [f.name for f in sorted(scan_dir.iterdir()) if f.is_file()][:20],
+                    "name": scan_dir.name, "type": "vllm", "framework": "vllm", "size_mb": size_mb,
                 })
             gguf_files = list(scan_dir.glob("*.gguf"))
             if gguf_files:
@@ -88,9 +86,7 @@ def discover_local_models(models_dir: Path) -> dict:
                 if not skip:
                     size_mb = sum(f.stat().st_size for f in gguf_files) // (1024 * 1024)
                     discovered.append({
-                        "name": scan_dir.name, "path": str(scan_dir),
-                        "type": "ollama_cpp", "framework": "ollama_cpp", "size_mb": size_mb,
-                        "files": [f.name for f in gguf_files],
+                        "name": scan_dir.name, "type": "ollama_cpp", "framework": "ollama_cpp", "size_mb": size_mb,
                     })
 
     # ── Ollama pulled models (ollama list) ──
@@ -118,9 +114,7 @@ def discover_local_models(models_dir: Path) -> dict:
                             break
                     if model_ref not in configured_ollama_refs:
                         discovered.append({
-                            "name": model_ref, "path": "ollama://" + model_ref,
-                            "type": "ollama", "framework": "ollama", "size_mb": size_mb,
-                            "files": [],
+                            "name": model_ref, "type": "ollama", "framework": "ollama", "size_mb": size_mb,
                         })
     except Exception as e:
         log.debug("discover_local_models scan error: %s", e)
@@ -136,9 +130,7 @@ def discover_local_models(models_dir: Path) -> dict:
                 name = f.stem
                 size_mb = f.stat().st_size // (1024 * 1024)
                 discovered.append({
-                    "name": name, "path": str(f),
-                    "type": f"comfyui_{sub.rstrip('s')}", "framework": "comfyui", "size_mb": size_mb,
-                    "files": [f.name],
+                    "name": name, "type": f"comfyui_{sub.rstrip('s')}", "framework": "comfyui", "size_mb": size_mb,
                 })
 
     return {"discovered": discovered, "configured": configured}
