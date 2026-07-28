@@ -27,7 +27,7 @@ from .health import (
     gpu_used_mb,
     gpu_total_mb,
 )
-from .state import GPUMode, ProfileState, StateDB, validate_transition
+from .state import GPUMode, ServiceState, StateDB, validate_transition
 
 log = logging.getLogger("inferfabric")
 
@@ -164,7 +164,7 @@ class ModelLifecycle:
                 break
 
         if failed:
-            self.state.set("profile_state", ProfileState.ERROR)
+            self.state.set("profile_state", ServiceState.ERROR)
             # Clean up partial start with port-based cleanup
             ports = []
             if model.is_vllm:
@@ -202,7 +202,7 @@ class ModelLifecycle:
         self.state.set_multi({
             "gpu_mode": target_mode,
             "active_services": json.dumps(services_to_start),
-            "profile_state": ProfileState.HEALTHY,
+            "profile_state": ServiceState.HEALTHY,
             **config_hashes,
         })
 
@@ -267,7 +267,7 @@ class ModelLifecycle:
         # Validate
         failed = [k for k, r in results.items() if r.get("status") not in ("healthy", "started", "ok")]
         if failed:
-            self.state.set("profile_state", ProfileState.ERROR)
+            self.state.set("profile_state", ServiceState.ERROR)
             return {"status": "error", "message": f"Failed to start: {failed}", "results": results}
 
         # Update state: add to active services + record config hash
@@ -275,7 +275,7 @@ class ModelLifecycle:
         remaining.append(model.name)
         self.state.set_active_services(remaining)
         self.state.set(f"config_hash:{model.name}", model.config_hash())
-        self.state.set("profile_state", ProfileState.HEALTHY)
+        self.state.set("profile_state", ServiceState.HEALTHY)
 
         elapsed = round(time.time() - t0, 1)
         return {
@@ -353,7 +353,7 @@ class ModelLifecycle:
             else:
                 self.state.set_multi({
                     "gpu_mode": GPUMode.IDLE,
-                    "profile_state": ProfileState.ERROR,
+                    "profile_state": ServiceState.ERROR,
                 })
                 log.error("Rollback failed — system in ERROR state, no model available")
                 result["rollback"] = "failed"
@@ -389,7 +389,7 @@ class ModelLifecycle:
             remaining.append(model.name)
         self.state.set_active_services(remaining)
         self.state.set(f"config_hash:{model.name}", model.config_hash())
-        self.state.set("profile_state", ProfileState.HEALTHY)
+        self.state.set("profile_state", ServiceState.HEALTHY)
 
         elapsed = round(time.time() - t0, 1)
         return {
@@ -440,7 +440,7 @@ class ModelLifecycle:
                 self._proc.force_kill_all()
                 gpu_idle2 = self._proc._wait_gpu_idle(timeout=15)
                 if gpu_idle2.get("status") not in ("ok", "force"):
-                    self.state.set("profile_state", ProfileState.ERROR)
+                    self.state.set("profile_state", ServiceState.ERROR)
                     return {"status": "error", "message": "GPU not freed after force kill"}
 
             # Update state
@@ -450,7 +450,7 @@ class ModelLifecycle:
                                                if (m := self._models.get(s)) and m.is_gpu_none]),
                 "vllm_pid": "",
                 "comfyui_pid": "",
-                "profile_state": ProfileState.IDLE,
+                "profile_state": ServiceState.IDLE,
             })
 
             elapsed = round(time.time() - t0, 1)
@@ -464,7 +464,7 @@ class ModelLifecycle:
                 "stopped": from_services,
             }
         except Exception as e:
-            self.state.set("profile_state", ProfileState.ERROR)
+            self.state.set("profile_state", ServiceState.ERROR)
             return {"status": "error", "message": str(e)}
         finally:
             self._lock.release()
@@ -510,7 +510,7 @@ class ModelLifecycle:
         if not remaining:
             self.state.set_multi({
                 "gpu_mode": GPUMode.IDLE,
-                "profile_state": ProfileState.IDLE,
+                "profile_state": ServiceState.IDLE,
             })
             return {
                 "status": "stopped",
@@ -606,7 +606,7 @@ class ModelLifecycle:
             if model.is_exclusive:
                 self.state.set_multi({
                     "gpu_mode": GPUMode.IDLE,
-                    "profile_state": ProfileState.IDLE,
+                    "profile_state": ServiceState.IDLE,
                 })
 
             log.info("Model '%s' is now sleeping (L2), GPU=%s", name,
@@ -653,7 +653,7 @@ class ModelLifecycle:
             if model.is_exclusive:
                 self.state.set_multi({
                     "gpu_mode": GPUMode.EXCLUSIVE,
-                    "profile_state": ProfileState.HEALTHY,
+                    "profile_state": ServiceState.HEALTHY,
                 })
                 current_services = self.state.get_active_services()
                 if name not in current_services:

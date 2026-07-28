@@ -24,7 +24,7 @@ from .config import (
     ModelConfig,
     load_models,
 )
-from .state import StateDB, ProfileState, GPUMode, validate_transition
+from .state import StateDB, ServiceState, GPUMode, validate_transition
 from .gpu_lock import GPULock
 from .process_manager import ProcessManager
 from .health import (
@@ -244,7 +244,7 @@ class ModelManager:
         from_services = list(self.active_services)
         log.info("Switch: %s → %s (gpu_mode: %s → %s)", from_services, target, current_mode, target_mode)
 
-        self.state.set_multi({"profile_state": ProfileState.SWITCHING, "switching_target": target})
+        self.state.set_multi({"profile_state": ServiceState.SWITCHING, "switching_target": target})
 
         try:
             if current_mode == GPUMode.IDLE:
@@ -278,7 +278,7 @@ class ModelManager:
             # (lifecycle may leave it at SWITCHING if it returned error without setting it).
             if status == "error":
                 try:
-                    self.state.set("profile_state", ProfileState.ERROR)
+                    self.state.set("profile_state", ServiceState.ERROR)
                 except Exception:
                     log.warning("Failed to set profile_state=ERROR after switch failure")
 
@@ -288,7 +288,7 @@ class ModelManager:
             log.exception("Switch failed")
             # P2-4: Roll back gpu_mode to the pre-switch value.
             self.state.set("gpu_mode", current_mode)
-            self.state.set("profile_state", ProfileState.ERROR)
+            self.state.set("profile_state", ServiceState.ERROR)
             self.state.add_history(",".join(from_services), target, time.time() - t0, "error")
             return {"status": "error", "message": str(e)}
         finally:

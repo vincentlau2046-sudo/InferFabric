@@ -1,7 +1,7 @@
 """InferFabric — Local LLM Model Switcher (v4.0)"""
 
 from .manager import ModelManager, ProfileManager
-from .state import GPUMode, ProfileState, StateDB, validate_transition
+from .state import GPUMode, ServiceState, ProfileState, StateDB, validate_transition
 from .gpu_lock import GPULock
 from .process_manager import ProcessManager
 from .config import (

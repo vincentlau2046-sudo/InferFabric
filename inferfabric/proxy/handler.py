@@ -223,10 +223,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                  len(json.dumps(data)))
 
         # PR-6e/PR-2b: SWITCHING guard — only 503 if request is NOT for the switching target
-        from inferfabric.state import ProfileState
+        from inferfabric.state import ServiceState
         profile_state = pm.mgr.state.get("profile_state", "")
         requested_model = data.get("model", "")
-        if profile_state == ProfileState.SWITCHING:
+        if profile_state == ServiceState.SWITCHING:
             switching_target = pm.mgr.state.get("switching_target") or ""
             target_model = pm.mgr.find_model_by_served_name(requested_model) if requested_model else None
             if target_model and target_model.name == switching_target:
@@ -244,7 +244,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         # PR-2a: Model-name routing
         # (target_model already resolved above if SWITCHING; re-resolve only if not)
-        if profile_state != ProfileState.SWITCHING:
+        if profile_state != ServiceState.SWITCHING:
             target_model = pm.mgr.find_model_by_served_name(requested_model) if requested_model else None
 
         if target_model and target_model.port and target_model.name in pm.mgr.active_services:

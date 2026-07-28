@@ -102,7 +102,7 @@ def test_pr8_switching_target_model_resolved_once():
     assert "target_model = pm.mgr.find_model_by_served_name(requested_model)" in content, \
         "Missing target_model resolution before SWITCHING guard"
     # Should not re-resolve when not SWITCHING
-    assert "if profile_state != ProfileState.SWITCHING:" in content, \
+    assert "if profile_state != ServiceState.SWITCHING:" in content, \
         "Missing conditional re-resolve guard"
     print("✅ PR-8: SWITCHING guard target_model resolved once")
 
@@ -148,7 +148,7 @@ def test_pr9_gpu_mode_rollback_on_failure():
     assert 'self.state.set("gpu_mode", current_mode)' in content, \
         "Missing gpu_mode rollback on failure"
     # Should have profile_state reset on non-exception failure
-    assert 'self.state.set("profile_state", ProfileState.ERROR)' in content, \
+    assert 'self.state.set("profile_state", ServiceState.ERROR)' in content, \
         "Missing profile_state reset on non-exception failure"
     print("✅ PR-9: gpu_mode rollback + profile_state reset on failure")
 
