@@ -79,12 +79,10 @@ class ProcessManager:
 
     # ─── vLLM ────────────────────────────────────────────────────
 
-    def start_vllm(self, cfg: VLLMConfig, model_type: str = "") -> dict:
+    def start_vllm(self, cfg: VLLMConfig) -> dict:
         """Start vLLM via conda env's vllm binary. Uses start_new_session for process group isolation.
 
-        ``model_type`` is the parent ``ModelConfig.model_type`` ('llm'/'vl'/...),
-        passed in by the manager so process spawning can apply type-specific env
-        overrides. VLLMConfig itself does not carry this field.
+        Model-specific environment variables are injected from cfg.extra_env (YAML-defined).
         """
         log_file = self._log_dir / f"vllm_{cfg.conda_env}.log"
         pid_file = self._log_dir / f"vllm_{cfg.conda_env}.pid"
@@ -112,10 +110,16 @@ class ProcessManager:
             cmd.append("--enable-sleep-mode")
             log.info("Sleep mode enabled (L2) for %s", cfg.served_name)
 
-        # DeepGemm on Blackwell consumer causes OOM/accuracy issues for NVFP4 VL models
-        if model_type == "vl":
-            env["VLLM_USE_DEEP_GEMM"] = "0"
-            log.info("DeepGemm disabled for VL model %s", cfg.served_name)
+        # Inject extra_env from model YAML config (highest priority)
+        if cfg.extra_env:
+            if cfg.sleep_mode and cfg.sleep_mode.enabled and "VLLM_SERVER_DEV_MODE" in cfg.extra_env:
+                log.warning(
+                    "extra_env overrides VLLM_SERVER_DEV_MODE for %s — sleep mode may not work",
+                    cfg.served_name,
+                )
+            for k, v in cfg.extra_env.items():
+                env[k] = v
+                log.debug("extra_env: %s=%s", k, v)
 
         conda_bin = str(CONDA_ENVS / cfg.conda_env / "bin")
         env["PATH"] = conda_bin + ":" + env.get("PATH", "")

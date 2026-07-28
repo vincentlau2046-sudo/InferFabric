@@ -18,6 +18,14 @@ import threading
 
 log = logging.getLogger("inferfabric")
 
+
+class ConfigError(ValueError):
+    """Raised on invalid model configuration."""
+
+
+# Environment variable keys that extra_env must not override
+_PROTECTED_ENV_KEYS = frozenset({"PATH", "HOME", "CONDA_DEFAULT_ENV"})
+
 # ─── Path Constants ──────────────────────────────────────────────
 
 BASE_DIR = Path(__file__).parent.parent
@@ -64,6 +72,7 @@ class VLLMConfig:
     extra_flags: str = ""
     sleep_mode: Optional[SleepModeConfig] = None
     startup_timeout: int = 0  # seconds for health check; 0 = use global HEALTH_CHECK_TIMEOUT
+    extra_env: dict[str, str] = field(default_factory=dict)  # inject into subprocess env
 
     def build_cmd(self) -> list[str]:
         """Build vLLM command. JSON args stay as single elements."""
@@ -333,7 +342,19 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
                 sleep_raw = vllm_raw.pop("sleep_mode")
                 if sleep_raw and sleep_raw.get("enabled"):
                     sleep_cfg = SleepModeConfig(**sleep_raw)
-            vllm_cfg = VLLMConfig(**vllm_raw)
+            # Extract and validate extra_env before passing to VLLMConfig
+            extra_env = vllm_raw.pop("extra_env", {}) or {}
+            if not isinstance(extra_env, dict):
+                log.warning("extra_env is not a dict in %s, ignoring", model_name)
+                extra_env = {}
+            for k in list(extra_env.keys()):
+                if k in _PROTECTED_ENV_KEYS:
+                    raise ConfigError(
+                        f"extra_env key '{k}' is protected and cannot be overridden "
+                        f"in model '{model_name}'"
+                    )
+                extra_env[k] = str(extra_env[k])
+            vllm_cfg = VLLMConfig(**vllm_raw, extra_env=extra_env)
             vllm_cfg.sleep_mode = sleep_cfg
             # Parse startup_timeout from vllm section (overrides global)
             if "startup_timeout" in vllm_raw:
@@ -426,7 +447,13 @@ def load_profiles(profiles_path: Path) -> dict[str, Profile]:
     for name, cfg in raw.items():
         vllm_cfg = None
         if cfg.get("vllm"):
-            vllm_cfg = VLLMConfig(**cfg["vllm"])
+            vllm_raw = dict(cfg["vllm"])
+            extra_env = vllm_raw.pop("extra_env", {}) or {}
+            if not isinstance(extra_env, dict):
+                extra_env = {}
+            for k in list(extra_env.keys()):
+                extra_env[k] = str(extra_env[k])  # no protected-key check in legacy path
+            vllm_cfg = VLLMConfig(**vllm_raw, extra_env=extra_env)
         comfy_cfg = None
         if cfg.get("comfyui"):
             comfy_cfg = ComfyUIConfig(**cfg["comfyui"])

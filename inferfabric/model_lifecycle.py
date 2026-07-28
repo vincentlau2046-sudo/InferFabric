@@ -61,7 +61,7 @@ class ModelLifecycle:
           {"status": "error"/"timeout", ...} on failure.
         """
         if model.is_vllm:
-            return self._proc.start_vllm(model.vllm, model.model_type)
+            return self._proc.start_vllm(model.vllm)
         elif model.is_comfyui:
             return self._proc.start_comfyui(model.comfyui)
         elif model.is_ollama_daemon:
