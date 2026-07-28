@@ -445,6 +445,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 info["gpu_power_w"] = round(float(vals[2].strip().replace(" ", "")), 1)
         except Exception:
             pass
+        info["version"] = __version__
         return info
 
     # ─── Control helpers ─────────────────────────────────────────

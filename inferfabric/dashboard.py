@@ -593,7 +593,7 @@ body {
       <span class="tag idle" id="sTag"><span class="dot"></span><span id="sTxt">idle</span></span>
     </div>
     <div class="nav-r">
-      <span class="nav-ver">v4.3</span>
+      <span class="nav-ver" id="navVer">v…</span>
       <span class="nav-ts" id="ts">—</span>
     </div>
   </div>
@@ -949,6 +949,9 @@ async function load() {
   document.getElementById('cB').style.width=cp.toFixed(1)+'%';
   const us=sys.uptime_seconds||0;
   document.getElementById('cU').textContent=Math.floor(us/3600)+'h '+Math.floor((us%3600)/60)+'m';
+  // Version from API (PR-17)
+  const ver=sys.version;
+  if(ver){const ve=document.getElementById('navVer');if(ve)ve.textContent='v'+ver;}
 
   // History
   const hBody=document.getElementById('hBody');
