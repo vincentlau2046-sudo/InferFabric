@@ -18,4 +18,4 @@ from .health import (
     check_http_status,
 )
 
-__version__ = "4.5.2"
+__version__ = "4.5.4"

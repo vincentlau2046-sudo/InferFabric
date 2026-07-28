@@ -32,7 +32,7 @@ from inferfabric.proxy_manager import (
     ProxyManager, AUTO_SWITCH, PROXY_HOST, PROXY_PORT,
     HEALTH_CHECK_INTERVAL, WATCHDOG_INTERVAL,
 )
-from inferfabric import forwarder
+from inferfabric import forwarder, __version__
 from inferfabric.proxy.chat_handlers import handle_chat, handle_ollama_native
 from inferfabric.proxy.metrics import handle_vllm_metrics
 from inferfabric.token_stats import TokenStatsCollector
@@ -703,8 +703,8 @@ def main():
     token_collector.start()
 
     sd_notify("READY=1")
-    log.info("InferFabric Proxy: %s:%d (auto_switch=%s, threaded, v4.0)",
-             PROXY_HOST, PROXY_PORT, AUTO_SWITCH)
+    log.info("InferFabric Proxy: %s:%d (auto_switch=%s, threaded, v%s)",
+             PROXY_HOST, PROXY_PORT, AUTO_SWITCH, __version__)
     log.info("Dashboard: http://%s:%d/", PROXY_HOST, PROXY_PORT)
     log.info("GPU mode: %s | Services: %s", mgr.mgr.gpu_mode, mgr.mgr.active_services)
 
