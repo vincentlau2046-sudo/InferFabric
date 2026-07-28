@@ -1,0 +1,28 @@
+name: ovis-ocr2
+description: "OvisOCR2 — 0.8B end-to-end page-level document OCR (Qwen3.5-0.8B based)"
+type: vllm
+gpu_role: shared
+modality: text-vision
+quantization: bf16
+peak_vram_mb: 8000
+
+vllm:
+  model_dir: ATH-MaaS--OvisOCR2/snapshots/master
+  served_name: ovis-ocr2
+  port: 8004
+  conda_env: qw35-9b-vllm
+  gpu_memory_utilization: 0.25
+  max_model_len: 16384
+  max_num_seqs: 2
+  kv_cache_dtype: fp8
+  startup_timeout: 180
+  extra_flags: >-
+    --enable-prefix-caching
+    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2]}'
+    --enable-chunked-prefill
+    --trust-remote-code
+    --limit-mm-per-prompt '{"image": 1}'
+    --max-num-batched-tokens 4096
+  extra_env:
+    FLASHINFER_DISABLE_VERSION_CHECK: "1"
+    VLLM_USE_DEEP_GEMM: "0"
