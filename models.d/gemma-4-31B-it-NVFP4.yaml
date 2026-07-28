@@ -27,3 +27,5 @@ vllm:
     --kv-offloading-backend native
     --kv-offloading-size 16
     --attention-backend flashinfer
+  extra_env:
+    FLASHINFER_DISABLE_VERSION_CHECK: "1"
