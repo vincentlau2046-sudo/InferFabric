@@ -70,7 +70,7 @@ class ModelWatchdog:
     def _check_all(self):
         """Check health of all active models."""
         from .health import check_http_status
-        from .state import ProfileState
+        from .state import ServiceState
 
         active = list(self._manager.active_services)
         if not active:
@@ -115,7 +115,7 @@ class ModelWatchdog:
                         ).start()
                     elif count >= self._fail_threshold_alert:
                         log.warning("Watchdog: %s failed %d times — alerting (profile_state=ERROR)", svc_name, count)
-                        self._manager.state.set("profile_state", ProfileState.ERROR)
+                        self._manager.state.set("profile_state", ServiceState.ERROR)
 
     def _restart_model(self, name: str):
         """Attempt to restart a failed model.

@@ -70,8 +70,8 @@ def validate_transition(from_mode: str, to_mode: str) -> bool:
     return result
 
 
-class ProfileState:
-    """Service health state (kept for backward compat, will rename to ServiceState)."""
+class ServiceState:
+    """Service health state machine."""
     SWITCHING = "switching"
     HEALTHY = "healthy"
     IDLE = "idle"
@@ -80,6 +80,10 @@ class ProfileState:
     @classmethod
     def is_active(cls, state: str) -> bool:
         return state in (cls.SWITCHING, cls.HEALTHY, cls.ERROR)
+
+
+# Backward-compat alias (deprecated, will be removed in v4.4)
+ProfileState = ServiceState
 
 
 # ─── State Manager ─────────────────────────────────────────────────

@@ -71,9 +71,7 @@ def discover_local_models(models_dir: Path) -> dict:
                 except Exception:
                     size_mb = 0
                 discovered.append({
-                    "name": scan_dir.name, "path": str(scan_dir),
-                    "type": "vllm", "framework": "vllm", "size_mb": size_mb,
-                    "files": [f.name for f in sorted(scan_dir.iterdir()) if f.is_file()][:20],
+                    "name": scan_dir.name, "type": "vllm", "framework": "vllm", "size_mb": size_mb,
                 })
             gguf_files = list(scan_dir.glob("*.gguf"))
             if gguf_files:
@@ -88,9 +86,7 @@ def discover_local_models(models_dir: Path) -> dict:
                 if not skip:
                     size_mb = sum(f.stat().st_size for f in gguf_files) // (1024 * 1024)
                     discovered.append({
-                        "name": scan_dir.name, "path": str(scan_dir),
-                        "type": "ollama_cpp", "framework": "ollama_cpp", "size_mb": size_mb,
-                        "files": [f.name for f in gguf_files],
+                        "name": scan_dir.name, "type": "ollama_cpp", "framework": "ollama_cpp", "size_mb": size_mb,
                     })
 
     # ── Ollama pulled models (ollama list) ──
@@ -118,9 +114,7 @@ def discover_local_models(models_dir: Path) -> dict:
                             break
                     if model_ref not in configured_ollama_refs:
                         discovered.append({
-                            "name": model_ref, "path": "ollama://" + model_ref,
-                            "type": "ollama", "framework": "ollama", "size_mb": size_mb,
-                            "files": [],
+                            "name": model_ref, "type": "ollama", "framework": "ollama", "size_mb": size_mb,
                         })
     except Exception as e:
         log.debug("discover_local_models scan error: %s", e)
@@ -136,9 +130,7 @@ def discover_local_models(models_dir: Path) -> dict:
                 name = f.stem
                 size_mb = f.stat().st_size // (1024 * 1024)
                 discovered.append({
-                    "name": name, "path": str(f),
-                    "type": f"comfyui_{sub.rstrip('s')}", "framework": "comfyui", "size_mb": size_mb,
-                    "files": [f.name],
+                    "name": name, "type": f"comfyui_{sub.rstrip('s')}", "framework": "comfyui", "size_mb": size_mb,
                 })
 
     return {"discovered": discovered, "configured": configured}
@@ -159,7 +151,7 @@ def auto_deploy(name: str, model_type: str, models_dir: Path, existing_models: d
     """
     yaml_path = models_dir / f"{name}.yaml"
     if yaml_path.exists():
-        return {"status": "error", "message": f"YAML already exists: {yaml_path}"}
+        return {"status": "already_configured", "message": f"YAML already exists for {name}, running switch"}
 
     # Find next available port
     used_ports = set()
@@ -199,10 +191,18 @@ ollama_cpp:
     else:
         return {"status": "error", "message": f"Unsupported type for auto-deploy: {model_type}"}
 
-    yaml_path.write_text(yaml_content)
-    log.info("Auto-generated YAML: %s", yaml_path)
+    # Atomic write: write to .tmp then rename (POSIX atomic)
+    tmp_path = yaml_path.with_suffix(".yaml.tmp")
+    try:
+        tmp_path.write_text(yaml_content)
+        tmp_path.rename(yaml_path)
+    except Exception as e:
+        # Clean up tmp on failure
+        tmp_path.unlink(missing_ok=True)
+        return {"status": "error", "message": f"Failed to write YAML: {e}"}
+    log.info("Auto-generated YAML (atomic): %s", yaml_path)
 
     # Reload models and switch
     from .config import load_models
-    load_models(models_dir)  # refresh cache
+    load_models(models_dir)  # refresh module-level cache
     return switch_fn(name)

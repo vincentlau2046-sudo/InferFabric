@@ -30,7 +30,7 @@ log = logging.getLogger("inferfabric.cli")
 # Add parent to path for import
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from inferfabric.manager import ModelManager
-from inferfabric.state import GPUMode, ProfileState
+from inferfabric.state import GPUMode, ServiceState
 from inferfabric.health import gpu_used_mb
 
 

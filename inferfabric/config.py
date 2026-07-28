@@ -18,6 +18,14 @@ import threading
 
 log = logging.getLogger("inferfabric")
 
+
+class ConfigError(ValueError):
+    """Raised on invalid model configuration."""
+
+
+# Environment variable keys that extra_env must not override
+_PROTECTED_ENV_KEYS = frozenset({"PATH", "HOME", "CONDA_DEFAULT_ENV", "CUDA_VISIBLE_DEVICES", "PYTHONPATH", "LD_LIBRARY_PATH"})
+
 # ─── Path Constants ──────────────────────────────────────────────
 
 BASE_DIR = Path(__file__).parent.parent
@@ -64,6 +72,7 @@ class VLLMConfig:
     extra_flags: str = ""
     sleep_mode: Optional[SleepModeConfig] = None
     startup_timeout: int = 0  # seconds for health check; 0 = use global HEALTH_CHECK_TIMEOUT
+    extra_env: dict[str, str] = field(default_factory=dict)  # inject into subprocess env
 
     def build_cmd(self) -> list[str]:
         """Build vLLM command. JSON args stay as single elements."""
@@ -277,16 +286,6 @@ class ModelConfig:
 
 # ─── Legacy Profile class (backward compat, will be removed in Phase 7) ──
 
-@dataclass
-class Profile:
-    name: str
-    description: str
-    gpu_owner: str
-    vllm: Optional[VLLMConfig] = None
-    comfyui: Optional[ComfyUIConfig] = None
-    switch_cost_sec: int = 0
-
-
 # ─── Model Loading ───────────────────────────────────────────────
 
 def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
@@ -333,7 +332,19 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
                 sleep_raw = vllm_raw.pop("sleep_mode")
                 if sleep_raw and sleep_raw.get("enabled"):
                     sleep_cfg = SleepModeConfig(**sleep_raw)
-            vllm_cfg = VLLMConfig(**vllm_raw)
+            # Extract and validate extra_env before passing to VLLMConfig
+            extra_env = vllm_raw.pop("extra_env", {}) or {}
+            if not isinstance(extra_env, dict):
+                log.warning("extra_env is not a dict in %s, ignoring", model_name)
+                extra_env = {}
+            for k in list(extra_env.keys()):
+                if k in _PROTECTED_ENV_KEYS:
+                    raise ConfigError(
+                        f"extra_env key '{k}' is protected and cannot be overridden "
+                        f"in model '{model_name}'"
+                    )
+                extra_env[k] = str(extra_env[k])
+            vllm_cfg = VLLMConfig(**vllm_raw, extra_env=extra_env)
             vllm_cfg.sleep_mode = sleep_cfg
             # Parse startup_timeout from vllm section (overrides global)
             if "startup_timeout" in vllm_raw:
@@ -414,30 +425,6 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             modality=raw.get("modality", "text"),
         )
 
-    return result
-
-
-# ─── Legacy Profile Loading (backward compat, will be removed in Phase 7) ──
-
-def load_profiles(profiles_path: Path) -> dict[str, Profile]:
-    """Load profiles from YAML configuration file. (Legacy, will be removed.)"""
-    raw = yaml.safe_load(profiles_path.read_text())["profiles"]
-    result = {}
-    for name, cfg in raw.items():
-        vllm_cfg = None
-        if cfg.get("vllm"):
-            vllm_cfg = VLLMConfig(**cfg["vllm"])
-        comfy_cfg = None
-        if cfg.get("comfyui"):
-            comfy_cfg = ComfyUIConfig(**cfg["comfyui"])
-        result[name] = Profile(
-            name=name,
-            description=cfg.get("description", name),
-            gpu_owner=cfg.get("gpu_owner", "none"),
-            vllm=vllm_cfg,
-            comfyui=comfy_cfg,
-            switch_cost_sec=cfg.get("switch_cost_sec", 0),
-        )
     return result
 
 

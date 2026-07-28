@@ -80,7 +80,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"status": "ok", "gpu_mode": pm.mgr.gpu_mode})
             elif self.path == "/status":
                 self._send_json(pm.mgr.status())
-            elif self.path in ("/models", "/profiles"):
+            elif self.path == "/models":
+                self._send_json(pm.mgr.list_models())
+            elif self.path == "/profiles":
+                log.warning("/profiles endpoint is deprecated, use /models")
                 self._send_json(pm.mgr.list_models())
             elif self.path == "/local-models":
                 self._send_json(pm.mgr.discover_local_models())
@@ -220,10 +223,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                  len(json.dumps(data)))
 
         # PR-6e/PR-2b: SWITCHING guard — only 503 if request is NOT for the switching target
-        from inferfabric.state import ProfileState
+        from inferfabric.state import ServiceState
         profile_state = pm.mgr.state.get("profile_state", "")
         requested_model = data.get("model", "")
-        if profile_state == ProfileState.SWITCHING:
+        if profile_state == ServiceState.SWITCHING:
             switching_target = pm.mgr.state.get("switching_target") or ""
             target_model = pm.mgr.find_model_by_served_name(requested_model) if requested_model else None
             if target_model and target_model.name == switching_target:
@@ -241,7 +244,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         # PR-2a: Model-name routing
         # (target_model already resolved above if SWITCHING; re-resolve only if not)
-        if profile_state != ProfileState.SWITCHING:
+        if profile_state != ServiceState.SWITCHING:
             target_model = pm.mgr.find_model_by_served_name(requested_model) if requested_model else None
 
         if target_model and target_model.port and target_model.name in pm.mgr.active_services:
@@ -536,6 +539,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": "Missing name"}, 400)
             return
         result = pm.mgr.auto_deploy(name, model_type)
+        # already_configured means YAML exists; still attempt switch
+        if result.get("status") == "already_configured":
+            result = pm.mgr.switch(name)
         self._send_json(result)
 
     def _handle_pull(self, pm):

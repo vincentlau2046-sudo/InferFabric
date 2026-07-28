@@ -25,7 +25,7 @@ from .health import (
     gpu_total_mb,
     wait_gpu_free,
 )
-from .state import GPUMode, ProfileState, StateDB
+from .state import GPUMode, ServiceState, StateDB
 
 log = logging.getLogger("inferfabric")
 
@@ -196,12 +196,12 @@ class GpuStateMachine:
 
         # Fix profile_state
         db_profile_state = self.state.get("profile_state") or "idle"
-        if actual_services and db_profile_state != ProfileState.HEALTHY:
+        if actual_services and db_profile_state != ServiceState.HEALTHY:
             actions.append(f"profile_state was '{db_profile_state}', services running → healthy")
-            self.state.set("profile_state", ProfileState.HEALTHY)
-        elif not actual_services and db_gpu_mode == GPUMode.IDLE and db_profile_state != ProfileState.IDLE:
+            self.state.set("profile_state", ServiceState.HEALTHY)
+        elif not actual_services and db_gpu_mode == GPUMode.IDLE and db_profile_state != ServiceState.IDLE:
             actions.append(f"profile_state was '{db_profile_state}', no services → idle")
-            self.state.set("profile_state", ProfileState.IDLE)
+            self.state.set("profile_state", ServiceState.IDLE)
 
         self._detect_orphan_pids(actual_services, actions)
         self._restore_dead_pids(actual_services, actions)
@@ -272,7 +272,7 @@ class GpuStateMachine:
         self.state.set_multi({
             "gpu_mode": GPUMode.IDLE,
             "active_services": json.dumps([]),
-            "profile_state": ProfileState.IDLE,
+            "profile_state": ServiceState.IDLE,
             "vllm_pid": "",
             "comfyui_pid": "",
             "sleep_state": "{}",
