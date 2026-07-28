@@ -4,14 +4,14 @@ gpu_role: exclusive
 model_type: vl
 modality: text-vision
 quantization: NVFP4
-peak_vram_mb: 32000
+peak_vram_mb: 27500
 
 vllm:
   model_dir: Qwen3.6-35B-A3B-NVFP4
   served_name: vllm_qwen36_35b
   port: 8001
   conda_env: qwen36-35b-vllm
-  max_model_len: 204800
+  max_model_len: 131072
   gpu_memory_utilization: 0.85
   max_num_seqs: 12
   kv_cache_dtype: fp8

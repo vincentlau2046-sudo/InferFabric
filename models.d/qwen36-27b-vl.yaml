@@ -4,7 +4,7 @@ gpu_role: exclusive
 model_type: vl
 modality: text-vision
 quantization: NVFP4
-peak_vram_mb: 30500
+peak_vram_mb: 28000
 
 vllm:
   model_dir: Huihui-Qwen3.6-27B-abliterated-NVFP4-MTP
@@ -12,7 +12,7 @@ vllm:
   port: 8003
   conda_env: qwen36-27b-vllm-vl
   max_model_len: 131072
-  gpu_memory_utilization: 0.86
+  gpu_memory_utilization: 0.88
   max_num_seqs: 8
   kv_cache_dtype: fp8
   speculative_config: '{"method": "mtp", "num_speculative_tokens": 2}'

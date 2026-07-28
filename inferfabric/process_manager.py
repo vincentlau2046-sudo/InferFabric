@@ -413,9 +413,12 @@ class ProcessManager:
         pgid = self.comfyui_pid
         if pgid is not None:
             result = self._stop_comfyui_native(pgid)
-        else:
+        elif self._comfyui_process_exists():
             log.warning("No ComfyUI PID tracked, falling back to pkill")
             result = self._pkill_comfyui_fallback()
+        else:
+            log.info("No ComfyUI process running — skip stop")
+            result = {"status": "ok", "message": "not running"}
 
         # Port-based safety net
         if port:
@@ -489,6 +492,17 @@ class ProcessManager:
             return {"status": "ok", "returncode": result.returncode}
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+    def _comfyui_process_exists(self) -> bool:
+        """Check if any ComfyUI process is actually running."""
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", f"python.*{_re.escape(str(COMFYUI_DIR))}"],
+                timeout=3, capture_output=True,
+            )
+            return result.returncode == 0
+        except Exception:
+            return True  # assume exists on error (safe default)
 
     def _pkill_comfyui_fallback(self) -> dict:
         """Fallback: stop ComfyUI via pkill."""

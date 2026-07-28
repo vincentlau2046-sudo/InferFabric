@@ -4,15 +4,18 @@ type: vllm
 gpu_role: exclusive
 modality: text-vision
 quantization: NVFP4
+peak_vram_mb: 30000
+
 vllm:
   model_dir: Huihui-gemma-4-31B-it-abliterated-v2-NVFP4
   served_name: gemma-4-31B-it-NVFP4
   port: 8005
   conda_env: gemma-4-31b
-  gpu_memory_utilization: 0.90
+  gpu_memory_utilization: 0.92
   max_model_len: 32768
   max_num_seqs: 4
   kv_cache_dtype: fp8
+  startup_timeout: 240
   extra_flags: >-
     --enable-prefix-caching
     --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 8]}'

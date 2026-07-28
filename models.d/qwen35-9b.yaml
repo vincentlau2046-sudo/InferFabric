@@ -4,17 +4,18 @@ gpu_role: shared
 model_type: vl
 modality: text-vision
 quantization: GPTQ-4bit
-peak_vram_mb: 14000  # 实测加载峰值 13362MB + 安全边际
+peak_vram_mb: 12500
 
 vllm:
   model_dir: Qwen3.5-9B-GPTQ-4bit/Qwen3.5-9B-GPTQ-4bit
   served_name: vllm_qw35_gptq
   port: 8002
   conda_env: qw35-9b-vllm
-  max_model_len: 131072
+  max_model_len: 65536
   gpu_memory_utilization: 0.40
   max_num_seqs: 4
   kv_cache_dtype: fp8
+  startup_timeout: 240
   extra_flags: >-
     --max-num-batched-tokens 8192
     --quantization gptq_marlin
@@ -29,4 +30,5 @@ vllm:
     --kv-offloading-backend native
     --kv-offloading-size 8
   extra_env:
+    FLASHINFER_DISABLE_VERSION_CHECK: "1"
     VLLM_USE_DEEP_GEMM: "0"
