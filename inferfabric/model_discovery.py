@@ -159,7 +159,7 @@ def auto_deploy(name: str, model_type: str, models_dir: Path, existing_models: d
     """
     yaml_path = models_dir / f"{name}.yaml"
     if yaml_path.exists():
-        return {"status": "error", "message": f"YAML already exists: {yaml_path}"}
+        return {"status": "already_configured", "message": f"YAML already exists for {name}, running switch"}
 
     # Find next available port
     used_ports = set()
@@ -199,10 +199,18 @@ ollama_cpp:
     else:
         return {"status": "error", "message": f"Unsupported type for auto-deploy: {model_type}"}
 
-    yaml_path.write_text(yaml_content)
-    log.info("Auto-generated YAML: %s", yaml_path)
+    # Atomic write: write to .tmp then rename (POSIX atomic)
+    tmp_path = yaml_path.with_suffix(".yaml.tmp")
+    try:
+        tmp_path.write_text(yaml_content)
+        tmp_path.rename(yaml_path)
+    except Exception as e:
+        # Clean up tmp on failure
+        tmp_path.unlink(missing_ok=True)
+        return {"status": "error", "message": f"Failed to write YAML: {e}"}
+    log.info("Auto-generated YAML (atomic): %s", yaml_path)
 
     # Reload models and switch
     from .config import load_models
-    load_models(models_dir)  # refresh cache
+    load_models(models_dir)  # refresh module-level cache
     return switch_fn(name)

@@ -539,6 +539,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": "Missing name"}, 400)
             return
         result = pm.mgr.auto_deploy(name, model_type)
+        # already_configured means YAML exists; still attempt switch
+        if result.get("status") == "already_configured":
+            result = pm.mgr.switch(name)
         self._send_json(result)
 
     def _handle_pull(self, pm):
