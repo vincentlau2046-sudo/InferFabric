@@ -125,22 +125,23 @@ class ModelLifecycle:
         if model is None:
             return {"status": "error", "message": f"Model {model_name} not found in YAML after reload"}
 
-        # PR-1: VRAM budget guard — reject if peak would exceed 95% of GPU
+        # PR-1: VRAM budget guard — reject if peak would exceed 97% of GPU
+        # (95% was too tight: bge-m3 ~480MB + peak_vram_mb leaves <10MB margin)
         if model.gpu_role != "none":
             if model.peak_vram_mb > 0:
                 current_vram = gpu_used_mb()
                 gpu_total = gpu_total_mb()
-                budget = int(gpu_total * 0.95)
+                budget = int(gpu_total * 0.97)
                 if current_vram + model.peak_vram_mb > budget:
                     msg = (f"VRAM budget exceeded: current {current_vram}MB + "
                            f"peak {model.peak_vram_mb}MB = {current_vram + model.peak_vram_mb}MB "
-                           f"> budget {budget}MB (95% of {gpu_total}MB)")
+                           f"> budget {budget}MB (97% of {gpu_total}MB)")
                     log.warning(msg)
                     return {"status": "error", "message": msg}
             elif model.typical_vram_pct > 0:
                 # Fallback to legacy pct-based check
                 current_pct = self._gpu_state._get_current_vram_pct()
-                if current_pct + model.typical_vram_pct > 95:
+                if current_pct + model.typical_vram_pct > 97:
                     msg = (f"VRAM budget exceeded: current ~{current_pct:.0f}% + "
                            f"~{model.typical_vram_pct}% > 95%")
                     log.warning(msg)
@@ -237,20 +238,20 @@ class ModelLifecycle:
         if model.peak_vram_mb > 0:
             current_vram = gpu_used_mb()
             gpu_total = gpu_total_mb()
-            budget = int(gpu_total * 0.95)
+            budget = int(gpu_total * 0.97)
             if current_vram + model.peak_vram_mb > budget:
                 return {
                     "status": "error",
                     "message": (
                         f"VRAM budget exceeded: current {current_vram}MB + "
                         f"peak {model.peak_vram_mb}MB = {current_vram + model.peak_vram_mb}MB "
-                        f"> budget {budget}MB (95% of {gpu_total}MB)"
+                        f"> budget {budget}MB (97% of {gpu_total}MB)"
                     ),
                 }
         elif model.typical_vram_pct > 0:
             # Fallback to legacy pct-based check for models without peak_vram_mb
             current_pct = self._gpu_state._get_current_vram_pct()
-            if current_pct + model.typical_vram_pct > 95:
+            if current_pct + model.typical_vram_pct > 97:
                 return {
                     "status": "error",
                     "message": (
