@@ -80,7 +80,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"status": "ok", "gpu_mode": pm.mgr.gpu_mode})
             elif self.path == "/status":
                 self._send_json(pm.mgr.status())
-            elif self.path in ("/models", "/profiles"):
+            elif self.path == "/models":
+                self._send_json(pm.mgr.list_models())
+            elif self.path == "/profiles":
+                log.warning("/profiles endpoint is deprecated, use /models")
                 self._send_json(pm.mgr.list_models())
             elif self.path == "/local-models":
                 self._send_json(pm.mgr.discover_local_models())

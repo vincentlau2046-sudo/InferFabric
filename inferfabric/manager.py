@@ -23,9 +23,6 @@ from .config import (
     DEFAULT_STATE_DB,
     ModelConfig,
     load_models,
-    # Legacy
-    Profile,
-    load_profiles,
 )
 from .state import StateDB, ProfileState, GPUMode, validate_transition
 from .gpu_lock import GPULock

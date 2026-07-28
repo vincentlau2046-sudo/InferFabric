@@ -286,16 +286,6 @@ class ModelConfig:
 
 # ─── Legacy Profile class (backward compat, will be removed in Phase 7) ──
 
-@dataclass
-class Profile:
-    name: str
-    description: str
-    gpu_owner: str
-    vllm: Optional[VLLMConfig] = None
-    comfyui: Optional[ComfyUIConfig] = None
-    switch_cost_sec: int = 0
-
-
 # ─── Model Loading ───────────────────────────────────────────────
 
 def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
@@ -435,36 +425,6 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             modality=raw.get("modality", "text"),
         )
 
-    return result
-
-
-# ─── Legacy Profile Loading (backward compat, will be removed in Phase 7) ──
-
-def load_profiles(profiles_path: Path) -> dict[str, Profile]:
-    """Load profiles from YAML configuration file. (Legacy, will be removed.)"""
-    raw = yaml.safe_load(profiles_path.read_text())["profiles"]
-    result = {}
-    for name, cfg in raw.items():
-        vllm_cfg = None
-        if cfg.get("vllm"):
-            vllm_raw = dict(cfg["vllm"])
-            extra_env = vllm_raw.pop("extra_env", {}) or {}
-            if not isinstance(extra_env, dict):
-                extra_env = {}
-            for k in list(extra_env.keys()):
-                extra_env[k] = str(extra_env[k])  # no protected-key check in legacy path
-            vllm_cfg = VLLMConfig(**vllm_raw, extra_env=extra_env)
-        comfy_cfg = None
-        if cfg.get("comfyui"):
-            comfy_cfg = ComfyUIConfig(**cfg["comfyui"])
-        result[name] = Profile(
-            name=name,
-            description=cfg.get("description", name),
-            gpu_owner=cfg.get("gpu_owner", "none"),
-            vllm=vllm_cfg,
-            comfyui=comfy_cfg,
-            switch_cost_sec=cfg.get("switch_cost_sec", 0),
-        )
     return result
 
 
