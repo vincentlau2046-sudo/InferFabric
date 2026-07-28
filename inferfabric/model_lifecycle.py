@@ -148,7 +148,12 @@ class ModelLifecycle:
                     return {"status": "error", "message": msg}
 
         results = {}
-        services_to_start = [model.name]
+        # Preserve gpu_role=none services in active_services (PR-18)
+        current_active = self.state.get_active_services()
+        none_services = [s for s in current_active
+                         if s != model.name
+                         and (m := self._models.get(s)) and m.is_gpu_none]
+        services_to_start = [model.name] + none_services
 
         # If shared model, optionally also start ComfyUI
         # V1: shared vLLM models don't auto-start ComfyUI
@@ -316,17 +321,22 @@ class ModelLifecycle:
         current = list(self.state.get_active_services())
         old_models = {svc: self._models.get(svc) for svc in current}
 
-        # Stop current active exclusive model
+        # Stop current active services, but preserve gpu_role=none (PR-18)
+        preserved_none = []
         for svc_name in current:
-            log.info("Stopping current exclusive service: %s", svc_name)
             svc_model = old_models.get(svc_name)
+            if svc_model and svc_model.is_gpu_none:
+                log.info("Preserving gpu_role=none service: %s", svc_name)
+                preserved_none.append(svc_name)
+                continue
+            log.info("Stopping current exclusive service: %s", svc_name)
             if svc_model:
                 self._stop_model_process(svc_model, svc_name)
             else:
                 log.warning("No model config for exclusive service %s, skipping stop", svc_name)
 
-        # Clear active state before deploying new model
-        self.state.set("active_services", json.dumps([]))
+        # Clear GPU-bound services before deploying new model (none services preserved above)
+        self.state.set("active_services", json.dumps(preserved_none))
 
         # Deploy the new model
         result = self._deploy_model(model, GPUMode.EXCLUSIVE)
