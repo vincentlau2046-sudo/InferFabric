@@ -126,7 +126,7 @@ class ModelManager:
                 "type": m.type,
                 "active": self._gpu_state._is_model_actively_running(m),
                 "model_type": getattr(m, "model_type", "llm"),
-                "modality": getattr(m, "modality", "text"),
+                "modality": getattr(m, "resolved_modality", "text"),
                 "quantization": getattr(m, "quantization", ""),
                 "context_window": _get_context(m),
             }

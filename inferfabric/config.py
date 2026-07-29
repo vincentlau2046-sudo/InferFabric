@@ -155,6 +155,19 @@ class PortPool:
     # Future ranges: OLLAMA_CPP_START = 11430, etc.
 
 
+# Modality derived from model_type; used when YAML omits explicit modality.
+MODEL_TYPE_TO_MODALITY = {
+    "llm": "text",
+    "vl": "text-vision",
+    "omni": "multimodal",
+    "ocr": "text-vision",
+    "aigc": "aigc",
+    "embedding": "embedding",
+    "rerank": "rerank",
+    "infra": "infra",
+}
+
+
 @dataclass
 class ModelConfig:
     """A deployable model/service — one per YAML in models.d/.
@@ -169,7 +182,7 @@ class ModelConfig:
       ollama:      OllamaModelConfig if type='ollama'
       ollama_cpp:  OllamaCppConfig if type='ollama_cpp'
       ollama_daemon: OllamaDaemonConfig if type='ollama_daemon'
-      model_type:  'llm' | 'vl' | 'omni' | 'aigc' | 'embedding' — capability classification
+      model_type:  'llm' | 'vl' | 'omni' | 'ocr' | 'aigc' | 'embedding' | 'rerank' | 'infra' — capability classification
       quantization: quantization format string (e.g. 'NVFP4', 'GPTQ-4bit', 'Q8_0')
     """
     name: str
@@ -181,6 +194,13 @@ class ModelConfig:
         """Alias for gpu_role for backward compatibility."""
         return self.gpu_role
 
+    @property
+    def resolved_modality(self) -> str:
+        """Effective modality: explicit value if set, else derived from model_type."""
+        if self.modality:
+            return self.modality
+        return MODEL_TYPE_TO_MODALITY.get(self.model_type, "text")
+
     type: str = "vllm"  # 'vllm' | 'comfyui' | 'ollama' | 'ollama_cpp' | 'ollama_daemon'
     vllm: Optional[VLLMConfig] = None
     comfyui: Optional[ComfyUIConfig] = None
@@ -189,8 +209,8 @@ class ModelConfig:
     ollama_daemon: Optional[OllamaDaemonConfig] = None
     typical_vram_pct: float = 0.0
     peak_vram_mb: int = 0  # measured peak VRAM + safety margin; 0 = unknown/unchecked
-    model_type: str = "llm"  # 'llm' | 'vl' | 'omni' | 'aigc' | 'embedding'
-    modality: str = "text"  # 'text' | 'text-vision' | 'multimodal' | 'aigc' | 'embedding'
+    model_type: str = "llm"  # 'llm' | 'vl' | 'omni' | 'ocr' | 'aigc' | 'embedding' | 'rerank' | 'infra'
+    modality: str = ""  # derived from model_type if empty; 'text' | 'text-vision' | 'multimodal' | 'aigc' | 'embedding' | 'rerank' | 'infra'
     quantization: str = ""  # quantization format: 'NVFP4', 'GPTQ-4bit', 'Q8_0', etc.
 
     # Fields excluded from config hash (runtime / non-startup)
@@ -422,7 +442,7 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             peak_vram_mb=int(raw.get("peak_vram_mb", 0)),
             model_type=raw.get("model_type", "llm"),
             quantization=raw.get("quantization", ""),
-            modality=raw.get("modality", "text"),
+            modality=raw.get("modality", ""),
         )
 
     return result

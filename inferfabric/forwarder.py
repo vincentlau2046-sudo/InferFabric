@@ -33,7 +33,7 @@ BAIDU_TIMEOUT = 60
 
 # ── Local model type filter ──
 
-LOCAL_LLM_TYPES = {"llm", "vl"}
+LOCAL_LLM_TYPES = {"llm", "vl", "omni"}
 
 
 # ── Response helpers ──

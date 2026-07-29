@@ -2,7 +2,7 @@ name: gemma-4-31B-it-NVFP4
 description: "Huihui Gemma4-31B IT Abliterated v2 NVFP4 Dense"
 type: vllm
 gpu_role: exclusive
-modality: text-vision
+model_type: vl
 quantization: NVFP4
 peak_vram_mb: 30000
 

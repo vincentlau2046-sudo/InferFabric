@@ -2,6 +2,7 @@ name: ollama-daemon
 description: "Ollama 守护进程 (基础设施)"
 type: ollama_daemon
 gpu_role: none
+model_type: infra
 ollama_daemon:
   port: 11434
   health_url: http://localhost:11434

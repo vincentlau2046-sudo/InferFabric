@@ -145,6 +145,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._handle_pull(pm)
             elif path == "/v1/embeddings":
                 self._handle_embeddings(pm)
+            elif path == "/v1/rerank":
+                self._handle_rerank(pm)
             else:
                 self._send_json({"error": "not found"}, 404)
         except (BrokenPipeError, ConnectionResetError):
@@ -617,6 +619,70 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._safe_write(resp_body)
         except Exception as e:
             log.error("Embedding request failed: %s", e)
+            self._send_json({"error": "Upstream unavailable", "detail": str(e)}, 503)
+        finally:
+            conn.close()
+
+    def _handle_rerank(self, pm):
+        """Handle /v1/rerank requests — direct port, same pattern as embeddings."""
+        data = self._read_body()
+        if data is None:
+            return
+
+        model_name = data.get("model", "")
+        if not model_name:
+            self._send_json({"error": "model field is required"}, 400)
+            return
+
+        svc_name = pm.model_to_service(model_name)
+        if not svc_name:
+            self._send_json({"error": f"Unknown model: {model_name}"}, 404)
+            return
+
+        model_obj = pm.mgr.get_model(svc_name)
+        if not model_obj or model_obj.model_type != "rerank":
+            self._send_json({"error": f"Model '{model_name}' is not a rerank model"}, 400)
+            return
+
+        port = model_obj.port
+        if not port:
+            self._send_json({"error": f"No port configured for model '{model_name}'"}, 500)
+            return
+
+        # Auto-start if not running
+        if svc_name not in pm.mgr.active_services:
+            log.info("Rerank model %s not running — auto-starting", svc_name)
+            result = pm.mgr.switch(svc_name)
+            if result.get("status") != "switched":
+                msg = result.get("message", "unknown error")
+                log.error("Failed to start rerank model %s: %s", svc_name, msg)
+                self._send_json({"error": f"Failed to start rerank model: {msg}"}, 503)
+                return
+            if not pm._wait_healthy(svc_name, timeout=30):
+                self._send_json({"error": f"Rerank model '{svc_name}' failed health check within 30s"}, 503)
+                return
+        elif not pm._wait_healthy(svc_name, timeout=10):
+            log.warning("Rerank model %s not healthy, attempting restart", svc_name)
+            pm.mgr.stop_independent(svc_name)
+            result = pm.mgr.switch(svc_name)
+            if result.get("status") != "switched" or not pm._wait_healthy(svc_name, timeout=30):
+                self._send_json({"error": f"Rerank model '{svc_name}' failed to restart"}, 503)
+                return
+
+        body = json.dumps(data).encode("utf-8")
+        conn = pm.make_conn(port, timeout=30)
+        try:
+            conn.request("POST", "/v1/rerank", body=body,
+                         headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
+            resp_body = resp.read()
+            self.send_response(resp.status)
+            for k, v in resp.getheaders():
+                self.send_header(k, v)
+            self.end_headers()
+            self._safe_write(resp_body)
+        except Exception as e:
+            log.error("Rerank request failed: %s", e)
             self._send_json({"error": "Upstream unavailable", "detail": str(e)}, 503)
         finally:
             conn.close()

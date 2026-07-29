@@ -1121,13 +1121,12 @@ async function loadModels() {
     const framework = fwLabels[m.type] || m.type;
     const fwIcon = fwIcons[m.type] || '📦';
     const ctxStr = m.context_window ? (m.context_window >= 1024 ? (m.context_window/1024).toFixed(0)+'K ctx' : m.context_window+' ctx') : '';
-    const typeIcon = { text:'🧠', 'text-vision':'👁', multimodal:'🌐', aigc:'✨', embedding:'📊' };
-    const typeLabel = { text:'LLM', 'text-vision':'VL', multimodal:'Omni', aigc:'AIGC', embedding:'Embedding' };
+    const typeIcon = { text:'🧠', 'text-vision':'👁', multimodal:'🌐', aigc:'✨', embedding:'📊', rerank:'🔄', infra:'⚙️' };
+    const typeLabel = { text:'LLM', 'text-vision':'VL', multimodal:'Omni', aigc:'AIGC', embedding:'Embedding', rerank:'Rerank', infra:'Infra' };
     // badge 文案：modeBadge 取值 excl/shrd/free，对应独占/共享/空闲
     const modeLabel = { excl:'独占', shrd:'共享', free:'空闲' };
-    // Legacy model_type → modality mapping for backward compatibility
-    const legacyModality = { llm:'text', vl:'text-vision', omni:'multimodal', aigc:'aigc', multimodal:'multimodal' };
-    const modality = m.modality ?? legacyModality[m.model_type] ?? 'text';
+    // modality is now derived from model_type in config.py; use it directly
+    const modality = m.modality || 'text';
     // Always render 4 spec slots; missing ones get hidden placeholders for alignment
     const specSlots = [];
     specSlots.push('<span class="spec-tag">'+fwIcon+' '+framework+'</span>');
