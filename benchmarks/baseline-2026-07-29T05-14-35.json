@@ -1,0 +1,224 @@
+{
+  "timestamp": "2026-07-29T05-14-35",
+  "git_commit": "a5dcc03",
+  "gpu": "NVIDIA GeForce RTX 5090 D, 32607 MiB",
+  "models": [
+    {
+      "name": "bge-m3",
+      "model_type": "embedding",
+      "gpu_role": "none",
+      "framework": "ollama_cpp",
+      "port": 11441,
+      "max_model_len": 8192,
+      "max_num_seqs": 1,
+      "gpu_memory_utilization": 0,
+      "quantization": "Q4_K_M"
+    },
+    {
+      "name": "gemma-4-31B-it-NVFP4",
+      "model_type": "vl",
+      "gpu_role": "exclusive",
+      "framework": "vllm",
+      "port": 8005,
+      "max_model_len": 131072,
+      "max_num_seqs": 4,
+      "gpu_memory_utilization": 0.92,
+      "quantization": "NVFP4"
+    },
+    {
+      "name": "ovis-ocr2",
+      "model_type": "ocr",
+      "gpu_role": "shared",
+      "framework": "vllm",
+      "port": 8004,
+      "max_model_len": 16384,
+      "max_num_seqs": 2,
+      "gpu_memory_utilization": 0.25,
+      "quantization": "bf16"
+    },
+    {
+      "name": "qwen25-omni-3b",
+      "model_type": "omni",
+      "gpu_role": "none",
+      "framework": "ollama_cpp",
+      "port": 11436,
+      "max_model_len": 32768,
+      "max_num_seqs": 1,
+      "gpu_memory_utilization": 0,
+      "quantization": "Q8_0"
+    },
+    {
+      "name": "qwen3-embedding-0.6b",
+      "model_type": "embedding",
+      "gpu_role": "none",
+      "framework": "ollama_cpp",
+      "port": 11440,
+      "max_model_len": 8192,
+      "max_num_seqs": 1,
+      "gpu_memory_utilization": 0,
+      "quantization": "Q4_K_M"
+    },
+    {
+      "name": "qwen35-9b",
+      "model_type": "vl",
+      "gpu_role": "shared",
+      "framework": "",
+      "port": 8002,
+      "max_model_len": 65536,
+      "max_num_seqs": 4,
+      "gpu_memory_utilization": 0.4,
+      "quantization": "GPTQ-4bit"
+    },
+    {
+      "name": "qwen36-27b-vl",
+      "model_type": "vl",
+      "gpu_role": "exclusive",
+      "framework": "",
+      "port": 8003,
+      "max_model_len": 131072,
+      "max_num_seqs": 8,
+      "gpu_memory_utilization": 0.88,
+      "quantization": "NVFP4"
+    },
+    {
+      "name": "qwen36-35b",
+      "model_type": "vl",
+      "gpu_role": "exclusive",
+      "framework": "",
+      "port": 8001,
+      "max_model_len": 131072,
+      "max_num_seqs": 4,
+      "gpu_memory_utilization": 0.85,
+      "quantization": "NVFP4"
+    }
+  ],
+  "chat_results": [],
+  "embedding_results": [
+    {
+      "model": "bge-m3",
+      "input_tokens": 81,
+      "run": 0,
+      "e2e_ms": 516.9,
+      "dim": 0
+    },
+    {
+      "model": "bge-m3",
+      "input_tokens": 81,
+      "run": 1,
+      "e2e_ms": 511.4,
+      "dim": 0
+    },
+    {
+      "model": "bge-m3",
+      "input_tokens": 81,
+      "run": 2,
+      "e2e_ms": 507.4,
+      "dim": 0
+    },
+    {
+      "model": "bge-m3",
+      "input_tokens": 409,
+      "run": 0,
+      "e2e_ms": 511.4,
+      "dim": 0
+    },
+    {
+      "model": "bge-m3",
+      "input_tokens": 409,
+      "run": 1,
+      "e2e_ms": 511.5,
+      "dim": 0
+    },
+    {
+      "model": "bge-m3",
+      "input_tokens": 409,
+      "run": 2,
+      "e2e_ms": 511.5,
+      "dim": 0
+    },
+    {
+      "model": "bge-m3",
+      "input_tokens": 819,
+      "run": 0,
+      "e2e_ms": 511.0,
+      "dim": 0
+    },
+    {
+      "model": "bge-m3",
+      "input_tokens": 819,
+      "run": 1,
+      "e2e_ms": 510.8,
+      "dim": 0
+    },
+    {
+      "model": "bge-m3",
+      "input_tokens": 819,
+      "run": 2,
+      "e2e_ms": 518.8,
+      "dim": 0
+    },
+    {
+      "model": "qwen3-embedding-0.6b",
+      "input_tokens": 81,
+      "run": 0,
+      "e2e_ms": 3327.8,
+      "dim": 1024
+    },
+    {
+      "model": "qwen3-embedding-0.6b",
+      "input_tokens": 81,
+      "run": 1,
+      "e2e_ms": 17.2,
+      "dim": 1024
+    },
+    {
+      "model": "qwen3-embedding-0.6b",
+      "input_tokens": 81,
+      "run": 2,
+      "e2e_ms": 16.2,
+      "dim": 1024
+    },
+    {
+      "model": "qwen3-embedding-0.6b",
+      "input_tokens": 409,
+      "run": 0,
+      "e2e_ms": 317.4,
+      "dim": 1024
+    },
+    {
+      "model": "qwen3-embedding-0.6b",
+      "input_tokens": 409,
+      "run": 1,
+      "e2e_ms": 18.3,
+      "dim": 1024
+    },
+    {
+      "model": "qwen3-embedding-0.6b",
+      "input_tokens": 409,
+      "run": 2,
+      "e2e_ms": 17.4,
+      "dim": 1024
+    },
+    {
+      "model": "qwen3-embedding-0.6b",
+      "input_tokens": 819,
+      "run": 0,
+      "e2e_ms": 976.7,
+      "dim": 1024
+    },
+    {
+      "model": "qwen3-embedding-0.6b",
+      "input_tokens": 819,
+      "run": 1,
+      "e2e_ms": 24.8,
+      "dim": 1024
+    },
+    {
+      "model": "qwen3-embedding-0.6b",
+      "input_tokens": 819,
+      "run": 2,
+      "e2e_ms": 21.2,
+      "dim": 1024
+    }
+  ]
+}
