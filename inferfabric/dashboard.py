@@ -1121,16 +1121,17 @@ async function loadModels() {
     const framework = fwLabels[m.type] || m.type;
     const fwIcon = fwIcons[m.type] || '📦';
     const ctxStr = m.context_window ? (m.context_window >= 1024 ? (m.context_window/1024).toFixed(0)+'K ctx' : m.context_window+' ctx') : '';
-    const typeIcon = { text:'🧠', 'text-vision':'👁', multimodal:'🌐', aigc:'✨', embedding:'📊', rerank:'🔄', infra:'⚙️' };
-    const typeLabel = { text:'LLM', 'text-vision':'VL', multimodal:'Omni', aigc:'AIGC', embedding:'Embedding', rerank:'Rerank', infra:'Infra' };
+    // Icon/label by model_type (not modality) — ocr vs vl both → text-vision but need different icons
+    const mtIcon = { llm:'🧠', vl:'👁', omni:'🌐', ocr:'📄', aigc:'✨', embedding:'📊', rerank:'🔄', infra:'⚙️' };
+    const mtLabel = { llm:'LLM', vl:'VL', omni:'Omni', ocr:'OCR', aigc:'AIGC', embedding:'Embed', rerank:'Rerank', infra:'Infra' };
     // badge 文案：modeBadge 取值 excl/shrd/free，对应独占/共享/空闲
     const modeLabel = { excl:'独占', shrd:'共享', free:'空闲' };
-    // modality is now derived from model_type in config.py; use it directly
     const modality = m.modality || 'text';
+    const mt = m.model_type || 'llm';
     // Always render 4 spec slots; missing ones get hidden placeholders for alignment
     const specSlots = [];
     specSlots.push('<span class="spec-tag">'+fwIcon+' '+framework+'</span>');
-    if(typeIcon[modality]) specSlots.push('<span class="spec-tag">'+typeIcon[modality]+' '+(typeLabel[modality]||modality)+'</span>');
+    if(mtIcon[mt]) specSlots.push('<span class="spec-tag">'+mtIcon[mt]+' '+(mtLabel[mt]||mt)+'</span>');
     else specSlots.push('<span class="spec-tag" style="visibility:hidden">—</span>');
     if(ctxStr) specSlots.push('<span class="spec-tag">📐 '+ctxStr+'</span>');
     else specSlots.push('<span class="spec-tag" style="visibility:hidden">—</span>');
