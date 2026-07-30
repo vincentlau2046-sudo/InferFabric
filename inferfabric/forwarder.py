@@ -87,6 +87,10 @@ def pipe_stream_response(handler, resp):
         val = resp.getheader(h)
         if val:
             handler.send_header(h, val)
+    # CORS — required for browser-based clients
+    handler.send_header("Access-Control-Allow-Origin", "*")
+    handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+    handler.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, anthropic-version")
     handler.end_headers()
     try:
         while True:
@@ -124,7 +128,71 @@ def handle_json_response(handler, resp, model_obj, original_model, data, auth_he
         send_json(handler, {"error": "invalid response from local model"}, 502)
 
 
-# ── Baidu fallback ──
+# ── Cloud provider forwarding (PR-D) ──
+
+
+def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai", original_model=None):
+    """双协议透传：OpenAI → cloud OpenAI endpoint, Anthropic → cloud Anthropic endpoint。
+
+    IFF 不做协议转换，客户端用什么协议发，就往对应的云端端点转发。
+    IFF 持有云端凭证，客户端只需 IFF key。
+    """
+    if protocol == "anthropic":
+        if not cloud_model.anthropic_available:
+            send_json(handler, {"error": f"Provider {provider_cfg.name} does not support Anthropic protocol"}, 501)
+            return
+        if not provider_cfg.anthropic_base:
+            send_json(handler, {"error": f"Provider {provider_cfg.name} has no Anthropic base configured"}, 501)
+            return
+        url = f"{provider_cfg.anthropic_base.rstrip('/')}/messages"
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": provider_cfg.api_key,
+        }
+    else:  # openai
+        if not cloud_model.openai_available:
+            send_json(handler, {"error": f"Provider {provider_cfg.name} does not support OpenAI protocol"}, 501)
+            return
+        if not provider_cfg.openai_base:
+            send_json(handler, {"error": f"Provider {provider_cfg.name} has no OpenAI base configured"}, 501)
+            return
+        url = f"{provider_cfg.openai_base.rstrip('/')}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {provider_cfg.api_key}",
+        }
+
+    # Override model with cloud model_id
+    if original_model and data.get("model") != cloud_model.model_id:
+        data["model"] = cloud_model.model_id
+
+    was_stream = data.get("stream", False)
+    body = json.dumps(data).encode("utf-8")
+
+    try:
+        req = Request(url, data=body, headers=headers, method="POST")
+        resp = urlopen(req, timeout=provider_cfg.timeout)
+
+        if was_stream:
+            pipe_stream_response(handler, resp)
+        else:
+            resp_body = resp.read()
+            result = json.loads(resp_body)
+            resp.close()
+            send_json(handler, result)
+    except _HTTPError as e:
+        error_body = e.read().decode("utf-8", errors="replace")
+        e.close()
+        log.error("Cloud %s returned HTTP %d: %s", provider_cfg.name, e.code, error_body[:200])
+        # Propagate upstream status code (429→429, 404→404) instead of always 502
+        status = e.code if 400 <= e.code < 500 else 502
+        send_json(handler, {"error": f"Cloud provider error ({e.code}): {error_body[:500]}"}, status)
+    except Exception as e:
+        log.error("Cloud %s request failed: %s", provider_cfg.name, e)
+        send_json(handler, {"error": f"Cloud provider unreachable: {e}"}, 503)
+
+
+# ── Baidu fallback (v1 compat, PR-D 后删除) ──
 
 
 def forward_to_baidu(handler, data, auth_header, original_model):
@@ -142,10 +210,12 @@ def forward_to_baidu(handler, data, auth_header, original_model):
         resp = urlopen(req, timeout=BAIDU_TIMEOUT)
         resp_body = resp.read()
         result = json.loads(resp_body)
+        resp.close()
         send_json(handler, result)
     except _HTTPError as e:
         log.error("Baidu fallback failed: %s %s", e.code, e.reason)
         error_body = e.read().decode("utf-8", errors="replace")
+        e.close()
         send_json(handler, {"error": f"Baidu fallback failed: {error_body}"}, 502)
     except Exception as e:
         log.error("Baidu fallback error: %s", e)

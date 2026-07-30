@@ -654,6 +654,7 @@ body {
     <span class="tab-item active" data-tab="tab-inference" onclick="switchTab('tab-inference')">🔄 模型推理</span>
     <span class="tab-item" data-tab="tab-monitor" onclick="switchTab('tab-monitor')">📊 指标监控</span>
     <span class="tab-item" data-tab="tab-deploy" onclick="switchTab('tab-deploy')">📦 模型部署</span>
+    <span class="tab-item" data-tab="tab-cloud" onclick="switchTab('tab-cloud')">☁️ 云端管理</span>
   </div>
 
   <!-- ════════ Tab 1: 模型推理 (default active) ════════ -->
@@ -876,6 +877,66 @@ body {
     </div>
   </div><!-- /tab-deploy -->
 
+  <!-- ════════ Tab 4: 云端管理 (v4.6.0) ════════ -->
+  <div class="tab-content" id="tab-cloud">
+
+    <!-- 添加 Provider 表单 -->
+    <div class="panel" style="margin-bottom:14px">
+      <div class="panel-hdr">
+        <div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(37,99,235,.2)">➕</div>
+        <span class="panel-title">添加 Provider</span>
+      </div>
+      <div class="panel-content" style="padding:12px 14px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="deploy-form-field">
+            <label class="deploy-form-label">Provider 名称</label>
+            <input class="deploy-form-input" id="cpName" type="text" placeholder="例: baidu-codingplan">
+          </div>
+          <div class="deploy-form-field">
+            <label class="deploy-form-label">API Key</label>
+            <input class="deploy-form-input" id="cpApiKey" type="password" placeholder="sk-... 或 ${ENV_VAR}">
+          </div>
+          <div class="deploy-form-field">
+            <label class="deploy-form-label">OpenAI Base URL</label>
+            <input class="deploy-form-input" id="cpOpenaiBase" type="url" placeholder="https://api.example.com/v1">
+          </div>
+          <div class="deploy-form-field">
+            <label class="deploy-form-label">Anthropic Base URL</label>
+            <input class="deploy-form-input" id="cpAnthropicBase" type="url" placeholder="https://api.example.com/anthropic/v1">
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="act-btn pri" onclick="cloudAddProvider()" style="font-size:13px;padding:6px 18px">添加 & 发现</button>
+          <button class="act-btn sec" onclick="cloudTestProvider()" style="font-size:13px;padding:6px 18px">仅测试连接</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 已配置 Provider 列表 -->
+    <div class="panel" style="margin-bottom:14px">
+      <div class="panel-hdr">
+        <div class="panel-icon" style="background:var(--teal);box-shadow:0 2px 6px rgba(13,148,136,.2)">☁️</div>
+        <span class="panel-title">已配置 Provider</span>
+        <div style="margin-left:auto;display:flex;gap:6px">
+          <button onclick="cloudDiscoverAll()" class="act-btn sec" style="font-size:11px;padding:3px 10px">🔍 全部发现</button>
+          <button onclick="cloudReload()" class="act-btn sec" style="font-size:11px;padding:3px 10px">🔄 热加载</button>
+        </div>
+      </div>
+      <div class="panel-content" style="padding:6px 10px" id="cloudProvidersList">加载中...</div>
+    </div>
+
+    <!-- 已发现模型列表 -->
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-icon" style="background:var(--green-g);box-shadow:0 2px 6px rgba(22,163,74,.2)">📋</div>
+        <span class="panel-title">已发现模型</span>
+        <span style="margin-left:auto;font-size:11px;color:var(--text3)" id="cloudModelCount">0 个模型</span>
+      </div>
+      <div class="panel-content disc-models-scroll" style="padding:6px 10px;max-height:500px;overflow-y:auto" id="cloudModelsList">加载中...</div>
+    </div>
+
+  </div><!-- /tab-cloud -->
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -909,6 +970,187 @@ function toast(m,t) {
   e.textContent=m; e.className='toast '+t+' show';
   clearTimeout(e._t); e._t=setTimeout(()=>e.classList.remove('show'),2800);
 }
+
+// ═══ Cloud Management (v4.6.0) ═══
+async function cloudLoadProviders() {
+  try {
+    const r = await fetch('/admin/cloud/providers', {headers: adminHeaders()});
+    const d = await r.json();
+    if (d.error) { document.getElementById('cloudProvidersList').textContent = d.error; return; }
+    const providers = d.providers || [];
+    if (!providers.length) {
+      document.getElementById('cloudProvidersList').innerHTML = '<div class="svc-empty">暂无 Provider — 使用上方表单添加</div>';
+      document.getElementById('cloudModelsList').innerHTML = '<div class="svc-empty">添加 Provider 并发现模型后显示</div>';
+      document.getElementById('cloudModelCount').textContent = '0 个模型';
+      return;
+    }
+    let html = '';
+    providers.forEach(p => {
+      const st = p.enabled ? '✓' : '✗';
+      const stColor = p.enabled ? '#4ade80' : '#f87171';
+      const oi = p.openai_base ? '✓' : '-';
+      const ai = p.anthropic_base ? '✓' : '-';
+      html += `<div class="disc-card">
+        <div class="disc-info">
+          <div class="disc-name">${p.name}</div>
+          <div class="disc-meta">
+            <span style="color:${stColor}">${st}</span>
+            · OpenAI ${oi} · Anthropic ${ai}
+            · ${p.model_count} 模型
+            · ${p.discovery_interval}s 间隔
+            ${p.last_discovery ? ' · 发现于 ' + new Date(p.last_discovery*1000).toLocaleTimeString() : ''}
+          </div>
+        </div>
+        <div style="display:flex;gap:4px;flex-shrink:0">
+          <button class="disc-model-btn deploy" onclick="cloudDiscoverOne('${p.name}')">🔍 发现</button>
+          <button class="disc-model-btn pull" onclick="cloudDeleteProvider('${p.name}')">🗑 删除</button>
+        </div>
+      </div>`;
+    });
+    document.getElementById('cloudProvidersList').innerHTML = html;
+    cloudLoadModels(d);
+  } catch(e) { document.getElementById('cloudProvidersList').textContent = '加载失败: '+e; }
+}
+
+function cloudLoadModels(data) {
+  const models = (data && data.models) || [];
+  document.getElementById('cloudModelCount').textContent = models.length + ' 个模型';
+  if (!models.length) {
+    document.getElementById('cloudModelsList').innerHTML = '<div class="svc-empty">暂无模型 — 点击 Provider 的 🔍 发现</div>';
+    return;
+  }
+  let html = '';
+  models.sort((a,b) => (b.discovered_at||0) - (a.discovered_at||0));
+  models.forEach(m => {
+    const proto = [];
+    if (m.openai_available) proto.push('<span class="disc-model-tag" style="background:var(--green-s);color:var(--green)">OpenAI</span>');
+    if (m.anthropic_available) proto.push('<span class="disc-model-tag" style="background:var(--purple-s);color:var(--purple)">Anthropic</span>');
+    const caps = m.capabilities || {};
+    let capHtml = '';
+    if (caps.context_window) capHtml += `<span class="spec-tag">ctx ${caps.context_window >= 1024 ? (caps.context_window/1024)+'K' : caps.context_window}</span>`;
+    if (caps.max_output_tokens) capHtml += `<span class="spec-tag">out ${caps.max_output_tokens >= 1024 ? (caps.max_output_tokens/1024)+'K' : caps.max_output_tokens}</span>`;
+    if (caps.supports_vision) capHtml += '<span class="spec-tag" style="color:var(--purple)">👁</span>';
+    if (caps.supports_tools) capHtml += '<span class="spec-tag" style="color:var(--blue)">🔧</span>';
+    Object.keys(caps).forEach(k => {
+      if (!["context_window","max_output_tokens","supports_vision","supports_tools"].includes(k)) {
+        capHtml += `<span class="spec-tag">${k}: ${caps[k]}</span>`;
+      }
+    });
+    const source = m.discovered_at > 0 ? '<span class="disc-model-status deployed">已发现</span>' : '<span class="disc-model-status undeployed">仅配置</span>';
+    html += `<div class="disc-model-card" style="height:auto;min-height:44px;padding:8px 10px;flex-wrap:wrap">
+      <span class="disc-model-name">${m.id}</span>
+      ${proto.join('')}
+      <span style="font-size:11px;color:var(--text3)">${m.provider}</span>
+      ${capHtml}
+      ${source}
+    </div>`;
+  });
+  document.getElementById('cloudModelsList').innerHTML = html;
+}
+
+async function cloudAddProvider() {
+  const name = document.getElementById('cpName').value.trim();
+  const apiKey = document.getElementById('cpApiKey').value.trim();
+  const openaiBase = document.getElementById('cpOpenaiBase').value.trim();
+  const anthropicBase = document.getElementById('cpAnthropicBase').value.trim();
+  if (!name) { toast('请填写 Provider 名称', 'error'); return; }
+  if (!openaiBase && !anthropicBase) { toast('至少填写一个 Base URL', 'error'); return; }
+  try {
+    const r = await fetch('/admin/cloud/providers', {
+      method: 'POST',
+      headers: adminHeaders(),
+      body: JSON.stringify({name, api_key: apiKey, openai_base: openaiBase, anthropic_base: anthropicBase})
+    });
+    const d = await r.json();
+    if (d.error) { toast(d.error, 'error'); return; }
+    toast(`Provider ${name} 已添加`, 'success');
+    await cloudDiscoverOne(name);
+    document.getElementById('cpName').value = '';
+    document.getElementById('cpApiKey').value = '';
+    document.getElementById('cpOpenaiBase').value = '';
+    document.getElementById('cpAnthropicBase').value = '';
+  } catch(e) { toast('添加失败: '+e, 'error'); }
+}
+
+async function cloudTestProvider() {
+  const openaiBase = document.getElementById('cpOpenaiBase').value.trim();
+  const apiKey = document.getElementById('cpApiKey').value.trim();
+  if (!openaiBase) { toast('请填写 OpenAI Base URL', 'error'); return; }
+  toast('正在测试连接...', 'info');
+  try {
+    const r = await fetch('/admin/cloud/test', {
+      method: 'POST',
+      headers: adminHeaders(),
+      body: JSON.stringify({url: openaiBase.replace(/\/+$/, '') + '/models', api_key: apiKey})
+    });
+    const d = await r.json();
+    if (d.error) { toast('连接失败: ' + d.error, 'error'); return; }
+    toast(`连接成功! 发现 ${d.model_count || 0} 个模型`, 'success');
+  } catch(e) { toast('测试失败: '+e, 'error'); }
+}
+
+async function cloudDiscoverAll() {
+  try {
+    const r = await fetch('/admin/cloud/discover', {method:'POST', headers: adminHeaders()});
+    const d = await r.json();
+    if (d.error) { toast(d.error, 'error'); return; }
+    toast(`发现 ${d.cloud_models} 个云端模型`, 'success');
+    cloudLoadProviders();
+  } catch(e) { toast('发现失败: '+e, 'error'); }
+}
+
+async function cloudDiscoverOne(providerName) {
+  try {
+    const r = await fetch('/admin/cloud/discover', {
+      method: 'POST',
+      headers: adminHeaders(),
+      body: JSON.stringify({provider: providerName})
+    });
+    const d = await r.json();
+    if (d.error) { toast(d.error, 'error'); return; }
+    toast(`Provider ${providerName}: 发现 ${d.cloud_models} 个模型`, 'success');
+    cloudLoadProviders();
+  } catch(e) { toast('发现失败: '+e, 'error'); }
+}
+
+async function cloudDeleteProvider(providerName) {
+  if (!confirm(`确定删除 Provider "${providerName}"？`)) return;
+  try {
+    const r = await fetch('/admin/cloud/providers', {
+      method: 'DELETE',
+      headers: adminHeaders(),
+      body: JSON.stringify({name: providerName})
+    });
+    const d = await r.json();
+    if (d.error) { toast(d.error, 'error'); return; }
+    toast(`Provider ${providerName} 已删除`, 'success');
+    cloudLoadProviders();
+  } catch(e) { toast('删除失败: '+e, 'error'); }
+}
+
+async function cloudReload() {
+  try {
+    const r = await fetch('/admin/cloud/reload', {method:'POST', headers: adminHeaders()});
+    const d = await r.json();
+    if (d.error) { toast(d.error, 'error'); return; }
+    toast(`已重新加载: ${d.providers} 个 provider, ${d.cloud_models} 个模型`, 'success');
+    cloudLoadProviders();
+  } catch(e) { toast('加载失败: '+e, 'error'); }
+}
+
+function adminHeaders() {
+  const h = {'Content-Type':'application/json'};
+  const tk = document.getElementById('adminToken')?.value || new URLSearchParams(location.search).get('token') || '';
+  if (tk) h['X-Admin-Token'] = tk;
+  return h;
+}
+
+// Load cloud data when switching to cloud tab
+const origSwitchTab = switchTab;
+switchTab = function(tabId) {
+  origSwitchTab(tabId);
+  if (tabId === 'tab-cloud') cloudLoadProviders();
+};
 async function j(p,o) { return (await fetch(p,o)).json(); }
 
 async function load() {

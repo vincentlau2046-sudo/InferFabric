@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# iff-cloud — InferFabric 云端 Provider 管理 CLI
+# 用法: iff-cloud <command> [options]
+#
+# 命令:
+#   discover    手动触发云端模型发现
+#   reload      热加载 cloud_provider.yaml 配置
+#   providers   列出所有云端 Provider 及状态
+#   models      列出已发现的云端模型
+
+set -euo pipefail
+
+IFF_HOST="${IFF_HOST:-127.0.0.1}"
+IFF_PORT="${IFF_PORT:-8999}"
+BASE="http://${IFF_HOST}:${IFF_PORT}"
+ADMIN_TOKEN="${IFF_ADMIN_TOKEN:-}"
+
+_curl() {
+    local method="${1:-GET}" path="$2"
+    shift 2
+    local -a args=(curl -s -X "${method}" "${BASE}${path}")
+    if [[ -n "$ADMIN_TOKEN" ]]; then
+        args+=(-H "X-Admin-Token: ${ADMIN_TOKEN}")
+    fi
+    args+=(-H "Content-Type: application/json" "$@")
+    "${args[@]}"
+}
+
+case "${1:-help}" in
+    discover)
+        echo "🔍 触发云端模型发现..."
+        _curl POST "/admin/cloud/discover" | python3 -m json.tool 2>/dev/null || _curl POST "/admin/cloud/discover"
+        ;;
+    reload)
+        echo "🔄 热加载 cloud_provider.yaml..."
+        _curl POST "/admin/cloud/reload" | python3 -m json.tool 2>/dev/null || _curl POST "/admin/cloud/reload"
+        ;;
+    providers)
+        _curl GET "/admin/cloud/providers" | python3 -m json.tool 2>/dev/null || _curl GET "/admin/cloud/providers"
+        ;;
+    models)
+        _curl GET "/admin/cloud/providers" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+if 'models' in d:
+    for m in d['models']:
+        proto = []
+        if m.get('openai_available'): proto.append('OpenAI')
+        if m.get('anthropic_available'): proto.append('Anthropic')
+        print(f\"  {m['id']:40s} {m.get('provider','?'):20s} {'+'.join(proto)}\")
+else:
+    print(json.dumps(d, indent=2))
+" 2>/dev/null || _curl GET "/admin/cloud/providers"
+        ;;
+    help|*)
+        echo "用法: iff-cloud <command>"
+        echo ""
+        echo "命令:"
+        echo "  discover    手动触发云端模型发现"
+        echo "  reload      热加载 cloud_provider.yaml"
+        echo "  providers   列出云端 Provider"
+        echo "  models      列出已发现模型"
+        echo ""
+        echo "环境变量:"
+        echo "  IFF_HOST         IFF 主机 (默认 127.0.0.1)"
+        echo "  IFF_PORT         IFF 端口 (默认 8999)"
+        echo "  IFF_ADMIN_TOKEN  Admin token"
+        ;;
+esac

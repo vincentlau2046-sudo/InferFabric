@@ -15,6 +15,15 @@ from typing import Optional
 from inferfabric.manager import ModelManager
 from inferfabric.state import GPUMode
 from inferfabric.config import MODELS_DIR
+from inferfabric.proxy.auth import AuthManager
+from inferfabric.proxy.request_logger import RequestLogger, RequestLog
+from inferfabric.cloud_discovery import CloudDiscovery, CloudModel
+from pathlib import Path as _Path
+import uuid
+import time as _time
+
+# IFF data directory (consistent with config.py / token_stats.py)
+IFF_DATA_DIR = _Path.home() / ".inferfabric"
 
 log = logging.getLogger("inferfabric.proxy_manager")
 
@@ -36,6 +45,29 @@ class ProxyManager:
         self._last_switch = 0.0
         self._cooldown = 10
         self._switch_lock = threading.Lock()
+        # PR-A: Auth manager
+        self.auth = AuthManager(IFF_DATA_DIR / "api_keys.yaml")
+        # PR-B: Request logger
+        self.logger = RequestLogger(log_dir=IFF_DATA_DIR / "logs", enabled=True)
+        # PR-D: Cloud discovery
+        self.cloud = CloudDiscovery(IFF_DATA_DIR / "cloud_provider.yaml")
+        self._cloud_discovered = False
+        # PR-B: Helper to create request context
+        self._req_counter = 0
+
+    def new_request_id(self) -> str:
+        """Generate a unique request ID for logging."""
+        self._req_counter += 1
+        return f"iff-{uuid.uuid4().hex[:4]}"
+
+    def ensure_cloud_discovered(self):
+        """首次请求时触发云端模型发现（懒加载）+ 启动后台轮询。"""
+        if not self._cloud_discovered and self.cloud.providers:
+            self.cloud.discover_all()
+            self._cloud_discovered = True
+            log.info("Cloud discovery completed: %d models", len(self.cloud.cloud_models))
+            # Start background polling for model updates
+            self.cloud.start_polling()
 
     @property
     def current(self) -> str:

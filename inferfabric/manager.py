@@ -102,6 +102,11 @@ class ModelManager:
         services = self.active_services
         return services[0] if services else "idle"
 
+    @property
+    def models_d(self) -> dict:
+        """Backward compat — returns internal _models dict."""
+        return self._models
+
     # ── Model Lookup ─────────────────────────────────────────────
 
     def get_model(self, name: str) -> Optional[ModelConfig]:

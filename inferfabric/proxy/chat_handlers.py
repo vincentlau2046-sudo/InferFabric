@@ -10,6 +10,8 @@ import uuid
 import logging
 from inferfabric.ratelimit import _get_model_rate_limiter
 from inferfabric.proxy_manager import AUTO_SWITCH
+from inferfabric import forwarder
+from inferfabric.proxy.request_logger import RequestLog
 
 log = logging.getLogger("inferfabric.proxy.chat")
 
@@ -158,6 +160,25 @@ def handle_chat(handler, pm, data):
     """
     model = data.get("model", "vllm_qwen27b")
     log.debug("Incoming request: model=%s", model)
+
+    # PR-B: Request context for logging
+    req_id = pm.new_request_id()
+    handler._req_start = time.monotonic()
+    auth_header = handler.headers.get("Authorization", "") or handler.headers.get("x-api-key", "")
+    key_name = pm.auth.key_name(auth_header) if pm.auth.enabled else "anonymous"
+
+    # PR-A: Auth check
+    if pm.auth.enabled:
+        model_for_auth = model.split("/")[-1] if "/" in model else model
+        auth_ok, auth_reason = pm.auth.check(auth_header, model_for_auth)
+        if not auth_ok:
+            pm.logger.log(RequestLog(
+                req_id=req_id, key_name=key_name, model=model_for_auth,
+                status=401, error=auth_reason, duration_ms=(time.monotonic()-handler._req_start)*1000,
+            ))
+            handler._send_json({"error": auth_reason, "status": "unauthorized"}, 401)
+            return
+
     stream = data.get("stream", False)
 
     # Auto-switch
@@ -177,6 +198,28 @@ def handle_chat(handler, pm, data):
 
     target_port = pm.get_target_port(model)
     if not target_port:
+        # PR-D: Check cloud routing before returning 404
+        pm.ensure_cloud_discovered()
+        local_model_names = {m.served_name for m in pm.mgr._models.values() if m.served_name}
+        route = pm.cloud.resolve_route(model, local_model_names)
+        if route and route.startswith("cloud:"):
+            provider_name = route.split(":", 1)[1]
+            provider_cfg = pm.cloud.get_provider_config(provider_name)
+            short_name = model.split("/")[-1] if "/" in model else model
+            cloud_model = (pm.cloud.cloud_models.get(f"{provider_name}/{short_name}")
+                          or pm.cloud.cloud_models.get(short_name))
+            if provider_cfg and cloud_model:
+                log.info("/v1/chat/completions → CLOUD %s [model=%s]", provider_name, model)
+                pm.logger.log(RequestLog(
+                    model=model, status=0, route=f"cloud:{provider_name}",
+                    key_name=key_name, req_id=req_id,
+                    cloud_provider=provider_name,
+                ))
+                forwarder.forward_to_cloud(
+                    handler, data, provider_cfg, cloud_model,
+                    protocol="openai", original_model=model,
+                )
+                return
         handler._send_json({"error": f"Unknown model: {model}"}, 404)
         return
 
@@ -197,6 +240,11 @@ def handle_chat(handler, pm, data):
     body = json.dumps(data).encode("utf-8")
     limiter = _get_model_rate_limiter(pm, model)
     if not limiter.acquire():
+        pm.logger.log(RequestLog(
+            req_id=req_id, key_name=key_name, model=model,
+            status=429, error="rate_limit", route="local",
+            duration_ms=(time.monotonic()-handler._req_start)*1000,
+        ))
         handler._send_json(
             {"error": "vLLM at capacity, try again later", "status": "rate_limit"},
             429,
@@ -205,9 +253,21 @@ def handle_chat(handler, pm, data):
     try:
         for attempt in range(2):
             if _forward_request(handler, pm, target_port, body, stream):
+                # PR-B: Log successful request with TTFT
+                ttft = getattr(handler, '_ttft_ms', None)
+                pm.logger.log(RequestLog(
+                    req_id=req_id, key_name=key_name, model=model,
+                    status=200, ttft_ms=ttft, route="local",
+                    duration_ms=(time.monotonic()-handler._req_start)*1000,
+                ))
                 return
             if attempt == 0:
                 time.sleep(0.5)
+        pm.logger.log(RequestLog(
+            req_id=req_id, key_name=key_name, model=model,
+            status=502, error="upstream_unavailable", route="local",
+            duration_ms=(time.monotonic()-handler._req_start)*1000,
+        ))
         handler._send_json({"error": "Upstream unavailable after retry"}, 502)
     finally:
         limiter.release()
@@ -240,11 +300,18 @@ def _forward_request(handler, pm, target_port, body, stream):
             handler.send_header("Transfer-Encoding", "chunked")
             handler.send_header("Cache-Control", "no-cache")
             handler.end_headers()
+            # PR-B: TTFT tracking — record time of first chunk
+            ttft_recorded = False
             try:
                 while True:
                     chunk = resp.read(8192)
                     if not chunk:
                         break
+                    # PR-B: Record TTFT on first data chunk
+                    if not ttft_recorded:
+                        ttft_recorded = True
+                        if hasattr(handler, '_req_start'):
+                            handler._ttft_ms = (time.monotonic() - handler._req_start) * 1000
                     size = f"{len(chunk):x}\r\n".encode()
                     handler._safe_write(size)
                     handler._safe_write(chunk)

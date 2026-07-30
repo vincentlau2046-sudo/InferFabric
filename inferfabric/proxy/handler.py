@@ -23,6 +23,7 @@ from http.client import HTTPConnection
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from inferfabric.state import GPUMode
+from inferfabric.proxy.request_logger import RequestLog
 
 # Admin token for control-plane routes (/switch, /stop, /deploy, /pull, etc.)
 # If set, requests must include X-Admin-Token header matching this value.
@@ -101,6 +102,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     self._send_json({"fail_counts": wd.fail_counts, "running": wd.running})
                 else:
                     self._send_json({"error": "watchdog not initialized"}, 503)
+            elif path == "/admin/cloud/providers":
+                if not self._check_admin(): return
+                self._handle_cloud_providers(pm)
             else:
                 self._send_json({"error": "not found"}, 404)
         except (BrokenPipeError, ConnectionResetError):
@@ -143,6 +147,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             elif path == "/pull":
                 if not self._check_admin(): return
                 self._handle_pull(pm)
+            elif path == "/admin/cloud/reload":
+                if not self._check_admin(): return
+                self._handle_cloud_reload(pm)
+            elif path == "/admin/cloud/discover":
+                if not self._check_admin(): return
+                self._handle_cloud_discover(pm)
+            elif path == "/admin/cloud/test":
+                if not self._check_admin(): return
+                self._handle_cloud_test(pm)
+            elif path == "/admin/cloud/providers":
+                if not self._check_admin(): return
+                self._handle_cloud_providers(pm)
             elif path == "/v1/embeddings":
                 self._handle_embeddings(pm)
             elif path == "/v1/rerank":
@@ -217,6 +233,33 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         original_model = data.get("model", "")
         auth_header = self.headers.get("Authorization", "") or self.headers.get("x-api-key", "")
+
+        # PR-B: Request context for logging
+        req_id = pm.new_request_id()
+        req_start = time.monotonic()
+        key_name = pm.auth.key_name(auth_header) if pm.auth.enabled else "anonymous"
+        req_model = data.get("model", "")
+        req_status = 200
+        req_error = None
+        req_route = "local"
+        req_cloud_provider = None
+
+        # PR-A: Auth check
+        if pm.auth.enabled:
+            requested_model_for_auth = req_model
+            if "/" in requested_model_for_auth:
+                requested_model_for_auth = requested_model_for_auth.split("/")[-1]
+            auth_ok, auth_reason = pm.auth.check(auth_header, requested_model_for_auth)
+            if not auth_ok:
+                req_status = 401
+                req_error = auth_reason
+                pm.logger.log(RequestLog(
+                    req_id=req_id, key_name=key_name, model=req_model,
+                    status=req_status, error=req_error,
+                    duration_ms=(time.monotonic()-req_start)*1000,
+                ))
+                self._send_json({"error": auth_reason, "status": "unauthorized"}, 401)
+                return
 
         log.info("/v1/messages body: max_tokens=%s, model=%s, messages_count=%d, tools_count=%d, body_size=%d",
                  data.get("max_tokens"), data.get("model"),
@@ -293,17 +336,32 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 )
                 return
 
-        # Step 2: Check model_affinity for cloud routing
+        # Step 2 (PR-D): Unified cloud routing via CloudDiscovery
         if requested_model:
-            from inferfabric.config import load_model_affinity
-            affinity = load_model_affinity()
-            # Strip provider prefix (e.g. "baidu-codingplan/deepseek-v4-flash" → "deepseek-v4-flash")
-            model_short = requested_model.split("/")[-1] if "/" in requested_model else requested_model
-            route_target = affinity.get(model_short) or affinity.get(requested_model)
-            if route_target == "baidu":
-                log.info("/v1/messages → BAIDU [model_affinity: %s → baidu]", requested_model)
-                forwarder.forward_to_baidu(self, data, auth_header, original_model)
-                return
+            pm.ensure_cloud_discovered()
+            local_model_names = {m.served_name for m in pm.mgr._models.values() if m.served_name}
+            route = pm.cloud.resolve_route(requested_model, local_model_names)
+            if route and route.startswith("cloud:"):
+                provider_name = route.split(":", 1)[1]
+                provider_cfg = pm.cloud.get_provider_config(provider_name)
+                cloud_model = pm.cloud.cloud_models.get(
+                    requested_model.split("/")[-1] if "/" in requested_model else requested_model
+                )
+                if provider_cfg and cloud_model:
+                    log.info("/v1/messages → CLOUD %s [%s] [model=%s]",
+                             provider_name, "anthropic", requested_model)
+                    pm.logger.log(RequestLog(
+                        model=original_model or requested_model, status=0, route=f"cloud:{provider_name}",
+                        key_name=key_name, req_id=req_id,
+                        cloud_provider=provider_name,
+                    ))
+                    forwarder.forward_to_cloud(
+                        self, data, provider_cfg, cloud_model,
+                        protocol="anthropic", original_model=original_model,
+                    )
+                    return
+                else:
+                    log.warning("/v1/messages → cloud route matched but config missing: %s", route)
 
         # Step 3: Fallback to first active LLM (backward compat)
         active_llm = None
@@ -319,7 +377,32 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                      active_llm.name, active_llm.port, requested_model or "<empty>")
             self._forward_local(pm, data, auth_header, active_llm, original_model)
         else:
-            log.info("/v1/messages → BAIDU fallback [no active LLM]")
+            # PR-D: Cloud fallback (replaces old Baidu fallback)
+            pm.ensure_cloud_discovered()
+            if pm.cloud.cloud_models:
+                # Try to find any cloud model that matches (prefer provider-prefixed key)
+                short_name = requested_model.split("/")[-1] if "/" in requested_model else requested_model
+                cloud_model = None
+                for _key in [f"{p.name}/{short_name}" for p in pm.cloud.providers.values()] + [short_name]:
+                    cloud_model = pm.cloud.cloud_models.get(_key)
+                    if cloud_model:
+                        break
+                if cloud_model:
+                    provider_cfg = pm.cloud.get_provider_config(cloud_model.provider)
+                    if provider_cfg:
+                        log.info("/v1/messages → CLOUD %s [fallback: no active LLM]",
+                                 cloud_model.provider)
+                        pm.logger.log(RequestLog(
+                            model=original_model or requested_model, status=0, route=f"cloud:{cloud_model.provider}",
+                            key_name=key_name, req_id=req_id,
+                            cloud_provider=cloud_model.provider,
+                        ))
+                        forwarder.forward_to_cloud(
+                            self, data, provider_cfg, cloud_model,
+                            protocol="anthropic", original_model=original_model,
+                        )
+                        return
+            log.info("/v1/messages → BAIDU fallback [no active LLM, no cloud match]")
             forwarder.forward_to_baidu(self, data, auth_header, original_model)
 
     def _forward_local(self, pm, data, auth_header, model_obj, original_model):
@@ -343,12 +426,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     # ─── v1 Models ────────────────────────────────────────────────
 
     def _handle_v1_models(self, pm):
-        """Forward /v1/models to active upstream services."""
+        """Forward /v1/models — merge local + cloud models."""
         active = list(pm.mgr.active_services)
-        if not active:
-            models_d = pm.mgr.list_models()
-            self._send_json(models_d)
-            return
 
         def _fetch_models(svc, port):
             try:
@@ -369,21 +448,47 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
-        model_ports = {}
-        for svc in active:
-            m = pm.mgr.get_model(svc)
-            if m and m.port:
-                model_ports[svc] = m.port
-
+        # Local models from active vLLM services (skip ollama/embedding ports)
         all_models = []
-        if model_ports:
-            with ThreadPoolExecutor(max_workers=len(model_ports)) as executor:
-                futures = {executor.submit(_fetch_models, svc, port): svc
-                           for svc, port in model_ports.items()}
-                for fut in as_completed(futures):
-                    all_models.extend(fut.result())
+        if active:
+            model_ports = {}
+            for svc in active:
+                m = pm.mgr.get_model(svc)
+                # Only query vLLM services (not ollama_cpp embedding models)
+                if m and m.port and m.type == "vllm":
+                    model_ports[svc] = m.port
+            if model_ports:
+                with ThreadPoolExecutor(max_workers=len(model_ports)) as executor:
+                    futures = {executor.submit(_fetch_models, svc, port): svc
+                               for svc, port in model_ports.items()}
+                    for fut in as_completed(futures):
+                        all_models.extend(fut.result())
+            # Add ollama/embedding models from config (they don't have /v1/models)
+            for svc in active:
+                m = pm.mgr.get_model(svc)
+                if m and m.type != "vllm":
+                    all_models.append({"id": m.served_name or m.name, "object": "model",
+                                       "owned_by": "local", "type": m.type})
+        else:
+            # No active services — return configured model list
+            for m in pm.mgr._models.values():
+                if m.type != "ollama_daemon":
+                    all_models.append({"id": m.served_name or m.name, "object": "model",
+                                       "owned_by": "local", "type": m.type})
 
-        all_models.append({"id": "qianfan-code-latest", "object": "model", "owned_by": "proxy", "permission": []})
+        # PR-D: Merge cloud models (with capabilities from v4.6.0)
+        pm.ensure_cloud_discovered()
+        seen_cloud_ids = set()
+        for model_id, cm in pm.cloud.cloud_models.items():
+            # Skip provider-prefixed keys (e.g., "baidu-codingplan/deepseek-v4-flash")
+            # to avoid duplicates — the short name key is already added.
+            if "/" in model_id:
+                continue
+            # Also skip if already in local model list
+            existing_ids = {m.get("id") for m in all_models}
+            if model_id not in existing_ids and model_id not in seen_cloud_ids:
+                seen_cloud_ids.add(model_id)
+                all_models.append(cm.to_api_dict())
 
         if all_models:
             self._send_json({"object": "list", "data": all_models})
@@ -558,6 +663,147 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
         result = pm.mgr.pull_model(name, framework)
         self._send_json(result)
+
+    # ─── Admin: Cloud Provider Management (PR-D) ─────────────────
+
+    def _handle_cloud_reload(self, pm):
+        """POST /admin/cloud/reload — 热加载 cloud_provider.yaml。"""
+        from inferfabric.cloud_discovery import CloudDiscovery
+        from inferfabric.proxy_manager import IFF_DATA_DIR
+        pm.cloud.reload(IFF_DATA_DIR / "cloud_provider.yaml")
+        models = pm.cloud.discover_all()
+        pm._cloud_discovered = True
+        # Restart polling after reload (reload stops the old polling thread)
+        pm.cloud.start_polling()
+        self._send_json({
+            "status": "reloaded",
+            "providers": len(pm.cloud.providers),
+            "cloud_models": len(models),
+        })
+
+    def _handle_cloud_discover(self, pm):
+        """POST /admin/cloud/discover — 手动触发模型发现。"""
+        models = pm.cloud.discover_all()
+        pm._cloud_discovered = True
+        self._send_json({
+            "status": "discovered",
+            "cloud_models": len(models),
+            "models": [
+                {
+                    "id": m.model_id,
+                    "provider": m.provider,
+                    "openai": m.openai_available,
+                    "anthropic": m.anthropic_available,
+                    "discovered_at": m.discovered_at,
+                }
+                for m in models.values()
+            ],
+        })
+
+    def _handle_cloud_test(self, pm):
+        """POST /admin/cloud/test — 测试 Provider 连接。"""
+        data = self._read_body()
+        if not data:
+            self._send_json({"error": "No body"}, 400)
+            return
+        url = data.get("url", "")
+        api_key = data.get("api_key", "")
+        if not url:
+            self._send_json({"error": "Missing url"}, 400)
+            return
+        try:
+            import urllib.request
+            req = urllib.request.Request(url)
+            if api_key:
+                req.add_header("Authorization", f"Bearer {api_key}")
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body = json.loads(resp.read().decode("utf-8")) or {}
+                model_count = len(body.get("data", []))
+                self._send_json({"status": "ok", "model_count": model_count})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 502)
+
+    def _handle_cloud_providers(self, pm):
+        """GET/POST /admin/cloud/providers — 列出或添加 provider。"""
+        if self.command == "GET":
+            providers = []
+            for name, cfg in pm.cloud.providers.items():
+                providers.append({
+                    "name": name,
+                    "enabled": cfg.enabled,
+                    "openai_base": cfg.openai_base,
+                    "anthropic_base": cfg.anthropic_base,
+                    "discovery_enabled": cfg.discovery_enabled,
+                    "discovery_interval": cfg.discovery_interval,
+                    "include_pattern": cfg.include_pattern,
+                    "model_count": sum(
+                        1 for m in pm.cloud.cloud_models.values()
+                        if m.provider == name
+                    ),
+                })
+            # Include cloud models with capabilities (deduplicate: skip provider/ prefixed keys)
+            models = []
+            seen_ids = set()
+            for mid, cm in pm.cloud.cloud_models.items():
+                # Dual-key registry: "model_id" + "provider/model_id"
+                # Only emit the short-name entry to avoid duplicates
+                if "/" in mid:
+                    continue
+                if cm.model_id in seen_ids:
+                    continue
+                seen_ids.add(cm.model_id)
+                d = cm.to_api_dict()
+                d["provider"] = cm.provider
+                d["openai_available"] = cm.openai_available
+                d["anthropic_available"] = cm.anthropic_available
+                d["discovered_at"] = cm.discovered_at
+                models.append(d)
+            self._send_json({
+                "providers": providers,
+                "models": models,
+                "total_cloud_models": len(pm.cloud.cloud_models),
+                "last_discovery": pm.cloud._last_discovery,
+            })
+        elif self.command == "DELETE":
+            data = self._read_body()
+            name = (data or {}).get("name", "")
+            if name and name in pm.cloud._providers:
+                with pm.cloud._models_lock:
+                    del pm.cloud._providers[name]
+                    pm.cloud._cloud_models = {
+                        k: v for k, v in pm.cloud._cloud_models.items()
+                        if v.provider != name
+                    }
+                self._send_json({"status": "deleted", "provider": name})
+            else:
+                self._send_json({"error": f"Provider '{name}' not found"}, 404)
+        elif self.command == "POST":
+            data = self._read_body()
+            if data is None:
+                return
+            name = data.get("name")
+            if not name:
+                self._send_json({"error": "Missing provider name"}, 400)
+                return
+            from inferfabric.cloud_discovery import ProviderConfig
+            cfg = ProviderConfig(
+                name=name,
+                api_key=data.get("api_key", ""),
+                openai_base=data.get("openai_base", ""),
+                anthropic_base=data.get("anthropic_base", ""),
+                timeout=data.get("timeout", 60),
+                enabled=data.get("enabled", True),
+                discovery_enabled=data.get("discovery_enabled", True),
+                discovery_endpoint=data.get("discovery_endpoint", "/models"),
+                discovery_interval=data.get("discovery_interval", 3600),
+                include_pattern=data.get("include_pattern", ""),
+            )
+            pm.cloud._providers[name] = cfg
+            with pm.cloud._models_lock:
+                # Register spec-only models from new provider
+                pm.cloud._register_spec_only_models(pm.cloud._cloud_models)
+            self._send_json({"status": "added", "provider": name})
 
     def _handle_embeddings(self, pm):
         """Handle OpenAI-compatible /v1/embeddings requests."""
