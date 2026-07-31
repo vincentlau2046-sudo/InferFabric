@@ -1,6 +1,66 @@
   <div class="tab-content" id="tab-monitor">
 
-  <!-- vLLM Perf Panel -->
+  <!-- G-3b Panel 1: 请求概览 -->
+  <div class="m-panel" id="overviewPanel">
+    <div class="panel-hdr">
+      <div class="panel-icon" style="background:var(--primary-g);box-shadow:0 2px 6px rgba(204,122,96,.2)">📋</div>
+      <span class="panel-title">请求概览</span>
+      <div class="m-window-toggle">
+        <button class="m-wtab" data-w="1h">1h</button>
+        <button class="m-wtab active" data-w="24h">24h</button>
+        <button class="m-wtab" data-w="7d">7d</button>
+        <button class="m-wtab" data-w="all">全部</button>
+      </div>
+    </div>
+    <div class="m-overview-grid" id="overviewGrid">
+      <div class="m-stat"><span class="m-stat-val" id="ovTotal">—</span><span class="m-stat-label">总请求</span></div>
+      <div class="m-stat"><span class="m-stat-val" id="ovSuccess">—</span><span class="m-stat-label">成功</span></div>
+      <div class="m-stat"><span class="m-stat-val" id="ovFail">—</span><span class="m-stat-label">失败</span></div>
+      <div class="m-stat"><span class="m-stat-val" id="ovRate">—</span><span class="m-stat-label">成功率</span></div>
+    </div>
+  </div>
+
+  <!-- G-3b Panel 2: Token 用量 -->
+  <div class="m-panel" id="tokenPanel">
+    <div class="panel-hdr">
+      <div class="panel-icon" style="background:var(--green-g);box-shadow:0 2px 6px rgba(48,209,88,.2)">📈</div>
+      <span class="panel-title">Token 用量</span>
+    </div>
+    <div class="m-token-table" id="tokenTable"><div class="m-empty">加载中…</div></div>
+  </div>
+
+  <!-- G-3b Panel 3: 延迟分布 -->
+  <div class="m-panel" id="latencyPanel">
+    <div class="panel-hdr">
+      <div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(10,132,255,.2)">⏱</div>
+      <span class="panel-title">延迟分布</span>
+    </div>
+    <div class="m-latency-table" id="latencyTable"><div class="m-empty">加载中…</div></div>
+  </div>
+
+  <!-- G-3b Panel 4: 费用概览 -->
+  <div class="m-panel" id="costPanel">
+    <div class="panel-hdr">
+      <div class="panel-icon" style="background:var(--orange-g);box-shadow:0 2px 6px rgba(245,158,11,.2)">💰</div>
+      <span class="panel-title">费用概览</span>
+    </div>
+    <div class="m-cost-grid">
+      <div class="m-cost-total"><span class="m-cost-val" id="costTotal">¥0.00</span><span class="m-cost-label">总计</span></div>
+      <div class="m-cost-breakdown" id="costBreakdown"><div class="m-empty">加载中…</div></div>
+    </div>
+  </div>
+
+  <!-- G-3b Panel 5: 请求日志 -->
+  <div class="m-panel" id="logPanel">
+    <div class="panel-hdr">
+      <div class="panel-icon" style="background:var(--purple-g);box-shadow:0 2px 6px rgba(191,90,242,.2)">📝</div>
+      <span class="panel-title">请求日志</span>
+      <span style="margin-left:auto;font-size:11px;color:var(--text3)" id="logTs">—</span>
+    </div>
+    <div class="m-log-scroll" id="logBody"><div class="m-empty">加载中…</div></div>
+  </div>
+
+  <!-- Panel 6: vLLM 性能 (保留) -->
   <div class="perf-panel" id="perfPanel" style="display:none">
     <div class="perf-hdr">
       <div class="panel-icon" style="background:var(--teal);box-shadow:0 2px 6px rgba(100,210,255,.2)">📊</div>
@@ -9,69 +69,25 @@
       <span class="perf-refresh">刷新 60s</span>
     </div>
     <div class="perf-cards">
-      <div class="perf-card" id="pcKv">
-        <span class="perf-label">KV Cache</span>
-        <span class="perf-tip">GPU KV 缓存占用率。>90% 容易触发抢占，导致延迟飙升</span>
-        <span class="perf-main" id="kvVal">—</span>
-        <div class="perf-bar"><div class="perf-bar-f" id="kvBar" style="width:0"></div></div>
-      </div>
-      <div class="perf-card" id="pcSeq">
-        <span class="perf-label">Seq Length</span>
-        <span class="perf-tip">平均请求长度（Prompt + Generation 总 Token 数）。反映单次请求的上下文规模</span>
-        <span class="perf-main" id="seqVal">—</span>
-        <span class="perf-sub" id="seqSub"></span>
-      </div>
-      <div class="perf-card" id="pcTpot">
-        <span class="perf-label">TPOT</span>
-        <span class="perf-tip">Time Per Output Token。生成单个 token 的平均耗时（秒）。越低越好，<50ms 优秀</span>
-        <span class="perf-main" id="tpotVal">—</span>
-        <span class="perf-sub" id="tpotSub"></span>
-      </div>
-      <div class="perf-card" id="pcTtft">
-        <span class="perf-label">TTFT</span>
-        <span class="perf-tip">Time to First Token。从发送请求到收到第一个字的延迟（秒）。<1s 优秀</span>
-        <span class="perf-main" id="tfVal">—</span>
-        <span class="perf-sub" id="tfSub"></span>
-      </div>
-      <div class="perf-card" id="pcTput">
-        <span class="perf-label">Throughput</span>
-        <span class="perf-tip">生成吞吐量（tokens/s）。1 / 平均 inter-token 延迟。数值越高，生成速度越快</span>
-        <span class="perf-main" id="tpVal">—</span>
-        <span class="perf-sub" id="tpSub"></span>
-      </div>
+      <div class="perf-card" id="pcKv"><span class="perf-label">KV Cache</span><span class="perf-tip">GPU KV 缓存占用率。>90% 容易触发抢占，导致延迟飙升</span><span class="perf-main" id="kvVal">—</span><div class="perf-bar"><div class="perf-bar-f" id="kvBar" style="width:0"></div></div></div>
+      <div class="perf-card" id="pcSeq"><span class="perf-label">Seq Length</span><span class="perf-tip">平均请求长度（Prompt + Generation 总 Token 数）</span><span class="perf-main" id="seqVal">—</span><span class="perf-sub" id="seqSub"></span></div>
+      <div class="perf-card" id="pcTpot"><span class="perf-label">TPOT</span><span class="perf-tip">Time Per Output Token（秒）</span><span class="perf-main" id="tpotVal">—</span><span class="perf-sub" id="tpotSub"></span></div>
+      <div class="perf-card" id="pcTtft"><span class="perf-label">TTFT</span><span class="perf-tip">Time to First Token（秒）</span><span class="perf-main" id="tfVal">—</span><span class="perf-sub" id="tfSub"></span></div>
+      <div class="perf-card" id="pcTput"><span class="perf-label">Throughput</span><span class="perf-tip">生成吞吐量（tokens/s）</span><span class="perf-main" id="tpVal">—</span><span class="perf-sub" id="tpSub"></span></div>
     </div>
   </div>
 
-  <!-- Usage Chart (P1) -->
-  <div class="usage-panel" id="usagePanel">
-    <div class="usage-hdr">
-      <div class="panel-icon" style="background:var(--green-g);box-shadow:0 2px 6px rgba(48,209,88,.2)">📈</div>
-      <span class="panel-title">Token 用量</span>
-      <div class="usage-toggle">
-        <button class="usage-tab" data-w="daily">24h</button>
-        <button class="usage-tab active" data-w="weekly">7d</button>
-        <button class="usage-tab" data-w="monthly">1m</button>
-        <button class="usage-tab" data-w="all">全部</button>
-      </div>
-    </div>
-    <div id="usageBody"><div class="usage-empty">加载中…</div></div>
-    <div class="usage-legend">
-      <span><span class="dot" style="background:var(--blue-g)"></span>tokens</span>
-      <span id="usageTotal" style="margin-left:auto"></span>
-    </div>
-  </div>
-
-  <!-- GPU Metrics (P1) -->
+  <!-- Panel 7: GPU 实时 (保留) -->
   <div class="gpu-panel" id="gpuPanel">
     <div class="panel-hdr">
-      <div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(10,132,255,.2)">📊</div>
+      <div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(10,132,255,.2)">🖥</div>
       <span class="panel-title">GPU 实时指标</span>
       <span style="margin-left:auto;font-size:11px;color:var(--text3)" id="gpuTs">—</span>
     </div>
     <div class="gpu-grid" id="gpuGrid"></div>
   </div>
 
-  <!-- History -->
+  <!-- History (保留) -->
   <div class="hist-card">
     <div class="panel-hdr">
       <div class="panel-icon" style="background:var(--purple-g);box-shadow:0 2px 6px rgba(191,90,242,.2)">🕐</div>
@@ -83,5 +99,3 @@
     </div>
   </div>
   </div><!-- /tab-monitor -->
-
-  <!-- ════════ Tab 3: 模型部署 ════════ -->

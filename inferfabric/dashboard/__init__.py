@@ -41,12 +41,13 @@ def get_html() -> str:
         except FileNotFoundError:
             log.warning("Dashboard CSS missing: %s", css_path)
         # 替换 JS 占位符
-        js_path = _DASHBOARD_DIR / "js" / "app.js"
-        try:
-            js = js_path.read_text(encoding="utf-8")
-            base = base.replace("<!-- JS:app -->", js)
-        except FileNotFoundError:
-            log.warning("Dashboard JS missing: %s", js_path)
+        for js_name in ("app", "monitor"):
+            js_path = _DASHBOARD_DIR / "js" / f"{js_name}.js"
+            try:
+                js = js_path.read_text(encoding="utf-8")
+                base = base.replace(f"<!-- JS:{js_name} -->", js)
+            except FileNotFoundError:
+                log.warning("Dashboard JS missing: %s", js_path)
         _cached_html = base
         return base
     except Exception as e:
