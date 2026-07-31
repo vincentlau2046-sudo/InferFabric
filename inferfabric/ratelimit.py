@@ -228,10 +228,9 @@ class DualGateLimiter:
         return GateResult(self, model, ok=True, reason="", rpm_held=True)
 
     def _release(self, model: str, rpm_held: bool):
-        """内部：释放并发门 + RPM（如果持有）。"""
+        """内部：释放并发门。RPM 令牌不归还（已消耗）。
+        rpm_held 参数仅用于审计/日志，不再触发 RPM 归还。"""
         self._concurrency.release()
-        if rpm_held:
-            self._rpm.release(model)
 
     @property
     def max_concurrent(self) -> int:
