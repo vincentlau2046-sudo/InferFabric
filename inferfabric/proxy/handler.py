@@ -408,11 +408,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def _forward_local(self, pm, data, auth_header, model_obj, original_model):
         """Forward request to a local model with rate limiting."""
         model_name = data.get("model", "vllm_qwen27b")
-        from inferfabric.ratelimit import _get_model_rate_limiter
-        limiter = _get_model_rate_limiter(pm, model_name)
-        if not limiter.acquire():
+        ok, reason = pm.dual_gate.acquire(model_name, timeout=30)
+        if not ok:
             self._send_json(
-                {"error": "vLLM at capacity, try again later", "status": "rate_limit"},
+                {"error": f"Rate limited: {reason}", "status": "rate_limit"},
                 429,
             )
             return
@@ -421,7 +420,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self, pm, data, auth_header, model_obj, original_model
             )
         finally:
-            limiter.release()
+            pm.dual_gate.release(model_name)
 
     # ─── v1 Models ────────────────────────────────────────────────
 

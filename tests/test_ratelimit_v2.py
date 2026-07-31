@@ -146,11 +146,19 @@ class TestRateLimiterV2:
         assert any(results)
 
     def test_v1_compat(self):
-        """v1 兼容接口仍可用。"""
-        from inferfabric.ratelimit import _RateLimiter, _get_model_rate_limiter
+        """_RateLimiter 仍可用 + DualGateLimiter 基本测试。"""
+        from inferfabric.ratelimit import _RateLimiter, DualGateLimiter, RateLimiterV2
         limiter = _RateLimiter(max_concurrent=2, timeout=0.1)
         assert limiter.acquire()
         assert limiter.acquire()
         assert not limiter.acquire()
         limiter.release()
         assert limiter.acquire()
+        # DualGateLimiter
+        rpm = RateLimiterV2(server_rpm=10, model_rpm_default=5, timeout=0.5)
+        gate = DualGateLimiter(rpm_limiter=rpm, max_concurrent=2)
+        ok, reason = gate.acquire("test-model", timeout=1)
+        assert ok
+        assert reason == ""
+        gate.release("test-model")
+        assert gate.max_concurrent == 2

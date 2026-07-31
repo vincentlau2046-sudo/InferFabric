@@ -18,6 +18,7 @@ from inferfabric.config import MODELS_DIR
 from inferfabric.proxy.auth import AuthManager
 from inferfabric.proxy.request_logger import RequestLogger, RequestLog
 from inferfabric.cloud_discovery import CloudDiscovery, CloudModel
+from inferfabric.ratelimit import DualGateLimiter, RateLimiterV2
 from pathlib import Path as _Path
 import uuid
 import time as _time
@@ -49,6 +50,11 @@ class ProxyManager:
         self.auth = AuthManager(IFF_DATA_DIR / "api_keys.yaml")
         # PR-B: Request logger
         self.logger = RequestLogger(log_dir=IFF_DATA_DIR / "logs", enabled=True)
+        # PR-E: DualGateLimiter — RPM 软门 + 并发硬门
+        self.dual_gate = DualGateLimiter(
+            rpm_limiter=RateLimiterV2(server_rpm=60, model_rpm_default=20, timeout=30),
+            max_concurrent=6,
+        )
         # PR-D: Cloud discovery
         self.cloud = CloudDiscovery(IFF_DATA_DIR / "cloud_provider.yaml")
         self._cloud_discovered = False

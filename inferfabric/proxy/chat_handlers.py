@@ -8,7 +8,6 @@ import json
 import time
 import uuid
 import logging
-from inferfabric.ratelimit import _get_model_rate_limiter
 from inferfabric.proxy_manager import AUTO_SWITCH
 from inferfabric import forwarder
 from inferfabric.proxy.request_logger import RequestLog
@@ -210,15 +209,20 @@ def handle_chat(handler, pm, data):
                           or pm.cloud.cloud_models.get(short_name))
             if provider_cfg and cloud_model:
                 log.info("/v1/chat/completions → CLOUD %s [model=%s]", provider_name, model)
-                pm.logger.log(RequestLog(
-                    model=model, status=0, route=f"cloud:{provider_name}",
-                    key_name=key_name, req_id=req_id,
-                    cloud_provider=provider_name,
-                ))
-                forwarder.forward_to_cloud(
+                result = forwarder.forward_to_cloud(
                     handler, data, provider_cfg, cloud_model,
                     protocol="openai", original_model=model,
                 )
+                pm.logger.log(RequestLog(
+                    model=model, status=result.status, route=f"cloud:{provider_name}",
+                    key_name=key_name, req_id=req_id,
+                    cloud_provider=provider_name,
+                    tokens_in=result.usage.get("prompt_tokens", 0),
+                    tokens_out=result.usage.get("completion_tokens", 0),
+                    ttft_ms=result.ttft_ms,
+                    duration_ms=result.duration_ms,
+                    error=result.error,
+                ))
                 return
         handler._send_json({"error": f"Unknown model: {model}"}, 404)
         return
@@ -238,15 +242,15 @@ def handle_chat(handler, pm, data):
 
     # vLLM path — apply dynamic rate limiter
     body = json.dumps(data).encode("utf-8")
-    limiter = _get_model_rate_limiter(pm, model)
-    if not limiter.acquire():
+    ok, reason = pm.dual_gate.acquire(model, timeout=30)
+    if not ok:
         pm.logger.log(RequestLog(
             req_id=req_id, key_name=key_name, model=model,
-            status=429, error="rate_limit", route="local",
+            status=429, error=reason, route="local",
             duration_ms=(time.monotonic()-handler._req_start)*1000,
         ))
         handler._send_json(
-            {"error": "vLLM at capacity, try again later", "status": "rate_limit"},
+            {"error": f"Rate limited: {reason}", "status": "rate_limit"},
             429,
         )
         return
@@ -270,7 +274,7 @@ def handle_chat(handler, pm, data):
         ))
         handler._send_json({"error": "Upstream unavailable after retry"}, 502)
     finally:
-        limiter.release()
+        pm.dual_gate.release(model)
 
 
 def _forward_request(handler, pm, target_port, body, stream):
@@ -322,6 +326,9 @@ def _forward_request(handler, pm, target_port, body, stream):
             finally:
                 resp.close()
         else:
+            # PR-B: TTFT for non-streaming
+            if hasattr(handler, '_req_start'):
+                handler._ttft_ms = (time.monotonic() - handler._req_start) * 1000
             try:
                 resp_body = resp.read()
             finally:

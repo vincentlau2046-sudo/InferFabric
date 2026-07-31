@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass, field
 from http.client import HTTPConnection
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError as _HTTPError
@@ -19,6 +20,16 @@ from inferfabric.config import (
     exponential_backoff,
     should_retry_on_status,
 )
+
+
+@dataclass
+class CloudResult:
+    """cloud 路由请求结果 — 供 RequestLog 补全"""
+    status: int = 200
+    usage: dict = field(default_factory=dict)  # {prompt_tokens, completion_tokens}
+    ttft_ms: float | None = None
+    duration_ms: float = 0.0
+    error: str | None = None
 
 log = logging.getLogger("inferfabric.forwarder")
 
@@ -136,14 +147,20 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
 
     IFF 不做协议转换，客户端用什么协议发，就往对应的云端端点转发。
     IFF 持有云端凭证，客户端只需 IFF key。
+
+    Returns CloudResult for request logging (G-1a).
     """
+    start = time.monotonic()
+
     if protocol == "anthropic":
         if not cloud_model.anthropic_available:
-            send_json(handler, {"error": f"Provider {provider_cfg.name} does not support Anthropic protocol"}, 501)
-            return
+            err = f"Provider {provider_cfg.name} does not support Anthropic protocol"
+            send_json(handler, {"error": err}, 501)
+            return CloudResult(status=501, error=err)
         if not provider_cfg.anthropic_base:
-            send_json(handler, {"error": f"Provider {provider_cfg.name} has no Anthropic base configured"}, 501)
-            return
+            err = f"Provider {provider_cfg.name} has no Anthropic base configured"
+            send_json(handler, {"error": err}, 501)
+            return CloudResult(status=501, error=err)
         url = f"{provider_cfg.anthropic_base.rstrip('/')}/messages"
         headers = {
             "Content-Type": "application/json",
@@ -151,11 +168,13 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
         }
     else:  # openai
         if not cloud_model.openai_available:
-            send_json(handler, {"error": f"Provider {provider_cfg.name} does not support OpenAI protocol"}, 501)
-            return
+            err = f"Provider {provider_cfg.name} does not support OpenAI protocol"
+            send_json(handler, {"error": err}, 501)
+            return CloudResult(status=501, error=err)
         if not provider_cfg.openai_base:
-            send_json(handler, {"error": f"Provider {provider_cfg.name} has no OpenAI base configured"}, 501)
-            return
+            err = f"Provider {provider_cfg.name} has no OpenAI base configured"
+            send_json(handler, {"error": err}, 501)
+            return CloudResult(status=501, error=err)
         url = f"{provider_cfg.openai_base.rstrip('/')}/chat/completions"
         headers = {
             "Content-Type": "application/json",
@@ -172,24 +191,49 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
     try:
         req = Request(url, data=body, headers=headers, method="POST")
         resp = urlopen(req, timeout=provider_cfg.timeout)
+        first_byte_time = time.monotonic()
 
         if was_stream:
+            # Usage tracking for streaming deferred to G-1b
             pipe_stream_response(handler, resp)
+            return CloudResult(
+                status=200,
+                duration_ms=(time.monotonic() - start) * 1000,
+            )
         else:
             resp_body = resp.read()
             result = json.loads(resp_body)
             resp.close()
             send_json(handler, result)
+            usage = result.get("usage", {})
+            return CloudResult(
+                status=200,
+                usage=usage,
+                ttft_ms=(first_byte_time - start) * 1000,
+                duration_ms=(time.monotonic() - start) * 1000,
+            )
     except _HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace")
         e.close()
         log.error("Cloud %s returned HTTP %d: %s", provider_cfg.name, e.code, error_body[:200])
         # Propagate upstream status code (429→429, 404→404) instead of always 502
         status = e.code if 400 <= e.code < 500 else 502
-        send_json(handler, {"error": f"Cloud provider error ({e.code}): {error_body[:500]}"}, status)
+        err_msg = f"Cloud provider error ({e.code}): {error_body[:500]}"
+        send_json(handler, {"error": err_msg}, status)
+        return CloudResult(
+            status=status,
+            error=err_msg,
+            duration_ms=(time.monotonic() - start) * 1000,
+        )
     except Exception as e:
         log.error("Cloud %s request failed: %s", provider_cfg.name, e)
-        send_json(handler, {"error": f"Cloud provider unreachable: {e}"}, 503)
+        err_msg = f"Cloud provider unreachable: {e}"
+        send_json(handler, {"error": err_msg}, 503)
+        return CloudResult(
+            status=503,
+            error=err_msg,
+            duration_ms=(time.monotonic() - start) * 1000,
+        )
 
 
 # ── Baidu fallback (v1 compat, PR-D 后删除) ──

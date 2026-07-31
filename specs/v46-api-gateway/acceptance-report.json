@@ -1,0 +1,206 @@
+{
+  "timestamp": "2026-07-30 23:10:05",
+  "total": 33,
+  "passed": 31,
+  "failed": 2,
+  "results": [
+    {
+      "id": "T1.5",
+      "desc": "/status returns 200",
+      "status": "PASS",
+      "detail": "code=200"
+    },
+    {
+      "id": "T1.3",
+      "desc": "bge-m3 in active_services",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T1.2",
+      "desc": "Cloud providers loaded",
+      "status": "PASS",
+      "detail": "code=200"
+    },
+    {
+      "id": "T1.2a",
+      "desc": "At least 1 provider",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T1.2b",
+      "desc": "baidu-codingplan enabled",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T1.2c",
+      "desc": "Cloud models > 0 (got 8)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T1.4",
+      "desc": "Dashboard returns 200",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T1.6",
+      "desc": "Bound to 0.0.0.0 (accessible)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T7.1",
+      "desc": "Dashboard has Cloud tab",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T2.0",
+      "desc": "/v1/models returns 200",
+      "status": "PASS",
+      "detail": "code=200"
+    },
+    {
+      "id": "T2.1",
+      "desc": "bge-m3 in model list",
+      "status": "PASS",
+      "detail": "ids=['bge-m3', 'deepseek-v3-241226', 'deepseek-r1-distill-qianfan-70b', 'deepseek-r1-distill-qianfan-8b', 'deepseek-v3-250324-test', 'deepseek-v3.2', 'deepseek-v3.2-think', 'deepseek-ocr', 'glm-5', 'qwen3.5-35b-a3b', 'qwen3.5-397b-a17b', 'qwen3.5-122b-a10b', 'qwen3.5-27b', 'glm-5.1', 'deepseek-v4-pro', 'deepseek-v4-flash', 'glm-5.2']"
+    },
+    {
+      "id": "T2.2",
+      "desc": "bge-m3 ID is not file path",
+      "status": "PASS",
+      "detail": "id=bge-m3"
+    },
+    {
+      "id": "T2.3",
+      "desc": "Cloud models have capabilities",
+      "status": "PASS",
+      "detail": "cloud_count=16"
+    },
+    {
+      "id": "T2.3a",
+      "desc": "Capabilities have boolean fields",
+      "status": "PASS",
+      "detail": "keys=['input', 'reasoning', 'supports_vision', 'supports_tools']"
+    },
+    {
+      "id": "T2.4",
+      "desc": "No duplicate model IDs",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T3.1",
+      "desc": "deepseek-v4-flash (openai) correct",
+      "status": "PASS",
+      "detail": "response=5"
+    },
+    {
+      "id": "T3.2",
+      "desc": "glm-5.1 (openai) correct",
+      "status": "PASS",
+      "detail": "response=5"
+    },
+    {
+      "id": "T3.3",
+      "desc": "deepseek-v4-flash (anthropic) correct",
+      "status": "PASS",
+      "detail": "response=5"
+    },
+    {
+      "id": "T3.4",
+      "desc": "glm-5.1 (anthropic) correct",
+      "status": "FAIL",
+      "detail": "response="
+    },
+    {
+      "id": "T3.5",
+      "desc": "Streaming works",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T3.6",
+      "desc": "Unknown model returns error",
+      "status": "PASS",
+      "detail": "code=404"
+    },
+    {
+      "id": "T4.1",
+      "desc": "bge-m3 embedding dim=1024",
+      "status": "PASS",
+      "detail": "dim=1024"
+    },
+    {
+      "id": "T4.2",
+      "desc": "Switch to gemma-4 succeeded (85s)",
+      "status": "PASS",
+      "detail": "code=200"
+    },
+    {
+      "id": "T4.3",
+      "desc": "gemma-4 inference correct",
+      "status": "PASS",
+      "detail": "response=5"
+    },
+    {
+      "id": "T4.5",
+      "desc": "bge-m3 works during gemma-4 exclusive",
+      "status": "PASS",
+      "detail": "code=200"
+    },
+    {
+      "id": "T4.4",
+      "desc": "Switch to idle succeeded",
+      "status": "PASS",
+      "detail": "code=200"
+    },
+    {
+      "id": "T5.3",
+      "desc": "Consecutive switches don't crash",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T5.2",
+      "desc": "bge-m3 available after lifecycle",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "id": "T6.1",
+      "desc": "GET /admin/cloud/providers",
+      "status": "PASS",
+      "detail": "code=200"
+    },
+    {
+      "id": "T6.2",
+      "desc": "POST /admin/cloud/discover",
+      "status": "PASS",
+      "detail": "code=200"
+    },
+    {
+      "id": "T6.3",
+      "desc": "POST /admin/cloud/reload",
+      "status": "PASS",
+      "detail": "code=200"
+    },
+    {
+      "id": "T6.4",
+      "desc": "POST /admin/cloud/test",
+      "status": "FAIL",
+      "detail": "code=502 resp={'error': 'HTTP Error 401: Unauthorized'}"
+    },
+    {
+      "id": "T6.5",
+      "desc": "Admin routes accessible (auth disabled)",
+      "status": "PASS",
+      "detail": "verified by T6.1-T6.4"
+    }
+  ]
+}

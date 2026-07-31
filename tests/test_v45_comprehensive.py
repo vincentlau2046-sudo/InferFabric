@@ -604,7 +604,7 @@ class TestRateLimiterV2:
 
 
 class TestV1RateLimiterCompat:
-    """v1 兼容限流层"""
+    """限流层兼容 + DualGateLimiter"""
 
     def test_basic_acquire_release(self):
         from inferfabric.ratelimit import _RateLimiter
@@ -614,23 +614,14 @@ class TestV1RateLimiterCompat:
         limiter.release()
         limiter.release()
 
-    def test_concurrent_global_dict(self):
-        from inferfabric.ratelimit import _get_model_rate_limiter, _MODEL_RATE_LIMITERS
-        _MODEL_RATE_LIMITERS.clear()
-        pm = MagicMock()
-        pm.mgr.get_model.return_value = None
-        errors = []
-        def worker(name):
-            try:
-                _get_model_rate_limiter(pm, name)
-            except Exception as e:
-                errors.append(e)
-        threads = [threading.Thread(target=worker, args=(f"model-{i%3}",)) for i in range(20)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        assert not errors
+    def test_dual_gate_limiter(self):
+        from inferfabric.ratelimit import DualGateLimiter, RateLimiterV2
+        rpm = RateLimiterV2(server_rpm=10, model_rpm_default=5, timeout=0.5)
+        gate = DualGateLimiter(rpm_limiter=rpm, max_concurrent=2)
+        ok, reason = gate.acquire("test-model", timeout=1)
+        assert ok
+        gate.release("test-model")
+        assert gate.max_concurrent == 2
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1241,8 +1232,8 @@ class TestCrossReviewFixes:
         import inspect
         import inferfabric.ratelimit as rl
         source = inspect.getsource(rl)
-        assert "_v1_lock" in source
-        assert "threading.Lock" in source
+        assert "DualGateLimiter" in source
+        assert "threading.Semaphore" in source
 
     def test_P16_provider_prefix_keys(self):
         import inspect

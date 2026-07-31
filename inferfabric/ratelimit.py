@@ -178,13 +178,10 @@ class RateLimiterV2:
             self._model_buckets.clear()
 
 
-# ── v1 兼容层（渐进迁移，PR-D 后删除）──
-
-_v1_lock = threading.Lock()
-
+# ── v1 兼容 + DualGate ──
 
 class _RateLimiter:
-    """v1 兼容：Semaphore 模式。PR-D 后删除。"""
+    """v1 兼容：Semaphore 模式。"""
     def __init__(self, max_concurrent: int = 6, timeout: float = 30.0):
         self._sem = threading.Semaphore(max_concurrent)
         self._timeout = timeout
@@ -196,27 +193,36 @@ class _RateLimiter:
         self._sem.release()
 
 
-_VLLM_RATE_LIMITER = _RateLimiter(max_concurrent=6, timeout=30.0)
-_MODEL_RATE_LIMITERS: dict[str, _RateLimiter] = {}
-_MODEL_LIMITER_MAX = 50
+class DualGateLimiter:
+    """二级嵌套限流门 — RPM 软门 + 并发硬门
 
+    Gate 1: RateLimiterV2 (TokenBucket, RPM) — 限每分钟请求总量
+    Gate 2: _RateLimiter (Semaphore, max_concurrent) — 限同时在飞请求数
 
-def _get_model_rate_limiter(pm, model_name: str) -> _RateLimiter:
-    """v1 兼容接口。PR-D 后删除。线程安全。"""
-    with _v1_lock:
-        if model_name in _MODEL_RATE_LIMITERS:
-            return _MODEL_RATE_LIMITERS[model_name]
-        if len(_MODEL_RATE_LIMITERS) >= _MODEL_LIMITER_MAX:
-            _MODEL_RATE_LIMITERS.clear()
-        try:
-            model_obj = pm.mgr.get_model(model_name)
-            if model_obj and model_obj.vllm and model_obj.vllm.max_num_seqs:
-                max_concurrent = model_obj.vllm.max_num_seqs
-            else:
-                max_concurrent = 6
-        except Exception:
-            max_concurrent = 6
-        max_concurrent = max(2, min(max_concurrent, 20))
-        limiter = _RateLimiter(max_concurrent=max_concurrent, timeout=30.0)
-        _MODEL_RATE_LIMITERS[model_name] = limiter
-        return limiter
+    cloud 路由不经过此门（单用户 + 云端自有配额）。
+    """
+
+    def __init__(self, rpm_limiter: RateLimiterV2, max_concurrent: int = 6):
+        self._rpm = rpm_limiter
+        self._concurrency = threading.Semaphore(max_concurrent)
+        self._max_concurrent = max_concurrent
+
+    def acquire(self, model: str, timeout: float = 30.0) -> tuple[bool, str]:
+        """尝试通过双门。返回 (ok, reason)。"""
+        # Gate 1: RPM
+        ok, reason = self._rpm.acquire(model, timeout)
+        if not ok:
+            return False, f"rpm_limit: {reason}"
+        # Gate 2: Concurrency
+        acquired = self._concurrency.acquire(timeout=timeout)
+        if not acquired:
+            return False, "concurrency_limit"
+        return True, ""
+
+    def release(self, model: str):
+        """释放并发门。RPM 不需 release。"""
+        self._concurrency.release()
+
+    @property
+    def max_concurrent(self) -> int:
+        return self._max_concurrent
