@@ -1,0 +1,147 @@
+**确认 — 这是个 Critical bug。** `monitor.js` 请求 `/api/metrics?window=24h`，但 `handler.py:95` 用 `self.path == "/api/metrics"` 匹配。当带 query string 时，`self.path` 为 `/api/metrics?window=24h`，不等于 `"/api/metrics"`，所以 **Monitor 面板所有指标请求都会 404**，用户永远看到 "加载中…" 或 "—" 占位符。
+
+让我把这提升为 Critical：
+
+---
+
+# R4: Dashboard 拆分 + Monitor 7 面板审查报告（修订）
+
+## Critical
+
+**C1: `/api/metrics` 路由匹配 bug — Monitor 面板完全无法工作**
+
+`handler.py:95` — `self.path == "/api/metrics"` 用原始 URL 匹配（含 query string），而 `monitor.js:17` 请求 `/api/metrics?window=24h`。`self.path` 为 `/api/metrics?window=24h` ≠ `"/api/metrics"`，请求会 fall through 到 404。**Monitor 面板的全部 7 个指标面板永远无法加载数据。**
+
+**修复**：改为 `path == "/api/metrics"`（`path` 是已 urlparse 的纯路径，在 L77 定义）。注意同一文件中其他端点（`/health`、`/status` 等）也有同样问题，但那些不带 query string 所以暂无实际影响。
+
+**C2: app.js 多处 innerHTML 注入模型名/provider 名未经转义 — XSS**
+
+`app.js` 中大量直接拼接服务端返回的字符串到 `innerHTML`，没有 `esc()` 调用（`esc()` 仅在 `monitor.js` 定义，且仅在 monitor 面板使用）：
+
+- `app.js:53` — `${p.name}` 直接插入 HTML 内容
+- `app.js:63-64` — `onclick="cloudDiscoverOne('${p.name}')"` — provider 名含 `'` 即可闭合属性注入 JS
+- `app.js:99` — `${m.id}` 直接插入
+- `app.js:101` — `${m.provider}` 直接插入
+- `app.js:264` — history 中 `h.from`、`h.to` 直接插入
+- `app.js:445` — `renderCard()` 中 `m.name` 直接插入 `<div class="model-name">` 和 `id="sw-"+m.name`
+- `app.js:409-415` — `onclick="doSwitch('"+m.name+"')"` — model name 含引号可注入 JS
+- `app.js:602`、`606` — `loadLocalModels()` 中 `m.name` 直接插入 + onclick 注入
+- `app.js:787` — `loadUsage()` 中 `r.model` 作为 title 属性和文本直接插入
+- `app.js:100` — `Object.keys(caps).forEach` 中 `${k}: ${caps[k]}` 直接插入
+
+**攻击路径**：`/admin/cloud/providers` 或 `/status` 返回的 model/provider 名如含 `<img onerror=alert(1)>` 或 `');alert(1);//`，将直接执行任意 JS。
+
+**C3: `_serve_dashboard()` 注入 `window.__TOKEN_STATS__` 时未转义 `</script>`**
+
+`handler.py:185-188`:
+```python
+html = html.replace('</head>',
+    '<script>window.__TOKEN_STATS__ = ' + stats_json + ';</script></head>')
+```
+`json.dumps()` 不转义 `/`，如果 model 名包含 `</script><script>alert(1)//`，`stats_json` 中将出现 `</script>` 提前闭合标签，导致 HTML 注入。
+
+**修复**：`stats_json.replace('</', '<\\/')` 或 `json.dumps(..., ensure_ascii=True)` + 后处理。
+
+---
+
+## Medium
+
+**M1: `invalidate_cache()` 无任何调用点 — 热重载不可用**
+
+函数已定义但全项目无调用。fragment 文件更新后必须重启进程才能生效。`/admin/cloud/reload` 不刷新 dashboard HTML 缓存。
+
+**建议**：在 `_handle_cloud_reload()` 中调用 `invalidate_cache()`；或开发模式下每次 `get_html()` 都跳过缓存。
+
+**M2: `_cached_html` 多线程读写无同步保护**
+
+`get_html()` 在 `ThreadingHTTPServer` 多线程环境中执行。两个线程可同时进入 `if _cached_html is not None` 的 else 分支，并发读取文件，导致重复 I/O。虽然 CPython str 赋值原子，逻辑上不严谨。
+
+**建议**：加 `threading.Lock()` 保护。
+
+**M3: `/api/metrics` 端点缺少管理员鉴权**
+
+`handler.py:95-96` 无 `_check_admin()` 调用。暴露 model 名、请求数、费用等运营信息。如果 IFF 绑定公网，信息可被任何人获取。
+
+**M4: `renderCard()` 中 `m.name` 用作 DOM `id` — 不合法字符**
+
+`app.js:442` — `id="sw-"+m.name`。model name 含空格/点等字符时 `getElementById` 可能匹配失败。应做 slug 化或使用 data 属性。
+
+**M5: `setInterval` 在 tab 不可见/非当前时仍持续运行**
+
+- `monitor.js:101` — `setInterval(loadMetrics, 5000)` 在浏览器 tab 后台时仍运行
+- `app.js:823` — `setInterval(()=>{load();...}, 5000)` 同样
+- 用户在 "模型推理" tab 时，monitor.js 仍每 5s 请求 `/api/metrics`；反之亦然
+
+**建议**：`visibilitychange` 暂停后台轮询 + `switchTab()` 管理当前 tab 轮询。
+
+**M6: 同一 `do_GET` 中 `self.path` 与 `path` 混用不一致**
+
+`handler.py` 中 `path = urlparse(self.path).path`（L77），但 `/health`、`/status`、`/models`、`/api/metrics` 等用 `self.path` 匹配，`/vllm_metrics`、`/` 用 `path` 匹配。虽然当前不带 query string 的端点无影响，但代码风格不一致且容易出错（如 C1 所示）。
+
+**建议**：统一使用 `path` 做路由匹配。
+
+---
+
+## Low
+
+**L1: `Path(__file__).parent` 在 zip import / PyInstaller 下可能失败**
+
+打包后 `read_text()` 抛异常，`_fallback_html()` 可兜底但用户看到降级页面。`importlib.resources` 更健壮。
+
+**L2: 占位符替换失败时静默丢失内容**
+
+`base.html` 中占位符拼写错误时 `str.replace()` 不报错，CSS/JS/fragment 完全丢失且无日志。建议替换后检查残留占位符并 `log.error()`。
+
+**L3: Fragment 降级 HTML 中 `frag_name` 未转义**
+
+`__init__.py:32-34` 中 `frag_name` 当前来自硬编码元组，安全。但防御性编程应加 `html.escape()`。
+
+**L4: 费用计算浮点精度**
+
+服务端 `round(cost, 4)` + 客户端 `toFixed(4)` 链路正确。如果未来在 JS 端做二次计算需注意浮点问题。当前仅展示，风险低。
+
+**L5: 大量 inline event handlers 不兼容 CSP**
+
+`base.html:79-82` 的 `onclick="switchTab(...)"` + fragments 中多处 inline handler。生产环境启用 CSP `unsafe-inline` 将被阻止。
+
+**L6: 请求日志面板占位不够明确**
+
+`monitor.js:90` — `请求日志需 access log API（后续实现）`，看起来像加载失败。应加 `🚧` 或 badge 标示为待实现。
+
+**L7: 浏览器兼容性**
+
+代码使用了 `async/await`、`template literals`、`?.`（optional chaining, `app.js:207`）等 ES2020+ 特性。IE 不支持但现代浏览器均兼容，对 localhost 管理面板可接受。
+
+---
+
+## 架构建议
+
+**A1: 提取公共 `esc()` 到独立 util**
+
+`monitor.js` 的 `esc()` 和 `app.js` 都需要 HTML 转义。应提取到 `js/utils.js` 并在 `base.html` 中最先加载，确保所有 JS 模块可用。
+
+**A2: 考虑用 data 属性 + event delegation 替代 inline onclick**
+
+inline onclick 在 `renderCard()`、`cloudLoadProviders()` 等处大量使用字符串拼接传入 model name，是 XSS 的主要攻击面。改为 `data-model="..."` + `addEventListener('click', ...)` 更安全且 CSP 友好。
+
+**A3: 考虑 fragment 缓存加版本号/哈希**
+
+`_cached_html` 与文件系统不同步（M1）。可在 `invalidate_cache()` 外增加文件修改时间检测（`st_mtime`），或在 `get_html()` 中比较缓存 hash。
+
+**A4: Monitor 面板请求日志应尽早实现或移除面板**
+
+当前 Panel 5 "请求日志" 是死面板，每次 `loadRequestLog()` 都固定渲染占位文本，浪费用户注意力。建议要么实现 access log API，要么从 7 面板中移至 "即将推出" 区域。
+
+---
+
+## 结论
+
+**不建议合并。** 存在 3 个 Critical 级问题：
+
+1. **C1: `/api/metrics` 路由匹配 bug** — Monitor 面板核心功能完全无法工作，这是最严重的功能缺陷。将 `self.path == "/api/metrics"` 改为 `path == "/api/metrics"` 即可修复。
+2. **C2: app.js 全面 XSS** — 所有服务端返回的字符串（model name、provider name、history 等）在 innerHTML 拼接中未经转义，攻击面广泛。
+3. **C3: `__TOKEN_STATS__` 注入** — `</script>` 可提前闭合标签。
+
+Medium 级问题中，M1（缓存无法失效）和 M5（后台轮询浪费）应在后续迭代修复，但非阻断性。
+
+架构层面，inline onclick + innerHTML 拼接模式是 XSS 的根本原因（A1/A2），建议在安全修复中一并重构。

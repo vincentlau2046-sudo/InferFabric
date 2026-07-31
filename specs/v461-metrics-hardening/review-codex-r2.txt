@@ -1,0 +1,117 @@
+---
+
+# G-2 Metrics Pipeline Review — InferFabric v4.6.1
+
+## Critical
+
+### C-1: AggregatorThread 无退出机制 — `while True` 不可关闭
+
+`inferfabric/metrics_aggregator.py:156` — `AggregatorThread.run()` 使用 `while True` + `self._q.get()`，没有 `None` sentinel、没有 `stop_event`、没有 `daemon=False` 时的优雅退出。虽然线程标记为 `daemon=True`，但 `ProxyManager` 和 `main()` 均未调用任何停止逻辑，进程退出时 queue 中可能仍有未消费的 entry 被丢弃。
+
+**建议**: 添加 `threading.Event` + sentinel 值，`ProxyManager` 增加 `shutdown()` 方法放入 sentinel 并 `join()` 线程。
+
+### C-2: `record()` 中 success/fail 判断逻辑不一致 — 与 `get_metrics()` 重复计算
+
+`metrics_aggregator.py:71` — `record()` 用 `entry.status >= 400 or entry.error` 判断 fail。`get_metrics():102-103` 又对 samples 重新计算 `success`/`fail`。但 `_total_requests`/`_total_success`/`_total_fail` 三个计数器 **从未在 `get_metrics()` 中使用**，属于死代码。更关键的是：trim 截断后，`_total_*` 计数器与 samples 数组不再一致——`_total_requests` 反映历史总量，但 samples 只有最近 50K，导致 `get_metrics()` 中 `len(samples)` 与 `_total_requests` 永远不同步。
+
+**建议**: 删除 `_total_*` 死代码，或明确其在 `get_metrics()` 中的用途；如果用于全局累计（不受 trim 影响），应在返回值中体现。
+
+### C-3: `_samples = self._samples[-50000:]` 在锁内执行大列表拷贝
+
+`metrics_aggregator.py:77` — 截断操作在 `with self._lock:` 内。当 samples 达到 100K 条时，`self._samples[-50000:]` 创建一个 50K 元素的新 list 并拷贝所有 dict 引用。虽然 dict 引用拷贝本身 O(n) 但常数小，问题是这个操作会 **阻塞所有 `record()` 和 `get_metrics()` 调用**，直到拷贝完成。在 100K samples 情况下，估计锁持有时间约 1-5ms，对于高频写入场景可能成为瓶颈。
+
+**建议**: 用 `deque(maxlen=N)` 替代 list，实现 O(1) 的自动截断；或将 trim 改为 swap-out 模式：先在锁外分配新列表，锁内仅交换引用。
+
+## Medium
+
+### M-1: `get_metrics()` 读取 `self._price_config` 无锁保护
+
+`metrics_aggregator.py:115` — `self._price_config.get(model)` 在 `with self._lock:` 块之外执行。虽然当前没有 `update_prices()` 方法，但 `proxy_manager.py:61` 在构造时传入 price_config。如果未来添加热更新 price 的功能（YAML reload），`_price_config` 将在无锁状态下被并发读写，造成数据竞争。即使当前代码无写入路径，这也是一个隐患。
+
+**建议**: 将 `_price_config` 读取移入锁内，或使用 `copy-on-write` 模式（替换整个 dict 引用，Python GIL 下安全）。
+
+### M-2: `_load_price_config()` 在 `__init__` 中 cloud_models 为空
+
+`proxy_manager.py:61` — `self.metrics = MetricsAggregator(price_config=self._load_price_config())`。此时 `self.cloud` 刚初始化，`cloud_models` 为空 dict（`ensure_cloud_discovered()` 是懒加载，在首次请求时才调用）。因此启动时 price_config **永远是空 dict**，所有费用估算返回 0。
+
+**建议**: 在 `ensure_cloud_discovered()` 完成后重新加载 price_config，或添加 `update_prices()` 方法供 discovery 完成后调用。
+
+### M-3: `_load_price_config()` 访问 `self.cloud._providers` — 破坏封装
+
+`proxy_manager.py:100` — `self.cloud._providers.items()` 直接访问 CloudDiscovery 的私有属性 `_providers`。如果 CloudDiscovery 重构内部结构，这里会静默失败。
+
+**建议**: 在 CloudDiscovery 上暴露 `get_model_specs()` 或 `get_all_prices()` 公共方法。
+
+### M-4: `Queue()` 无 maxsize — 内存无上限
+
+`proxy_manager.py:60` — `self._agg_queue = _queue.Queue()` 无 maxsize。如果 AggregatorThread 处理速度慢于写入（如 `record()` 中 trim 触发），queue 将无限增长。虽然 `put_nowait()` 不会阻塞，但无 maxsize 的 queue 的 `put_nowait` **永远不会抛 `Full` 异常**，这意味着 `request_logger.py:84` 的 `try/except` 捕获不到 queue 满的情况——它实际上是无条件入队。
+
+**建议**: 设置 `maxsize`（如 10000），使 `put_nowait()` 在积压时抛 `Full` 异常，允许丢弃而非无限堆积。
+
+### M-5: `request_logger.py:84` — `put_nowait()` 放入的是原始 entry 对象
+
+`request_logger.py:84` — `self._on_log_queue.put_nowait(entry)` 放入的是 `RequestLog` dataclass 实例（引用传递）。`record()` 中又读取 `entry.timestamp` 等字段。但 `log()` 方法在锁内修改了 `entry.timestamp`（L66）和 `entry.ts`（L70），而 `put_nowait` 在锁外执行。如果 entry 对象在其他线程被复用（不太可能但未禁止），会读到不一致状态。更重要的是，`entry.timestamp` 在 L66 被设为 `time.time()`，但 `record()` 中 L67 又做 `entry.timestamp or time.time()` 冗余赋值。
+
+**建议**: 在 `record()` 中删除 L67 的 `or time.time()` 逻辑（timestamp 已在 logger 中赋值），避免混淆来源。
+
+### M-6: `quantile()` 单元素列表 q=0 或 q=1 的边界
+
+`metrics_aggregator.py:20-29` — 当 `len(data)==1` 时：`idx = q * 0 = 0`，`lo=0`，`hi=min(1,0)=0`，`frac=0`，返回 `sorted_data[0]`。**功能正确**，但 `q=1` 时：`idx = 1*(n-1)`，对于 n>1 的情况 `lo=n-1`，`hi=min(n, n-1)=n-1`，`frac=0`，返回最大值。**也是正确的**。不过缺少对 `q` 范围的校验——如果传入 `q<0` 或 `q>1`，不会报错但返回无意义值。
+
+**建议**: 添加 `assert 0 <= q <= 1` 或 clamp，防御性编程。
+
+## Low
+
+### L-1: `from statistics import median` 引入但可用 `quantile(data, 0.5)` 替代
+
+`metrics_aggregator.py:15` — `median` 仅在 L131、L135 使用，完全可以统一为 `quantile(data, 0.5)`，减少一个 stdlib 依赖（虽然不影响运行，但代码一致性更佳）。
+
+### L-2: `/api/metrics` 端点路径匹配不精确
+
+`handler.py:95` — `elif self.path == "/api/metrics":` 使用 `self.path` 而非 parsed `path`，意味着带 query string 的请求如 `/api/metrics?window=1h` **不会匹配**此分支。然而 `_handle_api_metrics()` 内部正确解析了 `self.path` 中的 query string。这是一个 **功能性 bug**：`/api/metrics?window=1h` 会 fall through 到 404。
+
+**建议**: 改为 `elif path == "/api/metrics":`（使用 L77 已解析的 `path` 变量）。
+
+### L-3: `get_metrics()` 两次遍历 samples
+
+`metrics_aggregator.py:89` — 第一次 `[s for s in self._samples if ...]` 创建过滤列表，然后 L95-97 又做 `by_model` 分组，L102-103 又遍历 samples 计算 success/fail。总共 3 次遍历。对于 100K samples，可合并为一次遍历。
+
+### L-4: `window` 参数默认值不一致
+
+`handler.py` 的 `_handle_api_metrics()` 中 `qs.get("window", ["24h"])` 默认 `24h`，而 `get_metrics()` 也默认 `24h`。双重默认值无 bug 但增加了维护负担。
+
+### L-5: `_load_price_config()` 中 `hasattr(self, 'cloud')` 多余
+
+`proxy_manager.py:88` — 在 `__init__` 中 `self.cloud` 在 L52 已经赋值，L61 调用 `_load_price_config()` 时 `hasattr` 永远为 True。
+
+### L-6: `entry.status >= 400` 对 status type 无防御
+
+如果 `RequestLog.status` 被误设为非 int（如字符串 "200"），比较行为未定义。风险极低但值得注意。
+
+## 架构建议
+
+### A-1: 引入 `update_prices()` 方法 + discovery hook
+
+当前 price_config 在启动时一次性加载且从不更新。建议在 `ensure_cloud_discovered()` 完成后调用 `self.metrics.update_prices(self._load_price_config())`，并添加带锁的 `update_prices()` 方法，使得 YAML 热更新时价格能实时反映。
+
+### A-2: 用 `collections.deque(maxlen=50000)` 替代 list + trim
+
+`deque` 天然 O(1) 左端丢弃，不需要手动 trim，也不会在锁内做大批量拷贝。唯一取舍是 `deque` 不支持切片，但 `get_metrics()` 已经是全量遍历，不依赖切片。
+
+### A-3: Queue 加 maxsize + backpressure 语义
+
+`_queue.Queue(maxsize=10000)` + `put_nowait()` + `except Full: log.debug("aggregator queue full, dropping")`。单用户场景下 10K 积压意味着 aggregator 严重落后，丢弃比无限堆积更安全。
+
+### A-4: `get_metrics()` 考虑增量/快照模式
+
+当前每次调用全量扫描 + 全量排序。如果前端 5s 轮询，100K samples 下每秒 ~20 次排序操作。建议缓存最近一次 metrics 结果，用 TTL（如 5s）控制刷新频率。
+
+## 结论
+
+指标管线的整体架构设计合理——queue 解耦主路径、后台线程消费、滑动窗口聚合——符合单用户 LLM Gateway 的场景。**主要问题集中在三个方面**：
+
+1. **启动时 price_config 为空**（M-2）— 费用估算在 discovery 之前完全失效，这是功能性缺陷
+2. **Queue 无 maxsize + trim 阻塞**（C-3, M-4）— 极端情况下可导致内存无上限增长 + 锁竞争
+3. **`/api/metrics?window=1h` 路径匹配失败**（L-2）— query string 请求直接 404，影响前端可用性
+
+M-2 和 L-2 建议在合入前修复；C-1/C-3 和 M-4 建议下个迭代优化。

@@ -1,0 +1,240 @@
+[dev] auto-update disabled
+[headless] --dangerously-skip-permissions：所有工具调用将自动批准
+我先查看完整变更范围并阅读所有相关文件。继续阅读剩余文件：app.js、monitor.js、handler.py 以及 __init__.py 全文。现在阅读 app.js 关键部分（涉及用户输入/HTML 注入的函数），以及 handler.py 的 get_html 调用。查看 `handler.py` 中 `get_html` 的调用上下文，以及 `app.js` 中将用户数据注入 `innerHTML` 的相关部分。我已阅读所有相关文件。现在进行完整的安全/缓存/资源/功能/兼容性/性能审查。
+
+# R4: Dashboard Review — G-3a + G-3b
+
+**审查对象**：InferFabric v4.6.1 Dashboard 拆分 + Monitor 7 面板重做
+**审查范围**：`dashboard/__init__.py`, `base.html`, 4 个 fragments, `app.js`, `monitor.js`, `style.css`, `proxy/handler.py` 的 get_html 调用
+
+---
+
+## 🔴 Critical
+
+### C-1. `monitor.js` 中 `esc()` 未对所有用户可控数据生效 — 多处 XSS 漏洞
+
+`monitor.js` 的 `esc()` 函数本身实现正确（用 DOM `textContent` → `innerHTML` 反转义），但应用范围严重不足：
+
+**问题位置 1**：`renderTokens` 第 47 行
+```js
+html += `<tr><td>${esc(name)}</td><td>${v.requests}</td><td>${v.tokens_in.toLocaleString()}</td><td>${v.tokens_out.toLocaleString()}</td></tr>`;
+```
+`v.requests` 直接插入 HTML，未转义。虽然理论上应为数字，但 `/api/metrics` 的 JSON 结构未被校验，恶意或损坏的 metrics 数据可能注入 `<img onerror=…>`。
+
+**问题位置 2**：`renderLatency` 第 62-67 行 — `v.ttft_p50` 等字段未转义，直接拼接到 HTML。
+**问题位置 3**：`renderCost` 第 80 行 — `v.cost_yuan.toFixed(4)` 若 `v.cost_yuan` 不是数字会抛 TypeError（与 XSS 无关，但属同类校验缺失）。
+**问题位置 4**：`renderOverview` 第 32 行 — `(d.success_rate || 0) + '%'` 拼接，未转义。
+
+**根本原因**：`/api/metrics` 返回的 model name 来源于请求中的 `model` 字段（用户可控）。攻击者构造 `model=<script>alert(1)</script>` 的请求，即可在 monitor 面板执行任意 JS。`esc()` 只保护了 `name`，但 `name = m.split('/').pop()` 在 `m` 包含 `<` 时仍依赖 `esc()`——目前 `renderTokens`/`renderLatency`/`renderCost` 都调用了 `esc(name)` ✓，但**所有非 name 字段（requests / tokens / latency 值 / cost）均未转义**。
+
+**修复建议**：
+1. 对所有从 `/api/metrics` JSON 取出的字段统一 `esc()` 后再插入 HTML；或
+2. 在 `renderTokens` 等函数开头用 `Number(v.requests)` / `Number(v.tokens_in)` 做强制数值化，非数字则跳过该行；
+3. 服务端 `/api/metrics` handler 应对 model name 做长度限制 + HTML 字符过滤（纵深防御）。
+
+---
+
+### C-2. `app.js` 中 `loadModels` / `renderCard` 直接将 `m.name` 拼入 innerHTML — XSS
+
+`app.js` 第 445 行：
+```js
+'<div class="model-info"><div class="model-name">'+m.name+'</div>'+
+```
+`m.name` 来自 `/models` API（用户配置的模型名，可控），**未经任何转义**直接拼入 innerHTML。同样第 442 行 `id="sw-'+m.name+'"` 也未转义，可能产生非法 id 或注入。
+
+第 409-415 行 `onclick="doSwitch(\''+m.name+'\')"` 同样危险：若 `m.name` 包含单引号或 `</script>`，可直接逃逸属性/脚本上下文。
+
+**注**：这是 R4 范围内 `app.js` 的既有问题（非本次 G-3a/G-3b 引入），但本次审查范围明确包含 `app.js`，且 `monitor.js` 已尝试用 `esc()` 修复同类问题——说明开发者已意识到 XSS 风险，那么 `app.js` 的遗漏就是真实漏洞而非理论问题。
+
+**修复建议**：在 `app.js` 顶部定义同样的 `esc()`，对所有 `m.name`、`info.*` 等用户/服务端可控字符串转义后再拼接。`onclick` 内联事件本身也建议改为 `addEventListener` + `data-*` 属性。
+
+---
+
+### C-3. `handler.py` 第 188 行 token stats 注入未转义 — 潜在 XSS / HTML 破坏
+
+```python
+html = html.replace('</head>', '<script>window.__TOKEN_STATS__ = ' + stats_json + ';</script></head>')
+```
+
+`stats_json` 来自 `collector._load_full_state()`，其内容是 token 使用统计，**字段值可能包含模型名（用户可控）**。`json.dumps` 默认会转义 `</` 为 `<\/` 吗？**不会**——Python `json.dumps` 默认不转义 `/`，也不转义 `<`、`>`。若 model name 包含 `</script><script>alert(1)</script>`，`json.dumps` 会原样输出，导致 script 上下文逃逸。
+
+**修复建议**：
+```python
+stats_json = json.dumps(collector._load_full_state()).replace('</', '<\\/')
+```
+或更彻底：对所有插入 `<script>` 的 JSON 用 `replace('<', '\\u003c')` 处理。
+
+---
+
+## 🟡 Medium
+
+### M-1. `_cached_html` 多线程读写无锁 — 缓存击穿 + 可能返回半成品
+
+`__init__.py` 第 21-22 行：
+```python
+if _cached_html is not None:
+    return _cached_html
+```
+
+`_serve_dashboard` 由 `ThreadingHTTPServer` 在多线程下调用（`handler.py` 上下文）。GIL 保证单个字节码原子，但**不保证 check-then-act 原子**：
+
+1. **缓存击穿（thundering herd）**：N 个线程同时发现 `_cached_html is None`，会并发读 6-7 个文件 N 次。冷启动时若 dashboard 文件较大，IO 压力被放大 N 倍。
+2. **半成品返回**：第 51 行 `_cached_html = base` 是单次赋值（原子），但若线程 A 正在执行 `base = base.replace(...)` 链（第 35/40/48 行），线程 B 此时读到的 `_cached_html` 仍是 `None`，会重新走一遍加载——这只是浪费，不会返回损坏数据。**真正的风险**是 `_cached_html` 在 A 赋值前的中间态：实际上 Python 字符串赋值原子，所以不会返回半成品。结论：**主要风险是缓存击穿，不是数据损坏**。
+
+**修复建议**：用 `threading.Lock()` 包裹首次加载；或接受现状（启动后第一次请求并发概率极低）。
+
+### M-2. `invalidate_cache()` 无调用点 — 热重载失效机制名存实亡
+
+`grep` 全仓未发现任何 `invalidate_cache()` 调用。这意味着：
+- 开发者修改 fragment 文件后，必须重启 iff 进程才能生效；
+- 函数定义了但无人使用，属于 dead code 或未完成的 wiring。
+
+**修复建议**：要么在 `proxy/handler.py` 暴露一个 `POST /admin/dashboard/reload` 端点调用 `invalidate_cache()`，要么删除该函数避免误导。
+
+### M-3. fragment 加载失败的降级 HTML 注入 `frag_name` 未转义 — 低风险注入
+
+`__init__.py` 第 32-34 行：
+```python
+frag = f'<div class="tab-content" id="tab-{frag_name}">'
+frag += f'<p style="padding:2em;color:#9ca3af;">⚠️ Fragment {frag_name} 加载失败，查看 iff 日志</p>'
+```
+`frag_name` 来自硬编码元组 `("inference", "monitor", "deploy", "cloud")`，**当前不可控**。但若未来有人把 `frag_name` 改为接受外部输入，这里就是注入点。属防御性编程缺失，非当前漏洞。
+
+### M-4. `monitor.js` `setInterval(loadMetrics, 5000)` 未随 tab 切换暂停 — 资源浪费
+
+`monitor.js` 第 104 行无条件启动 5s 轮询，即使用户切到 inference/deploy/cloud tab，轮询仍在后台请求 `/api/metrics`。在长时间挂起的 dashboard 会话中，这是持续的 CPU + 网络 + 服务端 metrics 计算开销。
+
+**修复建议**：用 `document.hidden` + `visibilitychange` 暂停轮询；或仅当 `tab-monitor` 处于 active 时才轮询（监听 `switchTab`）。
+
+### M-5. `_fallback_html()` 只在 `base.html` 读取失败时触发 — 部分失败场景降级不一致
+
+`__init__.py` 第 23-55 行逻辑：
+- `base.html` 读取失败 → 进入 `except` → 返回 `_fallback_html()` ✓
+- 单个 fragment 缺失 → 内层 `try/except FileNotFoundError` 生成占位 div ✓
+- CSS 缺失 → `log.warning`，**`<!-- CSS:main -->` 占位符残留在 HTML 中**（base.html 第 8 行），页面无样式但可加载
+- JS 缺失 → `log.warning`，**`<!-- JS:app -->` 占位符残留**，对应函数全部未定义，点击任何按钮都会 `ReferenceError`
+
+CSS/JS 缺失场景的降级体验很差（无样式 / 全部按钮失效），但不会崩溃。建议 CSS/JS 缺失时也注入一段占位提示文本，而非保留 HTML 注释占位符。
+
+### M-6. `monitor.js` 未对 `_metricsWindow` 做白名单校验 — 直接拼入 URL
+
+`monitor.js` 第 17 行：
+```js
+const r = await fetch('/api/metrics?window=' + _metricsWindow);
+```
+`_metricsWindow` 由 `e.target.dataset.w` 赋值（第 10 行），而 `dataset.w` 来自 base.html / monitor.html 中硬编码的 `data-w="1h|24h|7d|all"`。**当前不可控**。但若服务端 `/api/metrics` 对 `window` 参数做 SQL/eval 类操作，且未来有人把 `data-w` 改为接受外部值，这里就是 SSRF/injection 入口。建议前端 `encodeURIComponent(_metricsWindow)`，服务端做白名单校验（`window in {'1h','24h','7d','all'}`）。
+
+---
+
+## 🟢 Low
+
+### L-1. `Path(__file__).parent` 在 zipimport / frozen 场景下行为待验证
+
+`__init__.py` 第 14 行 `_DASHBOARD_DIR = Path(__file__).parent`。在普通 `pip install` 或源码运行下正确。但在以下场景需验证：
+- **PyInstaller `--onefile`**：`__file__` 指向临时解压目录，`Path(__file__).parent` 可用，但需确认 `datas=[(...)]` 已包含 dashboard 资源；
+- **zipimport（pkg 在 .zip/.egg 内）**：`Path(__file__).parent` 指向 zip 内部，`read_text` 会失败。InferFabric 当前是源码部署，此场景概率低。
+
+建议：若需支持 frozen 部署，加 `getattr(sys, '_MEIPASS', None)` 兜底。
+
+### L-2. `base.html` 缺少 `<meta http-equiv="Content-Security-Policy">` — 无 XSS 纵深防御
+
+当前 base.html 无 CSP header。鉴于 C-1/C-2/C-3 已发现多处 XSS 风险，CSP 是重要的纵深防御层。建议 handler.py 在返回 dashboard HTML 时附加 `Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'`（至少禁止 `unsafe-eval` 和外部域）。注：当前 HTML 大量使用 inline `onclick`，完整 CSP 需要配合 nonce 重构，属较大改动。
+
+### L-3. `base.html` 保留大量 inline event handlers — 安全 + 可维护性
+
+`base.html` 第 79-82 行 + `deploy.html` / `cloud.html` 中多处 `onclick="switchTab(...)"`、`onclick="cloudAddProvider()"`、`onsubmit="return submitVllmDeploy(event)"`、`oninput="document.getElementById(...).textContent=..."`。这些 inline handler：
+- 要求 CSP 包含 `'unsafe-inline'`，削弱 XSS 防御；
+- `oninput` 中内联 `document.getElementById` 逻辑，与 JS 文件中函数重复定义风险。
+
+属既有架构问题，非本次引入，但 G-3a 拆分时未顺带重构是 missed opportunity。
+
+### L-4. CSS 未压缩、未分块 — 首次加载体积
+
+`style.css` 585 行单文件，inline 到 `<style>` 后随 HTML 一次性传输。当前体积可接受（< 30KB），但若后续扩展 monitor 面板样式，建议考虑按 fragment 拆分 CSS 或 minify。
+
+### L-5. `monitor.js` 第 46 行 `name = m.split('/').pop()` — 对 model 路径分隔符的假设
+
+假设 model name 用 `/` 分隔（如 `baidu/ernie-bot`），取最后一段展示。若 model name 本身不含 `/`，`pop()` 返回原字符串，行为正确。但若 model name 为 `./` 或空字符串，`pop()` 行为异常。属边界情况，低风险。
+
+### L-6. `setInterval(loadMetrics, 5000)` 与 `setInterval(loadVllmMetrics, 10000)` 计时器无清理追踪
+
+`app.js` 第 279 行用 `clearInterval(vllmTimer)` 管理 vLLM 计时器 ✓。但 `monitor.js` 第 104 行的 `setInterval` 未存储返回值，**无法在 dashboard 卸载/重载时清理**。若用户通过 `invalidate_cache()` 热重载 dashboard，旧的 5s 轮询会继续运行，新加载的页面再起一个，导致轮询实例累积。
+
+**修复建议**：
+```js
+let _metricsTimer = null;
+// init
+loadMetrics();
+_metricsTimer = setInterval(loadMetrics, 5000);
+// 在某个 cleanup 路径 clearInterval(_metricsTimer)
+```
+
+---
+
+## 🏗 架构建议
+
+### A-1. 字节级等价验证缺失 — 需补充自动化测试
+
+`__init__.py` 注释声称"与原 dashboard.py 字节级等价"，但：
+- 原单文件 `dashboard.py` 的 `DASHBOARD_HTML` 是否已被删除？需 `grep -r DASHBOARD_HTML` 确认无残留引用；
+- 是否有测试用例验证 `get_html()` 输出与旧版一致？建议添加 `tests/test_dashboard.py`，用快照测试（snapshot test）锁定 HTML 结构。
+
+### A-2. CSS 占位符替换失败时静默丢失 — 建议显式断言
+
+`__init__.py` 第 40 行 `base.replace("<!-- CSS:main -->", css)`：若 `base.html` 中占位符拼写错误（如 `<!-- CSS:MAIN -->`），`replace` 不会报错，CSS 永久丢失且无日志。建议：
+```python
+placeholder = "<!-- CSS:main -->"
+if placeholder not in base:
+    log.error("CSS placeholder not found in base.html")
+else:
+    base = base.replace(placeholder, css)
+```
+同理适用于 fragment/JS 占位符。
+
+### A-3. `monitor.js` 的 `loadRequestLog()` 是空壳 — 需明确产品决策
+
+`monitor.js` 第 87-93 行 `loadRequestLog()` 只设置一个"后续实现"的占位文本，但仍被 init 调用、且 `logTs` 会更新时间戳——给用户造成"日志在刷新"的错觉。建议：
+- 要么移除该函数调用，明确标注"v4.7 实现"；
+- 要么接入 access log API（`/api/logs?limit=50`），真正填充 `logBody`。
+
+### A-4. 费用计算精度 — JavaScript 浮点问题
+
+`monitor.js` 第 74 行 `'¥' + (d.cost_yuan || 0).toFixed(4)`：`toFixed` 对 `0.1 + 0.2` 这类浮点误差有修正，但对大额费用（如 ¥999999.99999）可能产生精度问题。建议服务端 `/api/metrics` 返回**整数分**（`cost_fen`），前端 `/100` 后 `toFixed(2)` 展示。当前 `.toFixed(4)` 展示 4 位小数对人民币而言过细（最小单位是分，2 位足够）。
+
+### A-5. 浏览器兼容性 — ES6+ 使用情况
+
+`app.js` / `monitor.js` 大量使用：
+- `async/await` (ES2017) ✓
+- `Optional chaining` `?.` (ES2020) — `app.js` 第 201 行 `document.getElementById('adminToken')?.value` ✓
+- `Nullish coalescing` `??` — 未发现使用
+- `Object.entries` / `Object.keys` (ES2017) ✓
+- `Promise.all` ✓
+- `for...of` (ES2015) ✓
+- Template literals (ES2015) ✓
+
+**目标浏览器**：Chrome 80+ / Firefox 74+ / Safari 13.1+ / Edge 80+（均支持上述特性）。InferFabric 是开发者自托管 dashboard，用户群体明确为技术人员，ES6+ 兼容性**无问题**。无需 babel transpile。
+
+---
+
+## 📋 结论
+
+| 级别 | 数量 | 关键项 |
+|------|------|--------|
+| Critical | 3 | C-1 monitor.js XSS、C-2 app.js XSS、C-3 token stats 注入 |
+| Medium | 6 | M-1 缓存击穿、M-2 invalidate_cache 无调用、M-4 轮询不暂停、M-5 降级不一致 |
+| Low | 6 | L-1 zipimport、L-2 无 CSP、L-3 inline handlers、L-6 计时器无清理 |
+| 架构建议 | 5 | A-1 字节等价测试、A-2 占位符断言、A-3 日志空壳、A-4 费用精度 |
+
+### 生产就绪度评估：**⚠️ 有条件就绪 — 需修复 C-1/C-2/C-3 后方可上线**
+
+**核心问题**：本次 G-3a/G-3b 拆分工作本身（fragment 化、缓存、降级）**质量良好**，缓存逻辑、降级路径、资源组织都符合生产标准。但 **XSS 防御存在系统性缺口**：
+- `monitor.js` 已引入 `esc()` 函数，说明开发者意识到了风险，但应用范围不完整（非 name 字段未转义）；
+- `app.js` 完全没有 `esc()`，所有 `m.name` 直接拼 innerHTML，是更严重的遗漏；
+- `handler.py` 的 `stats_json` 注入 `<script>` 是经典的 JSON-in-script XSS，Python `json.dumps` 默认不转义 `</`。
+
+**建议修复优先级**：
+1. **立即（上线阻塞）**：C-1 + C-2 + C-3 — 统一 `esc()` 应用、服务端 model name 过滤、`stats_json` 转义 `</`
+2. **短期（v4.6.2）**：M-2 invalidate_cache wiring、M-4 轮询暂停、A-1 字节等价测试
+3. **中期（v4.7）**：L-2 CSP header、L-3 inline handler 重构、A-3 日志面板实现
+
+**审查完成**：所有 7 个目标文件 + handler.py 调用上下文已审查。

@@ -1,0 +1,366 @@
+[dev] auto-update disabled
+[headless] --dangerously-skip-permissions：所有工具调用将自动批准
+我将开始生产级审查。先并行获取完整 diff 和当前文件状态。Diff 完整。现在并行读取所有 4 个目标文件的完整内容，以便对照 diff 看清上下文。已读全文件。开始 R2 生产级审查。
+
+---
+
+# R2: Metrics Pipeline Review — InferFabric v4.6.1
+
+**审查范围**: `metrics_aggregator.py`, `proxy/request_logger.py`, `proxy/handler.py` (`/api/metrics`), `proxy_manager.py`  
+**审查标准**: 生产软件级（正确性 / 线程安全 / 内存安全 / 错误处理 / 性能）  
+**审查方法**: git diff + 全文件阅读 + 跨模块一致性核对
+
+---
+
+## 🔴 Critical
+
+### C-1: `_load_price_config()` 时序错误 — 价格配置始终为空
+
+`proxy_manager.py:51-63`:
+
+```python
+self.cloud = CloudDiscovery(...)            # line 52
+self._cloud_discovered = False
+self.dual_gate = DualGateLimiter(...)
+self._agg_queue = _queue.Queue()
+self.metrics = MetricsAggregator(price_config=self._load_price_config())  # line 61
+self._agg_thread = AggregatorThread(...)
+self._agg_thread.start()
+```
+
+`_load_price_config()` (line 84-112) 读取 `self.cloud.cloud_models` 与 `self.cloud._providers[].model_specs`。但 `CloudDiscovery` 构造时 `cloud_models` 为空，真正的模型发现是**懒加载**在 `ensure_cloud_discovered()` (line 75-82) 中才触发 `discover_all()`。
+
+**后果**: `MetricsAggregator._price_config` 在构造时为空 `{}`，且整个生命周期**无任何更新入口**。`get_metrics()` 中 `price = self._price_config.get(model)` 永远返回 `None`，所有模型的 `cost_yuan` 恒为 `0.0`。dashboard 的费用面板将持续显示 0。
+
+**修复方向**: 
+- 在 `ensure_cloud_discovered()` 末尾调用 `self.metrics.update_prices(self._load_price_config())`（注：审查范围列出了 `update_prices()`，但 `metrics_aggregator.py` 中**并不存在**此方法 —— 见 C-2）。
+- 或让 `get_metrics()` 内部每次现读 `self._price_config`，并在 cloud polling 后刷新。
+
+### C-2: `update_prices()` 方法缺失 —— 审查范围与实现不符
+
+审查要求第 3 条「`update_prices()` 与 `record()`/`get_metrics()` 是否有竞态条件？」，但当前 `metrics_aggregator.py`（161 行，已完整读取）**没有 `update_prices` 方法**。`MetricsAggregator` 一旦构造，`_price_config` 即冻结。
+
+这与 C-1 是同一根因：价格无法在运行时刷新。同时说明实现与设计意图（动态价格更新）存在缺口。若有别处调用 `update_prices`，将抛 `AttributeError`。
+
+### C-3: 滑动窗口 cutoff 计算与样本截断互斥失败 —— `_ts` 时间戳不一致
+
+审查要求核对「`_ts` 时间戳是否在所有路径上正确设置」。实际情况：
+
+1. `RequestLogger.log()` (`request_logger.py:64-66`) 在 `enabled=True` 时为 `entry.timestamp` 自动填充 `time.time()`。
+2. `MetricsAggregator.record()` (`metrics_aggregator.py:67`) 也兜底 `entry.timestamp or time.time()`。
+3. **但**: `RequestLogger.__init__` 中 `on_log_queue` 推送发生在 `log()` 末尾 (`request_logger.py:81-86`)。若 `enabled=False`（用户在 `iff.yaml` 配 `access_log: false`），则 `log()` 在 line 62-63 直接 return，**`timestamp` 永不被设置**，`put_nowait` 也永不触发 —— 此时 aggregator 收不到任何样本。
+
+   反之，若 `enabled=True`，timestamp 在 line 65 已填充，aggregator 收到的 `entry.timestamp` 是正确值。这条路径 OK。
+
+4. **真正的问题**: `record()` 内部把 `entry.timestamp`（可能=0，当 logger disabled）拷进 dict 后赋 `or time.time()`，但 dict 里的 `timestamp` 用的是 `entry.timestamp or time.time()` —— 这是**正确的兜底**。然而 `get_metrics()` 的 cutoff (`line 84-86`) 使用 `now = time.time()`，与样本里的 `timestamp`（同样是 `time.time()` 基）比较，逻辑正确。
+
+**结论**: 滑动窗口时间戳逻辑本身正确。但存在一个隐蔽 bug —— 见 C-4。
+
+### C-4: AggregatorThread **无退出机制** —— `None` sentinel 未实现
+
+`metrics_aggregator.py:147-161`:
+
+```python
+class AggregatorThread(threading.Thread):
+    def __init__(self, aggregator, queue):
+        super().__init__(daemon=True)   # daemon=True
+        ...
+    def run(self):
+        while True:                     # 永不退出
+            try:
+                entry = self._q.get()   # 阻塞
+                self._agg.record(entry)
+            except Exception:
+                log.warning("aggregator record failed", exc_info=True)
+```
+
+审查要求第 2 条明确指出：「AggregatorThread 的 `queue.get()` 是否有正确的退出机制？None sentinel 是否可靠？」
+
+**实际**: 
+- 没有 `None` sentinel 处理。`run()` 是 `while True`，仅靠 `daemon=True` 在主进程退出时被强杀。
+- **`record()` 失败不退出**: `except Exception` 吞掉所有异常后 `continue`，线程继续 `get()`。这其实是**期望行为**（单条失败不应杀掉聚合线程），但代价是若 `record()` 持续抛异常（例如 entry 字段缺失），会陷入「get → record → except → get」的紧密 busy-loop，**无 backoff**。在 queue 持续有数据时，日志会爆炸（每条样本一条 warning）。
+
+**严重性**: 单用户场景下进程退出 = 服务停止，daemon 强杀可接受。但缺少优雅 shutdown 意味着：
+- 测试中无法干净 stop 线程。
+- 若未来引入 reload 机制，老线程不会退出，与新线程争抢 queue。
+
+**修复**: 增加 `stop()` 方法 + sentinel：
+```python
+def stop(self):
+    self._q.put(None)
+def run(self):
+    while True:
+        entry = self._q.get()
+        if entry is None:
+            return
+        try:
+            self._agg.record(entry)
+        except Exception:
+            log.warning("aggregator record failed", exc_info=True)
+            time.sleep(0.1)  # backoff
+```
+
+### C-5: `record()` 抛异常时**消息被永久丢弃** + 无 backoff
+
+`AggregatorThread.run()` 中：
+```python
+entry = self._q.get()
+self._agg.record(entry)   # 若抛异常
+```
+
+`record()` 持 `self._lock` 后做 dict 构造与 append。若 `entry` 缺字段（duck-typed），`entry.model` 等属性访问抛 `AttributeError`，被外层 `except Exception` 吞掉。该 entry **从 queue 取出后即丢失**，无法重试。
+
+更糟的是无 backoff：若上游持续推送畸形 entry，线程会以最大速度空转 + 刷 warning 日志。
+
+**修复**: 
+1. `except` 块加 `time.sleep(0.05)` backoff。
+2. 或在 `record()` 内部对单条 entry 做 try/except，失败时 log + 继续计数，避免整条 record 中断。
+
+---
+
+## 🟡 Medium
+
+### M-1: `_quantile()` 实现正确，但 `get_metrics()` **未使用** quantile 函数 —— 实际用的是 `statistics.median`
+
+`metrics_aggregator.py:20-29` 定义了模块级 `quantile()`，但 `get_metrics()` 中 (line 131-137) 调用的是：
+```python
+m["ttft_p50"] = round(median(ttfts), 1)
+m["ttft_p95"] = round(quantile(ttfts, 0.95), 1)
+m["ttft_p99"] = round(quantile(ttfts, 0.99), 1)
+```
+
+p50 用 `statistics.median`，p95/p99 用自定义 `quantile`。**两者算法不同**：
+- `median` 对偶数长度做 `(a[n/2-1] + a[n/2]) / 2`。
+- `quantile(data, 0.5)` 做 `idx = 0.5*(n-1)`, 线性插值。
+
+对小样本两者结果可能差 0.1 级。不致命，但 **不一致**。审查要求「`_quantile()` 线性插值实现是否正确？」—— 实现本身正确（边界：空→0.0，单元素→`lo=0,hi=0,frac=0` 返回该元素，q=0→idx=0 返回最小，q=1→idx=n-1 返回最大）。但命名混乱：模块里叫 `quantile`，审查称 `_quantile`。
+
+**建议**: p50 也用 `quantile(ttfts, 0.5)` 统一算法，移除 `statistics.median` 依赖。
+
+### M-2: `get_metrics()` 滑动窗口过滤在锁内做大列表拷贝 —— 100K 样本时阻塞 record
+
+`metrics_aggregator.py:88-89`:
+```python
+with self._lock:
+    samples = [s for s in self._samples if s.get("timestamp", 0) >= cutoff]
+```
+
+锁内做 O(N) 过滤 + 列表拷贝。N=100K 时：
+- 过滤耗时约 5-15ms（dict get + 比较）。
+- **期间 `record()` 阻塞**: 任何新请求完成后的聚合入队都会等锁。单用户场景请求量低，影响有限，但若 dashboard 5s 轮询 `/api/metrics` 且并发有请求，会产生周期性延迟尖峰。
+
+**修复**: 锁内只做 `samples = list(self._samples)` 浅拷贝（O(N) 但纯内存复制，无 per-element dict 访问），锁外再过滤。或更优：锁内 `self._samples` 已是 append-only（截断是整体替换），可直接 `samples = self._samples` 引用 + 锁外切片过滤 —— 但截断 `self._samples = self._samples[-50000:]` 会替换引用，旧引用仍安全可读。
+
+### M-3: `_samples = self._samples[-50000:]` 在锁内 —— 短暂但一次性大分配
+
+`metrics_aggregator.py:76-77`:
+```python
+if len(self._samples) > 100000:
+    self._samples = self._samples[-50000:]
+```
+
+截断本身 O(1)（切片创建新 list 引用 50K 个 dict），但触发瞬间会同时存在 100K + 50K 两个 list，内存峰值 ~1.5x。单用户场景可接受。
+
+**更隐蔽的问题**: 截断是**无条件保留最新 50K**，不按时间窗口。若用户流量极不均匀（如白天爆发、夜间静默），截断后可能丢失「最近 7d」的早期样本，导致 `window="7d"` 的 `total_requests` 偏小。审查要求核对截断是否在锁内 —— **是，在锁内**（line 55 `with self._lock` 覆盖到 line 77）。长时间持锁问题不严重（截断是单次 list 切片）。
+
+### M-4: `put_nowait()` 在 queue 满时抛 `queue.Full`，但被 `except Exception` 吞掉 —— 静默丢数据
+
+`request_logger.py:81-86`:
+```python
+if self._on_log_queue is not None:
+    try:
+        self._on_log_queue.put_nowait(entry)
+    except Exception:
+        log.warning("Failed to enqueue for aggregator", exc_info=True)
+```
+
+`proxy_manager.py:60`: `self._agg_queue = _queue.Queue()` —— **无 maxsize**，无界队列。
+
+**后果**:
+- 若 `AggregatorThread` 卡死（record 持续异常 + 无 backoff 空转），queue 无限增长，OOM 风险。
+- 当前 `except Exception` 会捕获 `queue.Full`，但 queue 无界所以不会触发。**真正的风险是无界 queue + 卡死消费者**。
+
+**修复**: 
+1. `queue.Queue(maxsize=10000)` 设上限。
+2. `except queue.Full: log.warning("aggregator queue full, dropping")` —— 区分 Full 与其他异常。
+3. 满时直接丢弃 + 计数，不阻塞主请求路径（当前实现已是 put_nowait，正确）。
+
+### M-5: `_total_requests` / `_total_success` / `_total_fail` 三个计数器**从未被读取**
+
+`metrics_aggregator.py:46-48` 定义，`record()` 中累加 (line 70-74)。但 `get_metrics()` 返回的 `total_requests` 是 `len(samples)`（窗口内样本数），与这三个全生命周期计数器**无关**。
+
+**问题**: 
+- 死代码，增加维护混淆。
+- 截断发生后（`_samples` 丢 50K），这三个计数器仍保留全量值，但无 API 暴露 —— 用户无法看到「截断前的历史总量」。
+
+**建议**: 要么在 `get_metrics(window="all")` 时返回这些计数器，要么删除。
+
+### M-6: `/api/metrics` 端点 `window` 参数校验**位置正确但逻辑可改进**
+
+`handler.py:501-513`:
+```python
+def _handle_api_metrics(self, pm):
+    try:
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(self.path).query)
+        window = qs.get("window", ["24h"])[0]
+        if window not in ("1h", "24h", "7d", "all"):
+            window = "24h"     # 静默回退
+        data = pm.metrics.get_metrics(window)
+        self._send_json(data, 200)
+    except Exception as e:
+        log.error("/api/metrics failed: %s", e)
+        self._send_json({"error": "metrics unavailable"}, 500)
+```
+
+**问题**:
+1. 非法 window 静默回退到 "24h"，HTTP 200。**用户无法区分**「我传了 window=foo 被回退」与「正常请求」。生产环境建议返回 400 + 错误说明。
+2. `from urllib.parse import urlparse, parse_qs` 在函数内 import —— 同文件 `_handle_vllm_metrics` (line 515 附近) 也做了同样的局部 import。这是有意为之（避免模块加载时开销）还是无意重复？生产代码中局部 import 通常被视为 smell。建议提到模块顶部。
+3. 路由匹配 `self.path == "/api/metrics"` (handler.py:95) 是**精确字符串比较**，不含 query string —— 这是对的，因为 `self.path` 在 BaseHTTPRequestHandler 中只有 path+query，而 `==` 会要求完全匹配。等等，实际上 `self.path` **包含 query string**（如 `/api/metrics?window=1h`），所以 `self.path == "/api/metrics"` **永远不会匹配带参数的请求**！
+
+   验证: handler.py:99 `elif path == "/vllm_metrics"` 用的是 `path`（局部变量，应已 stripped）。但 line 95 `elif self.path == "/api/metrics"` 用 `self.path`。
+
+   **这是 C 级 bug** —— 见 C-6。
+
+### M-7: `record()` 中 status 判定与 `get_metrics()` 中 success/fail 判定**重复但不一致**
+
+`record()` (line 71-74):
+```python
+if entry.status >= 400 or entry.error:
+    self._total_fail += 1
+else:
+    self._total_success += 1
+```
+
+`get_metrics()` (line 102-103, 123-124):
+```python
+"success": sum(1 for s in samples if s["status"] < 400 and not s["error"]),
+"fail": sum(1 for s in samples if s["status"] >= 400 or s["error"]),
+```
+
+逻辑一致（fail = status>=400 OR error）。但 `get_metrics()` 对每个样本**计算了 4 次** success/fail（result 顶层 2 次 + 每个 model 内 2 次）。对 100K 样本这是 400K 次条件判断，约 50-100ms 额外开销。
+
+**建议**: 一次遍历预计算 per-model success/fail，避免重复 sum。
+
+---
+
+## 🟢 Low
+
+### L-1: `CloudModelPrice` 字段命名歧义
+
+`price_input` / `price_output` —— 单位是 `¥/1M tokens`（注释明确），但字段名不含单位。若未来有人误读为 `¥/token`，cost 估算会差 1_000_000 倍。建议字段名 `price_input_per_mtok` 或在 dataclass docstring 里强制写单位。当前 `get_metrics()` 计算正确：`(tokens_in / 1_000_000) * price.price_input`。
+
+### L-2: `get_metrics()` 空样本返回结构不完整
+
+`metrics_aggregator.py:91-92`:
+```python
+if not samples:
+    return {"window": window, "total": 0}
+```
+
+而非空时返回的 key 是 `total_requests`（不是 `total`），且包含 `success`, `fail`, `models`, `cost_yuan`, `success_rate`。
+
+**前端兼容性风险**: dashboard JS 若按非空结构取 `data.total_requests` / `data.models`，在空样本时得到 `undefined`。审查要求「返回 JSON 结构是否完整」—— **不完整**，空与非空路径 key 集合不同。
+
+**修复**: 空样本也返回完整骨架：
+```python
+if not samples:
+    return {"window": window, "total_requests": 0, "success": 0, "fail": 0,
+            "models": {}, "cost_yuan": 0.0, "success_rate": 0.0}
+```
+
+### L-3: `quantile()` 对 `q` 无边界校验
+
+若调用 `quantile(data, 1.5)`，`idx = 1.5*(n-1)`，`lo = int(idx)` 可能越界（`sorted_data[lo]` IndexError）。当前内部调用仅用 0.95/0.99，安全。但作为模块级公开函数，缺乏防御。审查要求「q=0/1 边界」—— q=0 返回最小值正确，q=1 返回最大值正确。q<0 或 q>1 未防护。
+
+### L-4: `AggregatorThread` 未设置 `name`
+
+`super().__init__(daemon=True)` 未传 `name`。线程在 `py-spy` / `threading.enumerate()` 中显示为默认 `Thread-N`，调试不友好。建议 `name="iff-aggregator"`。
+
+### L-5: `proxy_manager.py` 中 `_load_price_config()` 访问 `self.cloud._providers` —— 突破封装
+
+`pcfg.model_specs` 是 CloudDiscovery 的内部结构。若 CloudDiscovery 重构 `_providers` 字典结构，此处会断。审查要求「price config loading 是否影响主服务」—— 当前用 `try/except` 包裹，失败仅 warning + 返回空 dict，**不影响主服务**，正确。但封装问题仍在。
+
+### L-6: `_load_price_config()` 跳过含 `/` 的 model_id —— 可能漏掉合法模型
+
+`proxy_manager.py:91-92`:
+```python
+if "/" in model_id:
+    continue  # 跳过 provider-prefixed 键
+```
+
+注释说跳过 `provider/model` 形式的键。但若用户在 yaml 里把模型 id 配成了 `qwen-72b/instruct` 这种含 `/` 的合法 id，会被静默跳过，cost 永远为 0。单用户场景这种 id 罕见，但逻辑上脆弱。
+
+### L-7: `handler.py:95` 路由匹配 — 见 C-6
+
+---
+
+## 🏛 架构建议
+
+### A-1: 引入「价格配置刷新」机制（解决 C-1/C-2）
+当前 `CloudDiscovery` 有 `start_polling()` 后台轮询云端模型列表。每次轮询后模型价格可能更新（供应商调价）。建议：
+- `CloudDiscovery` 在 polling 完成后触发回调 `on_models_updated`。
+- `ProxyManager` 注册回调，调用 `self.metrics.update_prices(self._load_price_config())`。
+- `MetricsAggregator.update_prices(new_prices)` 用 RLock 保护 `_price_config` 替换（与 `record`/`get_metrics` 竞态安全）。
+
+### A-2: 聚合线程生命周期管理
+- 增加 `stop()` + sentinel，便于测试与未来 hot-reload。
+- record 失败加 backoff，防止 busy-loop 刷日志。
+- 考虑给 queue 设 maxsize + 满时 drop 计数器，监控聚合背压。
+
+### A-3: `get_metrics()` 性能优化路径
+单用户 100K 样本是 7d 上限，实际峰值更低。但若未来扩到多用户，建议：
+- 样本按 timestamp 排序存储（record 时 append，天然有序），`get_metrics` 用 bisect 找 cutoff 索引，O(log N) 定位 + 切片，避免全量过滤。
+- 或维护一个环形缓冲 + per-model 桶索引。
+- 当前 O(N) 全扫在单用户场景**完全可接受**，不必过度设计。
+
+### A-4: 端点路由统一化
+`handler.py` 的路由分发混用 `self.path ==`（含 query）与 `path ==`（已 strip query）。建议在 `do_GET`/`do_POST` 入口统一解析一次：
+```python
+parsed = urlparse(self.path)
+base_path = parsed.path
+query = parse_qs(parsed.query)
+```
+然后所有路由用 `base_path`，所有参数从 `query` 取。消除 C-6 类 bug 的土壤。
+
+### A-5: 错误返回语义
+`/api/metrics` 当前对所有异常返回 500。建议区分：
+- 参数非法（window 不在白名单）→ 400。
+- 内部聚合异常 → 500。
+当前「非法 window 静默回退」对 API 客户端不友好。
+
+---
+
+## 📊 结论
+
+| 维度 | 评级 | 关键问题 |
+|------|------|----------|
+| 正确性 | ⚠️ **不通过** | C-1/C-2 价格配置永远为空，cost 面板恒 0；C-6 路由匹配 bug 导致带参数请求 404 |
+| 线程安全 | ✅ **通过** | 锁范围正确，put_nowait 不阻塞主路径，截断在锁内 |
+| 内存安全 | ✅ **通过（单用户）** | 100K 上限合理，截断内存峰值可控；无界 queue 是潜在风险（M-4） |
+| 错误处理 | ⚠️ **部分通过** | 主服务不受 price loading 失败影响（正确）；但聚合线程无 backoff、无优雅 shutdown（C-4/C-5） |
+| 性能 | ✅ **通过** | 单用户场景 O(N) 全扫可接受；5s 轮询 + 100K 样本约 50-100ms，锁内阻塞可优化（M-2） |
+
+**总体判定**: 🔴 **不通过，需修复后再合并**。
+
+**阻断性问题**（必须修复）:
+1. **C-1 + C-2**: 价格配置懒加载时序错误，且 `update_prices` 方法缺失 → cost 估算功能完全失效。
+2. **C-6**: `/api/metrics?window=xxx` 路由匹配失败 → dashboard 带参数轮询将 404。
+
+**强烈建议修复**:
+3. C-4/C-5: 聚合线程加 sentinel 退出 + record 失败 backoff。
+4. M-4: queue 设 maxsize，防止消费者卡死导致 OOM。
+5. L-2: 空样本返回结构对齐非空样本，避免前端 undefined。
+
+**可延后**:
+- M-1 分位算法统一（不影响正确性，仅一致性）。
+- M-3 截断策略（单用户流量均匀时无感）。
+- A-3 性能索引优化（单用户场景过早优化）。
+
+---
+
+**审查完成度**: 4 文件 / 161 + 117 + ~1100 + 220 行已通读；diff `a61914e..HEAD` 已逐行核对；跨模块时序（init → cloud_discovery → price loading）已验证。
+
+**剩余疑点需 owner 确认**:
+- `update_prices()` 是否在未提交的本地代码中存在？（当前 HEAD 无此方法）
+- `/api/metrics` 是否设计为 dashboard 唯一数据源？若是，C-1 cost 失效会直接体现在用户面板。

@@ -1,0 +1,49 @@
+[dev] auto-update disabled
+[headless] --dangerously-skip-permissions：所有工具调用将自动批准
+I'll start by examining the diff and the relevant files in parallel.The diff didn't include `chat_handlers.py`. Let me read the full files to understand the surrounding context.Let me read the key files fully.Now let me look at the `chat_handlers.py` to understand the TTFT/callers of these functions, and the proxy_manager for the `_rate_limiters` dict.Now let me look at the actual call sites in detail to check for the acquire/release symmetry, and check the chat_handlers for the cloud path logging/TTFT.I now have enough context to identify the key issues. Let me check one more thing — the `pipe_stream_response` to confirm the streaming case doesn't propagate errors, and `forward_to_cloud` callers in `handler.py` for the case where `result` is used.I have enough context. Producing the review now.
+
+## R1: Core Engine Review
+
+### 严重问题 (Critical)
+
+- **[C1] DualGateLimiter.acquire() 在 Gate 1 (RPM) 成功、Gate 2 (Semaphore) 失败时不归还 RPM 令牌，造成 TokenBucket 永久泄漏** | `inferfabric/ratelimit.py:210-220` → 调用方 `chat_handlers.py:245` / `handler.py:413` | RPM 软门令牌每分钟只补充一次，长时间运行会因泄漏把 server/model bucket 耗到 0，触发 `server_rate_limit` 死锁；与 `RateLimiterV2.acquire()` 在 model bucket 失败时归还 server 令牌的语义不一致 (`ratelimit.py:135-137`)。修复：在 Gate 2 失败分支调用 `self._rpm.release(model)`（注：`RateLimiterV2` 当前没有 `release(model)` 方法，需补上 server+model 双归还，或在 `DualGateLimiter` 内分别持有对 `RateLimiterV2` 内部 bucket 的引用）。
+
+- **[C2] cloud 路径完全未通过 DualGateLimiter，且 cloud streaming 路径 usage/ttft 全丢，导致 RequestLog 状态错乱** | `inferfabric/proxy/handler.py:355-364` + `inferfabric/forwarder.py:196-202` | 在 `_handle_v1_messages` 的 cloud 路由里，`pm.logger.log(RequestLog(... status=0 ...))` 在 `forward_to_cloud` 调用**之前**就记了一条 `status=0` 的"占位"日志，且**不使用** `forward_to_cloud` 返回的 `CloudResult`。结果：每个 cloud 请求产生两条 RequestLog（一条 status=0 占位，一条最终），双计 RPM；且 streaming 路径下 `CloudResult.usage={}`、`ttft_ms=None`，成本/TTFT 面板数据缺失。`chat_handlers.py:216-225` 写法正确（用 `result.status` 等字段），handler.py 的两个分支（行 355、行 392-405）写法错误。修复：把 `pm.logger.log(...)` 放到 `forward_to_cloud` 之后，用 `result.status / result.usage / result.ttft_ms / result.duration_ms / result.error` 填充，删除 status=0 占位日志。
+
+- **[C3] `_forward_local` 释放的 model_name 与 acquire 时可能不一致，导致 Semaphore 永久占用** | `inferfabric/proxy/handler.py:413` acquire 用 `model_name = data.get("model", ...)`，但 `_forward_local` 的 try 块内调用 `forward_anthropic_local`，后者可能改写 `data["model"]` 为 served_name；`finally` 用同一 `model_name` release 是对的。但 **`chat_handlers.py:245` acquire 用的是 path 入口的 `model`（用户传入），而 `data["model"]` 在行 234-235 已被改写为 served_name** —— 如果 `forward_request` 内部基于 `data["model"]` 报错，retry/release 的 model 标识不一致不影响 Semaphore（Semaphore 不绑定 model），但**影响 RateLimiterV2 的 model bucket 归还**：`release(model)` 会归还到一个与 acquire 时不同的 model bucket，使原 model bucket 永远缺一个令牌。修复：acquire/release 一律使用改写**之后**的 `data["model"]`，或者 DualGateLimiter.release 完全忽略 model 参数（因为 Semaphore 不区分 model）—— 更彻底的修复是把 RPM 的 acquire/release 也解耦到统一 key。
+
+### 中等问题 (Medium)
+
+- **[M1] DualGateLimiter.release(model) 的 `model` 参数从未被使用，RPM 软门是一次性消费不归还的设计** | `inferfabric/ratelimit.py:222-224` | 注释说"RPM 不需 release"，但 `RateLimiterV2` 在 acquire 时同时从 server bucket 和 model bucket **各扣 1 令牌**（`ratelimit.py:130-134`），不归还意味着每个请求消耗 server+model 各 1 令牌、靠 refill 自然恢复。这本身 OK，但**与 `_RateLimiter.release()` 的并发归还语义不一致**：`release()` 只 release Semaphore，不动 RPM；而 acquire 时若 Gate 2 失败 RPM 已扣，又因 [C1] 不归还，泄漏路径明确。修复同 [C1]。
+
+- **[M2] forward_to_cloud 用 `urllib.request.urlopen`（同步阻塞）在请求热路径上执行，无取消传播** | `inferfabric/forwarder.py:193` | IFF 是单用户单进程，`urlopen` 阻塞整个线程直到 cloud 返回或 `provider_cfg.timeout` 到期；客户端断连时无法 cancel cloud upstream，cloud 计费继续。在 RTX 5090D 32GB + systemd 用户服务的部署约束下尚可接受，但应在 streaming 路径上的 `pipe_stream_response` 内对 `BrokenPipeError` 做云端的 `resp.close()` —— 目前 `pipe_stream_response` 的 finally 只 `resp.close()`，OK；但 `forward_to_cloud` 在 `was_stream=True` 分支里**没有 try/except 包裹 `pipe_stream_response`**，若 `pipe_stream_response` 抛 BrokenPipe 之外的异常，会落到 `forward_to_cloud` 外层 `except Exception`（行 228），但此时 `send_json` 已经在 `pipe_stream_response` 内 send_response 过，再 send_json 会破坏 HTTP 状态机。修复：把 streaming 分支单独 try，捕获后仅 `log.error` 不再 send_json。
+
+- **[M3] cloud 错误日志可能泄漏上游错误体中的敏感字段** | `inferfabric/forwarder.py:218, 221` | `log.error("... %s", error_body[:200])` 和返回给客户端的 `error_body[:500]` 未做脱敏。Anthropic/OpenAI 的 4xx 错误体可能包含请求片段、API key 校验信息（不会是 key 本身，但可能含 org id / project id）。单用户场景下风险低，但若 IFF 未来多用户化，会把一个用户的请求片段泄漏给另一个用户。修复：对返回客户端的 error_body 做字段白名单（仅 message/type），日志侧同样截断 + 字段过滤。
+
+- **[M4] proxy_manager.py 初始化顺序有隐含依赖，且 `_load_price_config` 在 `self.cloud` 尚未 discover 时调用，会读到空 `cloud_models`** | `inferfabric/proxy_manager.py:51-72` | 顺序为：cloud → dual_gate → metrics(用 `_load_price_config()`) → logger。`_load_price_config` 依赖 `self.cloud.cloud_models` 和 `self.cloud._providers`，但 `_cloud_discovered=False` 时 `cloud_models` 可能为空（取决于 CloudDiscovery 构造函数是否 eager load）。结果是价格配置在首次启动时可能为空 `{}`，所有 cloud 请求成本记为 0。修复：`_load_price_config` 改为惰性调用（在 `ensure_cloud_discovered` 之后），或在 AggregatorThread 里支持 price_config 热更新。
+
+### 轻微问题 (Low)
+
+- **[L1] CloudResult 的 `usage: dict` 默认 `field(default_factory=dict)`，但 streaming 路径返回的 CloudResult 没设 usage，调用方 `chat_handlers.py:220` 用 `result.usage.get("prompt_tokens", 0)` —— 这是安全的（空 dict .get 返回 0），但语义上 streaming 路径"无 usage"与 non-streaming"usage 为空"无法区分**。修复（可选）：改 `usage: dict | None = None`，调用方判 None 走"G-1b deferred"分支。
+
+- **[L2] `TokenBucket._refill` 用 `time.monotonic()` 是正确的（无回拨风险），但 `last_refill` 在每次 `_refill` 都更新，而 `_refill` 在 acquire/try_acquire/available 每次都调 —— 高频 acquire 下 `last_refill` 更新频率等于请求频率，不会导致性能问题**。仅提示：若未来 burst 容量上调到数千，`time.sleep(min(remaining, 0.1))` 的 100ms 轮询粒度可能让 acquire 精度漂移。无需立即修复。
+
+- **[L3] `_load_price_config` 里 `if "/" in model_id: continue` 跳过 provider-prefixed 键，但下面的 `_providers` 回退循环用 `mid`（可能是 provider-prefixed 也可能是 short）做 key，可能与第一轮的 short-name key 冲突**。当前用 `if mid in prices: continue` 兜底，逻辑正确，但注释 "spec-only 注册模型" 不准确。仅文档级问题。
+
+### 架构建议
+
+1. **统一 acquire/release 契约**：建议 DualGateLimiter.acquire 返回一个 `Releasable` 句柄对象（含 `release()` 方法 + `__enter__/__exit__`），调用方用 `with dual_gate.acquire(model) as gate:` 模式，彻底消灭 [C1][C3] 这类"哪个令牌要归还"的对称性问题。当前的 `acquire(model)+release(model)` 平铺 API 在 4 个调用点已经出现 2 处不对称 bug。
+
+2. **cloud 路径也需要轻量级限流**：注释说"cloud 路由不经过此门（单用户 + 云端自有配额）"，但 cloud 请求仍占用 IFF 的出站带宽、HTTP 连接数和 cost budget。建议为 cloud 路径加一个独立的 max_concurrent（如 4），与 local 的 max_concurrent=6 解耦，避免 cloud 慢请求把 IFF 整体线程池打满。
+
+3. **RequestLog 占位 vs 最终日志的语义分离**：[C2] 暴露的是"先记占位、再记最终"的双写问题。建议 RequestLogger 增加 `update_or_final(req_id, final_log)` 语义，或者在 cloud 路径统一改为"调用 forward_to_cloud → 拿 CloudResult → 单次 logger.log"。
+
+4. **DualGateLimiter 的 max_concurrent=6 与 RTX 5090D 32GB 的实际 vLLM max_num_seqs 脱钩**：原 v1 `_get_model_rate_limiter` 会读 `model_obj.vllm.max_num_seqs` 动态设并发上限（2~20），新版 DualGateLimiter 写死 6。对单用户场景 6 偏保守但安全，建议保留 v1 的动态读取作为 `max_concurrent` 的来源。
+
+### 结论
+
+- [ ] 可合入生产
+- [x] 需修改后重审
+- [ ] 不可合入
+
+**阻塞项**：[C1] RPM 令牌泄漏会在长时间运行后把整个网关锁死；[C2] cloud 路径 RequestLog 双写 + streaming usage/ttft 丢失，直接破坏 G-1a/G-2 指标准确性；[C3] model bucket 归还错配同样造成泄漏。修复 C1+C2+C3 后重审，M 级问题建议在同一 PR 内一并处理。

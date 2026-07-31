@@ -1,0 +1,191 @@
+---
+
+# R3: Persistence & Cloud Review — InferFabric v4.6.1 PR-F
+
+## Critical
+
+### C1. 缺少 `flush()` + `fsync()` — 原子写入不完整
+
+`save_config()` 中 `yaml.dump()` 写入 tmp 后直接跳到 read-back 校验，**没有 `f.flush()` + `os.fsync(f.fileno())`**。
+
+```python
+# cloud_discovery.py:237-239
+with open(tmp, 'w') as f:
+    yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+# ← 缺少 f.flush(); os.fsync(f.fileno())
+```
+
+**影响**: `os.replace()` 保证文件名层面原子替换，但如果 tmp 内容仍停留在内核 page cache 而未落盘，此时系统崩溃 → 目标文件存在但内容为零/不完整。虽然 `os.replace()` 本身是原子的（同名或旧文件），写入内容在 replace 之前的持久性取决于 fsync。
+
+**修复**: 在 `with open(tmp, 'w')` 块末尾、校验之前加入：
+```python
+f.flush()
+os.fsync(f.fileno())
+```
+
+### C2. `_save_lock` 与 `_models_lock` 锁序不一致 — 死锁风险
+
+handler.py 中 provider add 的执行路径：
+```
+1. pm.cloud._providers[name] = cfg          ← 无锁直接修改 _providers
+2. with pm.cloud._models_lock:              ← 获取 _models_lock
+3.     pm.cloud._register_spec_only_models(...)
+4. pm.cloud.save_config()                   ← 内部获取 _save_lock
+```
+
+provider delete 的路径：
+```
+1. with pm.cloud._models_lock:              ← 获取 _models_lock
+2.     del pm.cloud._providers[name]        ← 在 _models_lock 内修改 _providers
+3.     pm.cloud._cloud_models = {...}
+4. pm.cloud.save_config()                   ← 获取 _save_lock（在 _models_lock 之外）
+```
+
+而 `reload()` 的路径：
+```
+1. self.stop_polling()
+2. with self._save_lock:                    ← 先获取 _save_lock
+3.     self._config_path = config_path
+4. with self._models_lock:                  ← 再获取 _models_lock
+```
+
+三条路径锁获取顺序不同：
+- `reload()`: `_save_lock` → `_models_lock`
+- `add`: `_models_lock` → `_save_lock`
+- `delete`: `_models_lock` → `_save_lock`
+
+虽然当前 handler 中 `_models_lock` 和 `_save_lock` 不会同时持有（`save_config()` 在 `_models_lock` 块外调用），但 `reload()` 的 `_save_lock` 和 `_models_lock` 是嵌套的。如果未来有人在 `save_config()` 内部也需要读 `_cloud_models`，立刻死锁。
+
+**当前不会死锁**，但锁序约定缺失、代码修改脆弱。建议统一为 **先 `_save_lock` 再 `_models_lock`** 或合并为单一 RLock。
+
+### C3. `_providers` 字典在 `_models_lock` 之外被修改 — 竞态
+
+在 provider add 路径中 (`handler.py:820-830`):
+```python
+pm.cloud._providers[name] = cfg            # ← 无锁！
+with pm.cloud._models_lock:
+    pm.cloud._register_spec_only_models(pm.cloud._cloud_models)
+pm.cloud.save_config()
+```
+
+`_providers` 在 `_models_lock` 保护之外被赋值。而 `save_config()` 内部 `_serialize_providers()` 遍历 `_providers` 时也没有获取任何锁。如果 discover_all() 或其他线程同时读 `_providers`，会看到部分写入状态。
+
+**修复**: 将 `pm.cloud._providers[name] = cfg` 移入 `_models_lock` 块内，或在 `save_config()` 内也用锁保护 `_providers` 的读取。
+
+---
+
+## Medium
+
+### M1. `_config_corrupt` 一旦置 True 永不重置 — 永久不可恢复
+
+```python
+# cloud_discovery.py:377
+self._config_corrupt = True
+```
+
+`_config_corrupt` 被设置为 `True` 后，整个类中没有任何代码将其重置为 `False`。如果第一次启动时 YAML 暂时损坏（如运维误操作、磁盘瞬时故障），服务重启后即使 YAML 已修复，该标志也不会再变回来（因为它只在 `_load_config` 的异常分支中设置，不随正常加载而清除）。
+
+**修复**: 在 `_load_config()` 成功返回前、以及 `save_config()` 成功后，设置 `self._config_corrupt = False`。
+
+### M2. `.yaml.tmp` 残留文件未在启动时清理
+
+如果进程在 `os.replace()` 之前崩溃，`.yaml.tmp` 残留在磁盘上。启动时 `_load_config()` 只读取正式文件，不会检查或清理 tmp。这本身不影响正确性，但：
+- 下次 `save_config()` 会覆盖同一 tmp 路径，所以不会造成数据混淆
+- 但如果 tmp 文件内容已损坏，read-back 校验会正确拒绝它
+- 主要问题：缺少启动时的日志警告，运维可能不知道上次保存未完成
+
+**建议**: 在 `__init__` 或 `_load_config` 中检测 `.yaml.tmp` 残留，记录 warning 日志，可选自动清理。
+
+### M3. `yaml.safe_load` 校验不够充分 — 不验证结构
+
+read-back 校验只做了 `yaml.safe_load(f)`，确认 YAML 可解析。但**不验证**：
+- 返回值的类型（`safe_load` 可能返回 `None`、int、str 等）
+- `providers` 键是否存在
+- 每个 provider 的必填字段是否完整
+
+如果 `yaml.dump` 输出了空文件或非 dict 内容（极端边缘情况），`safe_load` 不会报错，但后续 `_load_config` 会失败。
+
+**修复**: 校验时增加：
+```python
+loaded = yaml.safe_load(f)
+if not isinstance(loaded, dict) or "providers" not in loaded:
+    raise ValueError("Config validation failed: missing 'providers' key")
+```
+
+### M4. `_serialize_providers()` 数据丢失 — `model_id` 重复键问题
+
+```python
+# cloud_discovery.py:277
+key = mid.split("/")[-1] if "/" in mid else mid
+models[key] = md
+```
+
+如果同一 provider 下有两个 model_specs 键如 `"provider-a/model-x"` 和 `"provider-b/model-x"`，它们 short name 相同 (`model-x`)，后者覆盖前者。此外，`md["model_id"] = mid` 仅在 `mid` 非空时设置，但如果 `mid` 为空字符串（虽然不太可能），条件不满足，model_id 字段丢失。
+
+### M5. handler 中 save_config 失败后内存与磁盘状态不一致
+
+Provider delete (`handler.py:788-796`):
+```python
+with pm.cloud._models_lock:
+    del pm.cloud._providers[name]
+    pm.cloud._cloud_models = {...}
+try:
+    pm.cloud.save_config()
+except Exception as e:
+    self._send_json({"error": "Failed to save config", ...}, 500)
+    return
+```
+
+如果 `save_config()` 失败，provider 已从内存中删除但未持久化。下次重启，被删除的 provider 会重新出现。**没有回滚内存状态**。
+
+Provider add 同理：已加入内存但持久化失败，重启后丢失。
+
+**建议**: 要么在 `save_config` 失败时回滚内存变更，要么将内存修改和持久化放在同一个事务性操作中（先保存再修改内存）。
+
+---
+
+## Low
+
+### L1. `save_config()` 未检查 `_config_corrupt` 标志
+
+如果配置文件加载时已标记为 corrupt，`save_config()` 仍允许覆盖写入。这可能是合理的（修复性写入），但也可能覆盖运维正在手动修复的文件。建议至少在 `_config_corrupt=True` 时记录 warning。
+
+### L2. `model_discovery.py:195` 中有类似的原子写入但同样缺少 fsync
+
+`model_discovery.py` 的 `tmp_path.write_text(yaml_content)` + `tmp_path.rename(yaml_path)` 也没做 fsync，与 `cloud_discovery.py` 存在相同的持久性风险。虽然这是旧代码，但值得一并修复。
+
+### L3. `_serialize_providers()` 不序列化 `enabled`、`discovery`、`routing` 字段
+
+当前序列化只包含 `openai_base`、`api_key`、`anthropic_base`、`timeout`、`models`。但 `ProviderConfig` 还包含 `enabled`、`discovery_enabled`、`discovery_endpoint`、`discovery_interval`、`include_pattern`、`routing_default` 等字段。这些字段在 add 后不会被持久化，重启后丢失配置。
+
+这是一个**数据完整性缺陷**，但因为 add handler 本身也未传递这些字段的完整值，所以当前影响有限（add handler 只设置了部分字段）。
+
+### L4. `yaml.dump` 对 float 默认输出可能不精确
+
+`price_input` / `price_output` 是 float 类型。`yaml.dump` 默认使用 Python repr 格式化 float，某些浮点数可能输出为 `0.30000000000000004` 之类的形式。`yaml.safe_load` 读回时值相同，功能上无损，但 YAML 可读性差。可考虑对价格字段做 `round(v, 6)` 处理。
+
+---
+
+## 架构建议
+
+1. **统一持久化基类**: `cloud_discovery.py` 和 `model_discovery.py` 都实现了"write-to-tmp + rename"模式，但各自实现且都缺少 fsync。建议提取公共 `atomic_write_yaml(path, data)` 工具函数，内含 flush + fsync + 校验 + rename，一处修复两处受益。
+
+2. **锁策略重构**: 当前 `_models_lock` (RLock) + `_save_lock` (Lock) 职责模糊。`_models_lock` 保护 `_cloud_models`，但 `_providers` 的修改有时在锁内有时不在。建议将 `_providers` 和 `_cloud_models` 统一由一把锁保护，或明确文档化锁覆盖范围。
+
+3. **save_config 语义选择**: 当前是"先改内存再持久化"（write-behind），失败后内存与磁盘不一致。可考虑"先持久化再改内存"（write-through），或保存失败时回滚内存状态。
+
+4. **`_config_corrupt` → 健康检查联动**: 将 `_config_corrupt` 暴露到 `/health` 端点，使监控系统可感知持久化层异常。
+
+---
+
+## 结论
+
+PR-F 的持久化机制核心思路正确（tmp + replace 原子写入 + read-back 校验），但实现上有 **3 个 Critical 级问题** 需要修复后才能上生产：
+
+| # | 级别 | 问题 | 修复难度 |
+|---|------|------|----------|
+| C1 | Critical | 缺少 flush+fsync，崩溃时可能丢失数据 | 低（加 2 行） |
+| C2 | Critical | 锁序不一致，未来修改易死锁 | 中（统一锁序） |
+| C3 | Critical | `_providers` 无锁修改 + `save_config` 无锁读取 | 低（调整锁范围） |
+
+**Medium 级问题** 中 M1（corrupt 永不重置）和 M5（内存/磁盘不一致）对运维影响较大，建议同批修复。其余 Low 项可在后续迭代处理。
