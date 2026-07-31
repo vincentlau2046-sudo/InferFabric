@@ -8,6 +8,7 @@ iff.yaml 新增 access_log: true（默认 true），false 时不写日志。
 import json
 import logging
 import os
+import queue
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -32,6 +33,7 @@ class RequestLog:
     route: str = "local"               # "local" | "cloud"
     cloud_provider: str | None = None   # "baidu-codingplan" | None
     error: str | None = None
+    timestamp: float = 0.0   # time.time() at log time (G-2: sliding window)
     ts: str = ""
 
 
@@ -42,12 +44,14 @@ class RequestLogger:
     - 按日自动轮转，实时 flush
     """
 
-    def __init__(self, log_dir: str | Path = "logs", enabled: bool = True):
+    def __init__(self, log_dir: str | Path = "logs", enabled: bool = True,
+                 on_log_queue: queue.Queue | None = None):
         self._log_dir = Path(log_dir)
         self._enabled = enabled
         self._current_date: str = ""
         self._fd: IO | None = None
         self._lock = threading.Lock()
+        self._on_log_queue = on_log_queue
 
     @property
     def enabled(self) -> bool:
@@ -57,6 +61,9 @@ class RequestLogger:
         """写一行 JSONL，自动按日轮转。线程安全。"""
         if not self._enabled:
             return
+        # G-2: auto-fill timestamp if not set
+        if entry.timestamp == 0:
+            entry.timestamp = time.time()
         with self._lock:
             try:
                 if not entry.ts:
@@ -70,6 +77,13 @@ class RequestLogger:
                     self._fd.flush()
             except Exception as e:
                 log.warning("Failed to write request log: %s", e)
+
+        # 推送 aggregator（在锁外，避免嵌套锁死锁）
+        if self._on_log_queue is not None:
+            try:
+                self._on_log_queue.put_nowait(entry)
+            except Exception:
+                log.warning("Failed to enqueue for aggregator", exc_info=True)
 
     def close(self):
         """关闭当前文件句柄。"""

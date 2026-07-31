@@ -92,6 +92,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._handle_v1_models(pm)
             elif self.path == "/system":
                 self._send_json(self._system_info())
+            elif self.path == "/api/metrics":
+                self._handle_api_metrics(pm)
             elif self.path == "/history":
                 self._send_json(pm.mgr.state.get_history(limit=30))
             elif path == "/vllm_metrics":
@@ -496,6 +498,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     # ─── vLLM Metrics ────────────────────────────────────────────
 
+    def _handle_api_metrics(self, pm):
+        """返回聚合指标 (G-2 MetricsAggregator)"""
+        try:
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            window = qs.get("window", ["24h"])[0]
+            if window not in ("1h", "24h", "7d", "all"):
+                window = "24h"
+            data = pm.metrics.get_metrics(window)
+            self._send_json(data, 200)
+        except Exception as e:
+            log.error("/api/metrics failed: %s", e)
+            self._send_json({"error": "metrics unavailable"}, 500)
+
     def _handle_vllm_metrics(self, pm):
         from urllib.parse import urlparse, parse_qs
         qs = parse_qs(urlparse(self.path).query)
@@ -774,6 +790,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                         k: v for k, v in pm.cloud._cloud_models.items()
                         if v.provider != name
                     }
+                try:
+                    pm.cloud.save_config()
+                except Exception as e:
+                    log.error("Failed to persist provider deletion: %s", e)
+                    self._send_json({"error": "Failed to save config", "detail": str(e)}, 500)
+                    return
                 self._send_json({"status": "deleted", "provider": name})
             else:
                 self._send_json({"error": f"Provider '{name}' not found"}, 404)
@@ -802,6 +824,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             with pm.cloud._models_lock:
                 # Register spec-only models from new provider
                 pm.cloud._register_spec_only_models(pm.cloud._cloud_models)
+            try:
+                pm.cloud.save_config()
+            except Exception as e:
+                log.error("Failed to persist provider addition: %s", e)
+                self._send_json({"error": "Failed to save config", "detail": str(e)}, 500)
+                return
             self._send_json({"status": "added", "provider": name})
 
     def _handle_embeddings(self, pm):

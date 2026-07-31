@@ -4,7 +4,8 @@ inferfabric/proxy_manager.py — Model switching, health check, and request rout
 Extracted from proxy.py for modularity.
 """
 
-import json
+import queue as _queue
+import uuid
 import logging
 import os
 import threading
@@ -19,9 +20,8 @@ from inferfabric.proxy.auth import AuthManager
 from inferfabric.proxy.request_logger import RequestLogger, RequestLog
 from inferfabric.cloud_discovery import CloudDiscovery, CloudModel
 from inferfabric.ratelimit import DualGateLimiter, RateLimiterV2
+from inferfabric.metrics_aggregator import MetricsAggregator, AggregatorThread, CloudModelPrice
 from pathlib import Path as _Path
-import uuid
-import time as _time
 
 # IFF data directory (consistent with config.py / token_stats.py)
 IFF_DATA_DIR = _Path.home() / ".inferfabric"
@@ -48,16 +48,22 @@ class ProxyManager:
         self._switch_lock = threading.Lock()
         # PR-A: Auth manager
         self.auth = AuthManager(IFF_DATA_DIR / "api_keys.yaml")
-        # PR-B: Request logger
-        self.logger = RequestLogger(log_dir=IFF_DATA_DIR / "logs", enabled=True)
+        # PR-D: Cloud discovery (must init before aggregator for price config)
+        self.cloud = CloudDiscovery(IFF_DATA_DIR / "cloud_provider.yaml")
+        self._cloud_discovered = False
         # PR-E: DualGateLimiter — RPM 软门 + 并发硬门
         self.dual_gate = DualGateLimiter(
             rpm_limiter=RateLimiterV2(server_rpm=60, model_rpm_default=20, timeout=30),
             max_concurrent=6,
         )
-        # PR-D: Cloud discovery
-        self.cloud = CloudDiscovery(IFF_DATA_DIR / "cloud_provider.yaml")
-        self._cloud_discovered = False
+        # G-2: Metrics aggregator (queue-decoupled)
+        self._agg_queue = _queue.Queue()
+        self.metrics = MetricsAggregator(price_config=self._load_price_config())
+        self._agg_thread = AggregatorThread(self.metrics, self._agg_queue)
+        self._agg_thread.start()
+        # PR-B: Request logger (feeds aggregator via queue)
+        self.logger = RequestLogger(log_dir=IFF_DATA_DIR / "logs", enabled=True,
+                                     on_log_queue=self._agg_queue)
         # PR-B: Helper to create request context
         self._req_counter = 0
 
@@ -74,6 +80,36 @@ class ProxyManager:
             log.info("Cloud discovery completed: %d models", len(self.cloud.cloud_models))
             # Start background polling for model updates
             self.cloud.start_polling()
+
+    def _load_price_config(self) -> dict[str, CloudModelPrice]:
+        """从 cloud_provider.yaml 加载价格配置（cloud_models + provider model_specs）"""
+        prices = {}
+        try:
+            if hasattr(self, 'cloud') and self.cloud:
+                # 优先从 CloudModel 实例读取（含 spec-only 注册模型）
+                for model_id, model in self.cloud.cloud_models.items():
+                    if "/" in model_id:
+                        continue  # 跳过 provider-prefixed 键
+                    if model.price_input > 0 or model.price_output > 0:
+                        prices[model_id] = CloudModelPrice(
+                            price_input=model.price_input,
+                            price_output=model.price_output,
+                        )
+                # 回退：从 provider model_specs 补充（尚未注册为 CloudModel 的）
+                for _pname, pcfg in self.cloud._providers.items():
+                    for mid, spec in pcfg.model_specs.items():
+                        if mid in prices:
+                            continue
+                        pi = spec.get("price_input", 0)
+                        po = spec.get("price_output", 0)
+                        if pi > 0 or po > 0:
+                            prices[mid] = CloudModelPrice(
+                                price_input=float(pi),
+                                price_output=float(po),
+                            )
+        except Exception as e:
+            log.warning("Failed to load price config: %s", e)
+        return prices
 
     @property
     def current(self) -> str:
