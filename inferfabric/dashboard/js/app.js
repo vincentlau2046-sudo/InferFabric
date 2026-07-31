@@ -265,7 +265,7 @@ async function load() {
     const ts=t.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     const d=h.duration!=null?h.duration.toFixed(1)+'s':'—';
     const st=h.status==='ok'?'<span class="h-ok">✓</span>':'<span class="h-err">✗</span>';
-    return '<div class="hrow"><span class="h-time">'+ts+'</span>'<span class="h-from">'+esc(h.from||'—')+'</span>'<span class="h-arrow">→</span>'<span class="h-to">'+esc(h.to)+'</span>'<span class="h-dur">'+d+'</span><span>'+st+'</span></div>';
+    return '<div class="hrow"><span class="h-time">'+ts+'</span><span class="h-from">'+esc(h.from||'—')+'</span><span class="h-arrow">→</span><span class="h-to">'+esc(h.to)+'</span><span class="h-dur">'+d+'</span><span>'+st+'</span></div>';
   }).join('');}
 
   document.getElementById('ts').textContent=new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -746,6 +746,7 @@ async function loadUsage() {
   const stats = window.__TOKEN_STATS__ || {};
   const body = document.getElementById('usageBody');
   const tot = document.getElementById('usageTotal');
+  if (!body) return;  // G-3a: usage panel moved to monitor.js
   
   if (!stats || !Object.keys(stats).length) {
     body.innerHTML = '<div class="usage-empty">暂无用量数据</div>';
