@@ -1,0 +1,60 @@
+  <div class="tab-content" id="tab-cloud">
+
+    <!-- 添加 Provider 表单 -->
+    <div class="panel" style="margin-bottom:14px">
+      <div class="panel-hdr">
+        <div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(37,99,235,.2)">➕</div>
+        <span class="panel-title">添加 Provider</span>
+      </div>
+      <div class="panel-content" style="padding:12px 14px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="deploy-form-field">
+            <label class="deploy-form-label">Provider 名称</label>
+            <input class="deploy-form-input" id="cpName" type="text" placeholder="例: baidu-codingplan">
+          </div>
+          <div class="deploy-form-field">
+            <label class="deploy-form-label">API Key</label>
+            <input class="deploy-form-input" id="cpApiKey" type="password" placeholder="sk-... 或 ${ENV_VAR}">
+          </div>
+          <div class="deploy-form-field">
+            <label class="deploy-form-label">OpenAI Base URL</label>
+            <input class="deploy-form-input" id="cpOpenaiBase" type="url" placeholder="https://api.example.com/v1">
+          </div>
+          <div class="deploy-form-field">
+            <label class="deploy-form-label">Anthropic Base URL</label>
+            <input class="deploy-form-input" id="cpAnthropicBase" type="url" placeholder="https://api.example.com/anthropic/v1">
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="act-btn pri" onclick="cloudAddProvider()" style="font-size:13px;padding:6px 18px">添加 & 发现</button>
+          <button class="act-btn sec" onclick="cloudTestProvider()" style="font-size:13px;padding:6px 18px">仅测试连接</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 已配置 Provider 列表 -->
+    <div class="panel" style="margin-bottom:14px">
+      <div class="panel-hdr">
+        <div class="panel-icon" style="background:var(--teal);box-shadow:0 2px 6px rgba(13,148,136,.2)">☁️</div>
+        <span class="panel-title">已配置 Provider</span>
+        <div style="margin-left:auto;display:flex;gap:6px">
+          <button onclick="cloudDiscoverAll()" class="act-btn sec" style="font-size:11px;padding:3px 10px">🔍 全部发现</button>
+          <button onclick="cloudReload()" class="act-btn sec" style="font-size:11px;padding:3px 10px">🔄 热加载</button>
+        </div>
+      </div>
+      <div class="panel-content" style="padding:6px 10px" id="cloudProvidersList">加载中...</div>
+    </div>
+
+    <!-- 已发现模型列表 -->
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-icon" style="background:var(--green-g);box-shadow:0 2px 6px rgba(22,163,74,.2)">📋</div>
+        <span class="panel-title">已发现模型</span>
+        <span style="margin-left:auto;font-size:11px;color:var(--text3)" id="cloudModelCount">0 个模型</span>
+      </div>
+      <div class="panel-content disc-models-scroll" style="padding:6px 10px;max-height:500px;overflow-y:auto" id="cloudModelsList">加载中...</div>
+    </div>
+
+  </div><!-- /tab-cloud -->
+
+<div class="toast" id="toast"></div>

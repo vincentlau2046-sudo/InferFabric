@@ -1,0 +1,39 @@
+  <div class="tab-content active" id="tab-inference">
+
+  <!-- Active Services -->
+  <div class="panel" id="svcCard" style="margin-bottom:18px;padding:16px 20px;min-height:40px"></div>
+
+  <!-- Model Panels -->
+  <div class="panels">
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-icon excl">🔒</div>
+        <span class="panel-title">独占模型</span>
+      </div>
+      <div id="exclList" class="model-grid"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-icon shrd">🔓</div>
+        <span class="panel-title">共享服务</span>
+      </div>
+      <div id="shrdList" class="model-grid"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-icon free">⚡</div>
+        <span class="panel-title">空闲</span>
+      </div>
+      <div id="freeList" class="model-grid"></div>
+    </div>
+  </div>
+
+  <div class="act-row">
+    <button class="act-btn pri" onclick="doSwitch('idle')">释放 GPU</button>
+    <button class="act-btn sec" onclick="doReconcile()">Reconcile</button>
+    <button class="act-btn warn" onclick="doReset()">强制重置</button>
+  </div>
+
+  </div><!-- /tab-inference -->
+
+  <!-- ════════ Tab 2: 指标监控 ════════ -->

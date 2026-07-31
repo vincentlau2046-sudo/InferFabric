@@ -177,8 +177,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def _serve_dashboard(self):
         body = None
         try:
-            from inferfabric.dashboard import DASHBOARD_HTML
-            html = DASHBOARD_HTML
+            from inferfabric.dashboard import get_html
+            html = get_html()
             # Inject token stats (full raw state, JS filters by window)
             try:
                 collector = TokenStatsCollector()

@@ -1,0 +1,94 @@
+  <div class="tab-content" id="tab-deploy">
+    <!-- Deploy form toggle — at top for quick access -->
+    <button class="act-btn sec" onclick="toggleDeployForm()" id="deployFormToggle" style="margin-bottom:14px">展开部署表单</button>
+    <div id="deployFormArea" style="display:none">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <!-- vLLM Deploy Form -->
+        <div class="panel">
+          <div class="panel-hdr">
+            <div class="panel-icon vllm">🔥</div>
+            <span class="panel-title">vLLM 部署</span>
+          </div>
+          <div class="panel-content" style="padding:12px 14px">
+            <form id="vllmDeployForm" onsubmit="return submitVllmDeploy(event)">
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">模型名称</label>
+                <input class="deploy-form-input" name="name" type="text" placeholder="例: Qwen2.5-7B" required>
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">模型目录</label>
+                <input class="deploy-form-input" name="model_dir" type="text" value="~/models/">
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">服务端口</label>
+                <input class="deploy-form-input" name="port" type="number" placeholder="自动分配" min="1024" max="65535">
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">GPU 显存利用率 <span id="vllmGpuMemVal">0.80</span></label>
+                <input class="deploy-form-slider" name="gpu_mem" type="range" min="0.50" max="0.95" step="0.01" value="0.80" oninput="document.getElementById('vllmGpuMemVal').textContent=parseFloat(this.value).toFixed(2)">
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">最大上下文长度</label>
+                <input class="deploy-form-input" name="max_ctx" type="number" value="4096" min="512" max="131072">
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">量化格式</label>
+                <select class="deploy-form-select" name="quantization">
+                  <option value="">无</option>
+                  <option value="NVFP4">NVFP4</option>
+                  <option value="GPTQ-4bit">GPTQ-4bit</option>
+                  <option value="Q8_0">Q8_0</option>
+                </select>
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">推理模式</label>
+                <select class="deploy-form-select" name="inference_mode">
+                  <option value="auto">auto</option>
+                  <option value="eager">eager</option>
+                </select>
+              </div>
+              <button type="submit" class="deploy-form-btn vllm">部署 vLLM 模型</button>
+            </form>
+          </div>
+        </div>
+        <!-- Ollama Deploy Form -->
+        <div class="panel">
+          <div class="panel-hdr">
+            <div class="panel-icon ollama">🦙</div>
+            <span class="panel-title">Ollama 部署</span>
+          </div>
+          <div class="panel-content" style="padding:12px 14px">
+            <form id="ollamaDeployForm" onsubmit="return submitOllamaDeploy(event)">
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">模型名称</label>
+                <input class="deploy-form-input" name="name" type="text" placeholder="例: llama3" required>
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">Ollama 模型引用</label>
+                <input class="deploy-form-input" name="ollama_ref" type="text" placeholder="例: llama3.2:3b">
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">服务端口（ollama.cpp）</label>
+                <input class="deploy-form-input" name="port" type="number" placeholder="自动分配" min="1024" max="65535">
+              </div>
+              <div class="deploy-form-field">
+                <label class="deploy-form-label">GPU 卸载层数</label>
+                <input class="deploy-form-input" name="gpu_layers" type="number" value="-1" min="-1" max="200">
+                <div style="font-size:11px;color:var(--text3);margin-top:4px">-1 = 全部卸载到 GPU</div>
+              </div>
+              <button type="submit" class="deploy-form-btn ollama">部署 Ollama 模型</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="panel" id="localModels" style="display:none">
+      <div class="panel-hdr" style="padding:6px 12px">
+        <div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(10,132,255,.2);width:22px;height:22px;font-size:11px">📦</div>
+        <span class="panel-title" style="font-size:13px">本地模型发现</span>
+      </div>
+      <div class="panel-content" style="padding:6px 10px" id="localModelsList"></div>
+    </div>
+  </div><!-- /tab-deploy -->
+
+  <!-- ════════ Tab 4: 云端管理 (v4.6.0) ════════ -->

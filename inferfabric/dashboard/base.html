@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InferFabric</title>
+<style>
+<!-- CSS:main -->
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <div class="nav-in">
+    <div class="nav-l">
+      <div class="nav-logo">E</div>
+      <span class="nav-title">InferFabric</span>
+      <span class="tag idle" id="sTag"><span class="dot"></span><span id="sTxt">idle</span></span>
+    </div>
+    <div class="nav-r">
+      <span class="nav-ver" id="navVer">v…</span>
+      <span class="nav-ts" id="ts">—</span>
+    </div>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- Status Cards -->
+  <div class="status-bar">
+    <div class="stat-card">
+      <div class="stat-icon gpu">💾</div>
+      <div class="stat-body">
+        <div class="stat-label">GPU 显存</div>
+        <div class="stat-row">
+          <span class="stat-val" id="gP">0</span><span class="stat-unit">%</span>
+        </div>
+        <div class="stat-bar"><div class="stat-bar-f" id="gB" style="width:0%;background:var(--blue)"></div></div>
+        <div class="stat-sub"><b id="gU">0</b> / <span id="gT">32,607</span> MB</div>
+      </div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon" style="background:var(--red-g);box-shadow:0 2px 8px rgba(255,69,58,.2)">🔥</div>
+      <div class="stat-body">
+        <div class="stat-label">GPU 负载</div>
+        <div class="stat-row">
+          <span class="stat-val" id="guP">0</span><span class="stat-unit">%</span>
+        </div>
+        <div class="stat-bar"><div class="stat-bar-f" id="guB" style="width:0%;background:var(--red)"></div></div>
+        <div class="stat-sub"><span id="guC">—</span> MHz · <span id="guW">—</span> W</div>
+      </div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon ram">🧠</div>
+      <div class="stat-body">
+        <div class="stat-label">系统内存</div>
+        <div class="stat-row">
+          <span class="stat-val" id="rP">0</span><span class="stat-unit">%</span>
+        </div>
+        <div class="stat-bar"><div class="stat-bar-f" id="rB" style="width:0%;background:var(--purple)"></div></div>
+        <div class="stat-sub"><b id="rU">0</b> / <span id="rT">—</span> GB</div>
+      </div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon cpu">⚡</div>
+      <div class="stat-body">
+        <div class="stat-label">CPU 负载</div>
+        <div class="stat-row">
+          <span class="stat-val" id="cP">0</span><span class="stat-unit">%</span>
+        </div>
+        <div class="stat-bar"><div class="stat-bar-f" id="cB" style="width:0%;background:var(--orange)"></div></div>
+        <div class="stat-sub"><span id="cC">—</span> 核心 · 运行 <span id="cU">—</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab Bar -->
+  <div class="tab-bar">
+    <span class="tab-item active" data-tab="tab-inference" onclick="switchTab('tab-inference')">🔄 模型推理</span>
+    <span class="tab-item" data-tab="tab-monitor" onclick="switchTab('tab-monitor')">📊 指标监控</span>
+    <span class="tab-item" data-tab="tab-deploy" onclick="switchTab('tab-deploy')">📦 模型部署</span>
+    <span class="tab-item" data-tab="tab-cloud" onclick="switchTab('tab-cloud')">☁️ 云端管理</span>
+  </div>
+
+  <!-- ════════ Tab 1: 模型推理 (default active) ════════ -->
+<!-- FRAGMENT:inference -->
+<!-- FRAGMENT:monitor -->
+<!-- FRAGMENT:deploy -->
+<!-- FRAGMENT:cloud -->
+<script>
+<!-- JS:app -->
+</script>
+</body>
+</html>
