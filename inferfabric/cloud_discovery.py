@@ -245,6 +245,7 @@ class CloudDiscovery:
                 # 原子替换
                 os.replace(tmp, self._config_path)
                 log.info("Saved cloud provider config to %s", self._config_path)
+                self._config_corrupt = False  # 成功保存后重置
             except Exception as e:
                 log.error("Failed to save cloud provider config: %s", e)
                 # 清理 tmp
@@ -264,6 +265,18 @@ class CloudDiscovery:
                 pd["anthropic_base"] = p.anthropic_base
             if p.timeout and p.timeout != 60:
                 pd["timeout"] = p.timeout
+            if not p.enabled:
+                pd["enabled"] = False
+            if not p.discovery_enabled:
+                pd["discovery_enabled"] = False
+            if p.discovery_endpoint and p.discovery_endpoint != "/models":
+                pd["discovery_endpoint"] = p.discovery_endpoint
+            if p.discovery_interval and p.discovery_interval != 3600:
+                pd["discovery_interval"] = p.discovery_interval
+            if p.include_pattern:
+                pd["include_pattern"] = p.include_pattern
+            if p.routing_default:
+                pd["routing_default"] = p.routing_default
             # 序列化 models
             if p.model_specs:
                 models = {}
@@ -411,6 +424,7 @@ class CloudDiscovery:
         log.info("Cloud config loaded: %d providers, %d model specs",
                  len(self._providers),
                  sum(len(p.model_specs) for p in self._providers.values()))
+        self._config_corrupt = False  # 成功加载后重置 corrupt 标志
 
     def _discover_provider(self, cfg: ProviderConfig) -> list[CloudModel]:
         """对单个 provider 执行 GET /models。"""

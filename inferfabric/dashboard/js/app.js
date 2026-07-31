@@ -265,7 +265,7 @@ async function load() {
     const ts=t.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     const d=h.duration!=null?h.duration.toFixed(1)+'s':'—';
     const st=h.status==='ok'?'<span class="h-ok">✓</span>':'<span class="h-err">✗</span>';
-    return '<div class="hrow"><span class="h-time">'+ts+'</span><span class="h-from">'+(h.from||'—')+'</span><span class="h-arrow">→</span><span class="h-to">'+h.to+'</span><span class="h-dur">'+d+'</span><span>'+st+'</span></div>';
+    return '<div class="hrow"><span class="h-time">'+ts+'</span>'<span class="h-from">'+esc(h.from||'—')+'</span>'<span class="h-arrow">→</span>'<span class="h-to">'+esc(h.to)+'</span>'<span class="h-dur">'+d+'</span><span>'+st+'</span></div>';
   }).join('');}
 
   document.getElementById('ts').textContent=new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -410,13 +410,13 @@ async function loadModels() {
 
     let btns='';
     if(active){
-      btns+='<button class="btn-card stop" onclick="event.stopPropagation();doRelease(\''+m.name+'\','+(m.mode==='exclusive')+')">释放</button>';
-      if(isVllm) btns+='<button class="btn-card start" onclick="event.stopPropagation();doSleep(\''+m.name+'\')">休眠</button>';
+      btns+='<button class="btn-card stop" onclick="event.stopPropagation();doRelease(\''+escAttr(m.name)+'\','+(m.mode==='exclusive')+')">释放</button>';
+      if(isVllm) btns+='<button class="btn-card start" onclick="event.stopPropagation();doSleep(\''+escAttr(m.name)+'\')">休眠</button>';
     }else if(sleeping){
-      btns+='<button class="btn-card stop" onclick="event.stopPropagation();doRelease(\''+m.name+'\','+(m.mode==='exclusive')+')">释放</button>';
-      if(isVllm) btns+='<button class="btn-card start" onclick="event.stopPropagation();doWake(\''+m.name+'\')">唤醒</button>';
+      btns+='<button class="btn-card stop" onclick="event.stopPropagation();doRelease(\''+escAttr(m.name)+'\','+(m.mode==='exclusive')+')">释放</button>';
+      if(isVllm) btns+='<button class="btn-card start" onclick="event.stopPropagation();doWake(\''+escAttr(m.name)+'\')">唤醒</button>';
     }else{
-      btns+='<button class="btn-card start" onclick="event.stopPropagation();doSwitch(\''+m.name+'\')">启动</button>';
+      btns+='<button class="btn-card start" onclick="event.stopPropagation();doSwitch(\''+escAttr(m.name)+'\')">启动</button>';
     }
 
     // Specs row: framework + model type + context window + quantization — always 4 slots for alignment
@@ -446,7 +446,7 @@ async function loadModels() {
     return '<div class="'+cls+'" id="sw-'+m.name+'">'+
       '<div class="model-top">'+
         '<div class="model-dot"></div>'+
-        '<div class="model-info"><div class="model-name">'+m.name+'</div>'+
+        '<div class="model-info"><div class="model-name">'+esc(m.name)+'</div>'+
           '<div style="font-size:11px;color:var(--text3);margin-top:3px">'+statusLine+' <span style="margin-left:6px;font-variant-numeric:tabular-nums;color:var(--text4)">:'+port+'</span></div>'+
         '</div>'+
         '<span class="model-badge '+modeBadge+'">'+(modeLabel[modeBadge]||modeBadge)+'</span>'+
@@ -607,7 +607,7 @@ async function loadLocalModels() {
         html += '<div class="disc-meta">' + gb + ' · <span class="disc-model-status ' + statusCls + '">' + statusLabel + '</span></div>';
         html += '</div>';
         if (meta.canDeploy) {
-          html += '<button class="disc-deploy" onclick="event.stopPropagation();doDeploy(\''+m.name+'\',\''+fw+'\')">Deploy</button>';
+          html += '<button class="disc-deploy" onclick="event.stopPropagation();doDeploy(\''+escAttr(m.name)+'\',\''+fw+'\')">Deploy</button>';
         }
         html += '</div>';
       }
