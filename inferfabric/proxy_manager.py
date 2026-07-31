@@ -58,7 +58,7 @@ class ProxyManager:
         )
         # G-2: Metrics aggregator (queue-decoupled)
         self._agg_queue = _queue.Queue()
-        self.metrics = MetricsAggregator(price_config=self._load_price_config())
+        self.metrics = MetricsAggregator()
         self._agg_thread = AggregatorThread(self.metrics, self._agg_queue)
         self._agg_thread.start()
         # PR-B: Request logger (feeds aggregator via queue)
@@ -80,6 +80,8 @@ class ProxyManager:
             log.info("Cloud discovery completed: %d models", len(self.cloud.cloud_models))
             # Start background polling for model updates
             self.cloud.start_polling()
+            # G-2: Update price config now that cloud models are available
+            self.metrics.update_prices(self._load_price_config())
 
     def _load_price_config(self) -> dict[str, CloudModelPrice]:
         """从 cloud_provider.yaml 加载价格配置（cloud_models + provider model_specs）"""

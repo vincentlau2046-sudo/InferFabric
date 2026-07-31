@@ -92,7 +92,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._handle_v1_models(pm)
             elif self.path == "/system":
                 self._send_json(self._system_info())
-            elif self.path == "/api/metrics":
+            elif path == "/api/metrics":
                 self._handle_api_metrics(pm)
             elif self.path == "/history":
                 self._send_json(pm.mgr.state.get_history(limit=30))
@@ -183,6 +183,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             try:
                 collector = TokenStatsCollector()
                 stats_json = json.dumps(collector._load_full_state())
+                # 防御 </script> 注入：json.dumps 已转义 </script>，额外移除
+                stats_json = stats_json.replace('</', '<\\/')
                 html = html.replace(
                     '</head>',
                     '<script>window.__TOKEN_STATS__ = ' + stats_json + ';</script></head>'
@@ -205,6 +207,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'")
         self.end_headers()
         self._safe_write(body)
 
@@ -352,15 +356,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 if provider_cfg and cloud_model:
                     log.info("/v1/messages → CLOUD %s [%s] [model=%s]",
                              provider_name, "anthropic", requested_model)
-                    pm.logger.log(RequestLog(
-                        model=original_model or requested_model, status=0, route=f"cloud:{provider_name}",
-                        key_name=key_name, req_id=req_id,
-                        cloud_provider=provider_name,
-                    ))
-                    forwarder.forward_to_cloud(
+                    result = forwarder.forward_to_cloud(
                         self, data, provider_cfg, cloud_model,
                         protocol="anthropic", original_model=original_model,
                     )
+                    pm.logger.log(RequestLog(
+                        model=original_model or requested_model, status=result.status, route=f"cloud:{provider_name}",
+                        key_name=key_name, req_id=req_id,
+                        cloud_provider=provider_name,
+                        tokens_in=result.usage.get("prompt_tokens", 0),
+                        tokens_out=result.usage.get("completion_tokens", 0),
+                        ttft_ms=result.ttft_ms,
+                        duration_ms=result.duration_ms,
+                        error=result.error,
+                    ))
                     return
                 else:
                     log.warning("/v1/messages → cloud route matched but config missing: %s", route)
@@ -394,15 +403,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     if provider_cfg:
                         log.info("/v1/messages → CLOUD %s [fallback: no active LLM]",
                                  cloud_model.provider)
-                        pm.logger.log(RequestLog(
-                            model=original_model or requested_model, status=0, route=f"cloud:{cloud_model.provider}",
-                            key_name=key_name, req_id=req_id,
-                            cloud_provider=cloud_model.provider,
-                        ))
-                        forwarder.forward_to_cloud(
+                        result = forwarder.forward_to_cloud(
                             self, data, provider_cfg, cloud_model,
                             protocol="anthropic", original_model=original_model,
                         )
+                        pm.logger.log(RequestLog(
+                            model=original_model or requested_model, status=result.status, route=f"cloud:{cloud_model.provider}",
+                            key_name=key_name, req_id=req_id,
+                            cloud_provider=cloud_model.provider,
+                            tokens_in=result.usage.get("prompt_tokens", 0),
+                            tokens_out=result.usage.get("completion_tokens", 0),
+                            ttft_ms=result.ttft_ms,
+                            duration_ms=result.duration_ms,
+                            error=result.error,
+                        ))
                         return
             log.info("/v1/messages → BAIDU fallback [no active LLM, no cloud match]")
             forwarder.forward_to_baidu(self, data, auth_header, original_model)
@@ -410,10 +424,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def _forward_local(self, pm, data, auth_header, model_obj, original_model):
         """Forward request to a local model with rate limiting."""
         model_name = data.get("model", "vllm_qwen27b")
-        ok, reason = pm.dual_gate.acquire(model_name, timeout=30)
-        if not ok:
+        gate = pm.dual_gate.acquire(model_name, timeout=30)
+        if not gate.ok:
             self._send_json(
-                {"error": f"Rate limited: {reason}", "status": "rate_limit"},
+                {"error": f"Rate limited: {gate.reason}", "status": "rate_limit"},
                 429,
             )
             return
@@ -422,7 +436,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self, pm, data, auth_header, model_obj, original_model
             )
         finally:
-            pm.dual_gate.release(model_name)
+            gate.release()
 
     # ─── v1 Models ────────────────────────────────────────────────
 
@@ -820,8 +834,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 discovery_interval=data.get("discovery_interval", 3600),
                 include_pattern=data.get("include_pattern", ""),
             )
-            pm.cloud._providers[name] = cfg
             with pm.cloud._models_lock:
+                pm.cloud._providers[name] = cfg
                 # Register spec-only models from new provider
                 pm.cloud._register_spec_only_models(pm.cloud._cloud_models)
             try:

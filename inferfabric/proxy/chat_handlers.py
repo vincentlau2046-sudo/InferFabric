@@ -242,15 +242,15 @@ def handle_chat(handler, pm, data):
 
     # vLLM path — apply dynamic rate limiter
     body = json.dumps(data).encode("utf-8")
-    ok, reason = pm.dual_gate.acquire(model, timeout=30)
-    if not ok:
+    gate = pm.dual_gate.acquire(model, timeout=30)
+    if not gate.ok:
         pm.logger.log(RequestLog(
             req_id=req_id, key_name=key_name, model=model,
-            status=429, error=reason, route="local",
+            status=429, error=gate.reason, route="local",
             duration_ms=(time.monotonic()-handler._req_start)*1000,
         ))
         handler._send_json(
-            {"error": f"Rate limited: {reason}", "status": "rate_limit"},
+            {"error": f"Rate limited: {gate.reason}", "status": "rate_limit"},
             429,
         )
         return
@@ -274,7 +274,7 @@ def handle_chat(handler, pm, data):
         ))
         handler._send_json({"error": "Upstream unavailable after retry"}, 502)
     finally:
-        pm.dual_gate.release(model)
+        gate.release()
 
 
 def _forward_request(handler, pm, target_port, body, stream):

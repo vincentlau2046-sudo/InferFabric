@@ -121,7 +121,8 @@ class CloudDiscovery:
     def __init__(self, config_path: Path | None = None):
         self._providers: dict[str, ProviderConfig] = {}
         self._cloud_models: dict[str, CloudModel] = {}
-        self._models_lock = threading.RLock()  # protects _cloud_models reads/writes
+        self._models_lock = threading.RLock()  # protects _cloud_models + _providers reads/writes
+        # 锁序约定: _save_lock → _models_lock (reload 嵌套时)。handler add/delete: _models_lock → save_config(_save_lock)，不嵌套。
         # G-2: price config cached for metrics_aggregator
         self._price_config: dict[str, tuple[float, float]] = {}
         self._last_discovery: float = 0.0
@@ -236,6 +237,8 @@ class CloudDiscovery:
                 data = self._serialize_providers()
                 with open(tmp, 'w') as f:
                     yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+                    f.flush()
+                    os.fsync(f.fileno())
                 # 校验：读回确认可解析
                 with open(tmp) as f:
                     yaml.safe_load(f)

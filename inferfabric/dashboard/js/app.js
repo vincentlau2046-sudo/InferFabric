@@ -1,3 +1,7 @@
+// ── XSS-safe helpers ──
+function esc(v) { if(v==null)return''; const d=document.createElement('div'); d.textContent=String(v); return d.innerHTML; }
+function escAttr(v) { return String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
 function swLock() {
   // Cross-tab lock via localStorage (shared across tabs)
   try {
@@ -599,7 +603,7 @@ async function loadLocalModels() {
         // Simplified card: name + size + Deploy button only
         html += '<div class="disc-card">';
         html += '<div class="disc-info">';
-        html += '<div class="disc-name">' + m.name + '</div>';
+        html += '<div class="disc-name">' + esc(m.name) + '</div>';
         html += '<div class="disc-meta">' + gb + ' · <span class="disc-model-status ' + statusCls + '">' + statusLabel + '</span></div>';
         html += '</div>';
         if (meta.canDeploy) {

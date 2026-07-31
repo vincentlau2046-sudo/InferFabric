@@ -200,6 +200,12 @@ class DualGateLimiter:
     Gate 2: _RateLimiter (Semaphore, max_concurrent) — 限同时在飞请求数
 
     cloud 路由不经过此门（单用户 + 云端自有配额）。
+
+    使用 Releasable 句柄确保 acquire/release 对称：
+        gate = pm.dual_gate.acquire(model_name)
+        if gate.ok:
+            try: ...
+            finally: gate.release()
     """
 
     def __init__(self, rpm_limiter: RateLimiterV2, max_concurrent: int = 6):
@@ -207,22 +213,61 @@ class DualGateLimiter:
         self._concurrency = threading.Semaphore(max_concurrent)
         self._max_concurrent = max_concurrent
 
-    def acquire(self, model: str, timeout: float = 30.0) -> tuple[bool, str]:
-        """尝试通过双门。返回 (ok, reason)。"""
+    def acquire(self, model: str, timeout: float = 30.0) -> 'GateResult':
+        """尝试通过双门。返回 GateResult 句柄。"""
         # Gate 1: RPM
-        ok, reason = self._rpm.acquire(model, timeout)
-        if not ok:
-            return False, f"rpm_limit: {reason}"
+        rpm_ok, rpm_reason = self._rpm.acquire(model, timeout)
+        if not rpm_ok:
+            return GateResult(self, model, ok=False, reason=f"rpm_limit: {rpm_reason}", rpm_held=False)
         # Gate 2: Concurrency
         acquired = self._concurrency.acquire(timeout=timeout)
         if not acquired:
-            return False, "concurrency_limit"
-        return True, ""
+            # Gate 2 失败，归还 RPM 令牌
+            self._rpm.release(model)
+            return GateResult(self, model, ok=False, reason="concurrency_limit", rpm_held=False)
+        return GateResult(self, model, ok=True, reason="", rpm_held=True)
 
-    def release(self, model: str):
-        """释放并发门。RPM 不需 release。"""
+    def _release(self, model: str, rpm_held: bool):
+        """内部：释放并发门 + RPM（如果持有）。"""
         self._concurrency.release()
+        if rpm_held:
+            self._rpm.release(model)
 
     @property
     def max_concurrent(self) -> int:
         return self._max_concurrent
+
+
+class GateResult:
+    """acquire 返回的句柄 — 确保 acquire/release 对称。
+
+    用法:
+        gate = pm.dual_gate.acquire(model_name)
+        if not gate.ok:
+            return 429
+        try:
+            ...  # 业务逻辑
+        finally:
+            gate.release()
+    """
+
+    __slots__ = ('_limiter', '_model', 'ok', 'reason', '_rpm_held')
+
+    def __init__(self, limiter: DualGateLimiter, model: str, ok: bool, reason: str, rpm_held: bool):
+        self._limiter = limiter
+        self._model = model
+        self.ok = ok
+        self.reason = reason
+        self._rpm_held = rpm_held
+
+    def release(self):
+        """释放所有持有的资源（Semaphore + RPM）。"""
+        self._limiter._release(self._model, self._rpm_held)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        if self.ok:
+            self.release()
+        return False

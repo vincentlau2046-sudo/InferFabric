@@ -157,8 +157,8 @@ class TestRateLimiterV2:
         # DualGateLimiter
         rpm = RateLimiterV2(server_rpm=10, model_rpm_default=5, timeout=0.5)
         gate = DualGateLimiter(rpm_limiter=rpm, max_concurrent=2)
-        ok, reason = gate.acquire("test-model", timeout=1)
-        assert ok
-        assert reason == ""
-        gate.release("test-model")
+        result = gate.acquire("test-model", timeout=1)
+        assert result.ok
+        assert result.reason == ""
+        result.release()
         assert gate.max_concurrent == 2

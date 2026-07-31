@@ -6,6 +6,7 @@ G-2: MetricsAggregator
 - 通过 queue 与 RequestLogger 解耦，主路径零额外锁等待
 """
 
+import collections
 import logging
 import queue as _queue
 import threading
@@ -41,11 +42,8 @@ class MetricsAggregator:
 
     def __init__(self, price_config: dict[str, CloudModelPrice] | None = None):
         self._lock = threading.Lock()
-        self._samples: list[dict] = []  # asdict(RequestLog) — 轻量存储
+        self._samples: collections.deque = collections.deque(maxlen=100000)
         self._price_config = price_config or {}
-        self._total_requests = 0
-        self._total_success = 0
-        self._total_fail = 0
 
     def record(self, entry):
         """记录一条请求日志（由 AggregatorThread 调用）
@@ -67,14 +65,11 @@ class MetricsAggregator:
                 "timestamp": entry.timestamp or time.time(),
             }
             self._samples.append(d)
-            self._total_requests += 1
-            if entry.status >= 400 or entry.error:
-                self._total_fail += 1
-            else:
-                self._total_success += 1
-            # 7d 样本上限：7d * 10req/min * 60 * 24 ≈ 1M → 截断到 100K
-            if len(self._samples) > 100000:
-                self._samples = self._samples[-50000:]
+
+    def update_prices(self, price_config: dict[str, CloudModelPrice]):
+        """Update price configuration (called after cloud discovery completes)."""
+        with self._lock:
+            self._price_config = price_config
 
     def get_metrics(self, window: str = "24h") -> dict:
         """返回聚合指标

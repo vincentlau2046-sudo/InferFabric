@@ -1,20 +1,46 @@
 // ── Monitor Panel — G-3b: 7-panel metrics dashboard ──
 
 let _metricsWindow = '24h';
+const VALID_WINDOWS = new Set(['1h', '24h', '7d', 'all']);
 
 // Window toggle
 document.addEventListener('click', function(e) {
   if (e.target.classList.contains('m-wtab')) {
+    const w = e.target.dataset.w;
+    if (!VALID_WINDOWS.has(w)) return;
     document.querySelectorAll('.m-wtab').forEach(b => b.classList.remove('active'));
     e.target.classList.add('active');
-    _metricsWindow = e.target.dataset.w;
+    _metricsWindow = w;
     loadMetrics();
   }
 });
 
+// Visibility-based polling — only fetch when tab is visible
+let _metricsInterval = null;
+function startMetricsPolling() {
+  if (_metricsInterval) return;
+  loadMetrics();
+  _metricsInterval = setInterval(loadMetrics, 5000);
+}
+function stopMetricsPolling() {
+  if (_metricsInterval) { clearInterval(_metricsInterval); _metricsInterval = null; }
+}
+document.addEventListener('visibilitychange', function() {
+  if (document.hidden) stopMetricsPolling(); else startMetricsPolling();
+});
+
+// ── XSS-safe escape ──
+function esc(v) {
+  if (v == null) return '';
+  const d = document.createElement('div');
+  d.textContent = String(v);
+  return d.innerHTML;
+}
+
+// ── Fetch & render ──
 async function loadMetrics() {
   try {
-    const r = await fetch('/api/metrics?window=' + _metricsWindow);
+    const r = await fetch('/api/metrics?window=' + encodeURIComponent(_metricsWindow));
     if (!r.ok) return;
     const d = await r.json();
     renderOverview(d);
@@ -30,7 +56,6 @@ function renderOverview(d) {
   el('ovSuccess').textContent = d.success || 0;
   el('ovFail').textContent = d.fail || 0;
   el('ovRate').textContent = (d.success_rate || 0) + '%';
-  // Color code
   el('ovRate').style.color = (d.success_rate || 0) >= 95 ? 'var(--green)' :
                               (d.success_rate || 0) >= 80 ? 'var(--orange)' : 'var(--red)';
 }
@@ -44,7 +69,7 @@ function renderTokens(d) {
   let html = '<table class="m-tbl"><tr><th>模型</th><th>请求</th><th>输入 Tokens</th><th>输出 Tokens</th></tr>';
   for (const [m, v] of Object.entries(models)) {
     const name = m.split('/').pop();
-    html += `<tr><td>${esc(name)}</td><td>${v.requests}</td><td>${v.tokens_in.toLocaleString()}</td><td>${v.tokens_out.toLocaleString()}</td></tr>`;
+    html += '<tr><td>' + esc(name) + '</td><td>' + esc(v.requests) + '</td><td>' + esc(v.tokens_in) + '</td><td>' + esc(v.tokens_out) + '</td></tr>';
   }
   html += '</table>';
   document.getElementById('tokenTable').innerHTML = html;
@@ -59,12 +84,12 @@ function renderLatency(d) {
   let html = '<table class="m-tbl"><tr><th>模型</th><th>TTFT p50</th><th>TTFT p95</th><th>TTFT p99</th><th>E2E p50</th><th>E2E p95</th></tr>';
   for (const [m, v] of Object.entries(models)) {
     const name = m.split('/').pop();
-    html += `<tr><td>${esc(name)}</td>
-      <td>${v.ttft_p50 != null ? v.ttft_p50 + 'ms' : '—'}</td>
-      <td>${v.ttft_p95 != null ? v.ttft_p95 + 'ms' : '—'}</td>
-      <td>${v.ttft_p99 != null ? v.ttft_p99 + 'ms' : '—'}</td>
-      <td>${v.duration_p50 != null ? v.duration_p50 + 'ms' : '—'}</td>
-      <td>${v.duration_p95 != null ? v.duration_p95 + 'ms' : '—'}</td></tr>`;
+    html += '<tr><td>' + esc(name) + '</td>' +
+      '<td>' + esc(v.ttft_p50 != null ? v.ttft_p50 + 'ms' : '—') + '</td>' +
+      '<td>' + esc(v.ttft_p95 != null ? v.ttft_p95 + 'ms' : '—') + '</td>' +
+      '<td>' + esc(v.ttft_p99 != null ? v.ttft_p99 + 'ms' : '—') + '</td>' +
+      '<td>' + esc(v.duration_p50 != null ? v.duration_p50 + 'ms' : '—') + '</td>' +
+      '<td>' + esc(v.duration_p95 != null ? v.duration_p95 + 'ms' : '—') + '</td></tr>';
   }
   html += '</table>';
   document.getElementById('latencyTable').innerHTML = html;
@@ -77,7 +102,7 @@ function renderCost(d) {
   for (const [m, v] of Object.entries(models)) {
     if (v.cost_yuan > 0) {
       const name = m.split('/').pop();
-      html += `<div class="m-cost-row"><span>${esc(name)}</span><span>¥${v.cost_yuan.toFixed(4)}</span></div>`;
+      html += '<div class="m-cost-row"><span>' + esc(name) + '</span><span>¥' + esc(v.cost_yuan.toFixed(4)) + '</span></div>';
     }
   }
   document.getElementById('costBreakdown').innerHTML = html || '<div class="m-empty">暂无费用数据</div>';
@@ -86,19 +111,11 @@ function renderCost(d) {
 // ── Request Log Panel ──
 async function loadRequestLog() {
   try {
-    // Read from access log via a simple API — for now, just show placeholder
     document.getElementById('logBody').innerHTML = '<div class="m-empty">请求日志需 access log API（后续实现）</div>';
     document.getElementById('logTs').textContent = new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   } catch(e) { /* ignore */ }
 }
 
-function esc(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
-
 // ── Init ──
-loadMetrics();
+startMetricsPolling();
 loadRequestLog();
-setInterval(loadMetrics, 5000);
