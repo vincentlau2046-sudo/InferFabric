@@ -4,6 +4,7 @@ inferfabric/proxy_manager.py — Model switching, health check, and request rout
 Extracted from proxy.py for modularity.
 """
 
+import json as _json
 import queue as _queue
 import uuid
 import logging
@@ -13,14 +14,17 @@ import time
 from http.client import HTTPConnection
 from typing import Optional
 
+import yaml as _yaml
+
 from inferfabric.manager import ModelManager
 from inferfabric.state import GPUMode
-from inferfabric.config import MODELS_DIR
+from inferfabric.config import MODELS_DIR, DEFAULT_REQUEST_LOG_DB
 from inferfabric.proxy.auth import AuthManager
 from inferfabric.proxy.request_logger import RequestLogger, RequestLog
 from inferfabric.cloud_discovery import CloudDiscovery, CloudModel
 from inferfabric.ratelimit import DualGateLimiter, RateLimiterV2
 from inferfabric.metrics_aggregator import MetricsAggregator, AggregatorThread, CloudModelPrice
+from inferfabric.request_log_db import RequestLogDB
 from pathlib import Path as _Path
 
 # IFF data directory (consistent with config.py / token_stats.py)
@@ -56,14 +60,20 @@ class ProxyManager:
             rpm_limiter=RateLimiterV2(server_rpm=60, model_rpm_default=20, timeout=30),
             max_concurrent=6,
         )
-        # G-2: Metrics aggregator (queue-decoupled)
+        # v4.6.2: Runtime config (iff.yaml overrides)
+        self._runtime_config = self._load_runtime_config()
+        # G-2 + v4.6.2: Metrics aggregator (queue-decoupled) + SQLite replay
+        self._reqlog_db = RequestLogDB(DEFAULT_REQUEST_LOG_DB)
         self._agg_queue = _queue.Queue()
-        self.metrics = MetricsAggregator()
+        self.metrics = MetricsAggregator(db=self._reqlog_db, replay_hours=24.0)
         self._agg_thread = AggregatorThread(self.metrics, self._agg_queue)
         self._agg_thread.start()
-        # PR-B: Request logger (feeds aggregator via queue)
+        # PR-B + v4.6.2: Request logger (feeds aggregator via queue + SQLite)
         self.logger = RequestLogger(log_dir=IFF_DATA_DIR / "logs", enabled=True,
-                                     on_log_queue=self._agg_queue)
+                                     on_log_queue=self._agg_queue,
+                                     db=self._reqlog_db,
+                                     jsonl_enabled=self._runtime_config.get("access_log_jsonl", True),
+                                     retention_days=self._runtime_config.get("request_log_retention_days", 90))
         # PR-B: Helper to create request context
         self._req_counter = 0
 
@@ -82,6 +92,26 @@ class ProxyManager:
             self.cloud.start_polling()
             # G-2: Update price config now that cloud models are available
             self.metrics.update_prices(self._load_price_config())
+
+    def _load_runtime_config(self) -> dict:
+        """从 iff.yaml 加载运行时配置，不存在时返回空 dict。
+
+        支持的配置项:
+          - access_log_jsonl: bool (默认 True)
+          - request_log_retention_days: int (默认 90)
+        """
+        config_path = IFF_DATA_DIR / "iff.yaml"
+        if not config_path.exists():
+            return {}
+        try:
+            with open(config_path) as f:
+                cfg = _yaml.safe_load(f)
+            if not cfg or not isinstance(cfg, dict):
+                return {}
+            return cfg
+        except Exception:
+            log.debug("Failed to load iff.yaml — using defaults", exc_info=True)
+            return {}
 
     def _load_price_config(self) -> dict[str, CloudModelPrice]:
         """从 cloud_provider.yaml 加载价格配置（cloud_models + provider model_specs）"""
@@ -212,12 +242,12 @@ class ProxyManager:
     def _clean_manual_stops(self):
         """Remove expired manual_stop records from StateDB."""
         try:
-            stops = json.loads(self.mgr.state.get("manual_stops") or "{}")
+            stops = _json.loads(self.mgr.state.get("manual_stops") or "{}")
             expired = [k for k, v in stops.items() if time.time() - v > self.mgr.state.MANUAL_STOP_TTL]
             if expired:
                 for k in expired:
                     del stops[k]
-                self.mgr.state.set("manual_stops", json.dumps(stops))
+                self.mgr.state.set("manual_stops", _json.dumps(stops))
                 log.debug("Cleaned %d expired manual_stop records", len(expired))
         except Exception as e:
             log.debug("Manual stop cleanup error: %s", e)

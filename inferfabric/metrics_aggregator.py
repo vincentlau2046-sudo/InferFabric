@@ -4,6 +4,8 @@ G-2: MetricsAggregator
 - MetricsAggregator: 基于全量样本的滑动窗口聚合
 - AggregatorThread: 后台线程从 queue 消费 RequestLog
 - 通过 queue 与 RequestLogger 解耦，主路径零额外锁等待
+
+v4.6.2: 启动时从 SQLite request_log.db 回填最近 N 小时数据。
 """
 
 import collections
@@ -14,6 +16,10 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from statistics import median
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from inferfabric.request_log_db import RequestLogDB
 
 log = logging.getLogger("inferfabric.metrics_aggregator")
 
@@ -38,12 +44,46 @@ class CloudModelPrice:
 
 
 class MetricsAggregator:
-    """内存滑动窗口聚合器 — queue 解耦，主路径零锁等待"""
+    """内存滑动窗口聚合器 — queue 解耦，主路径零锁等待
 
-    def __init__(self, price_config: dict[str, CloudModelPrice] | None = None):
+    v4.6.2: 支持启动时从 SQLite 回填历史数据。
+    """
+
+    def __init__(self, price_config: dict[str, CloudModelPrice] | None = None,
+                 db: "RequestLogDB | None" = None,
+                 replay_hours: float = 24.0):
         self._lock = threading.Lock()
         self._samples: collections.deque = collections.deque(maxlen=100000)
         self._price_config = price_config or {}
+        self._db = db
+        self._replay_hours = replay_hours
+
+        if self._db and self._replay_hours > 0:
+            self._replay_from_db()
+
+    def _replay_from_db(self):
+        """从 SQLite request_log.db 回填最近 replay_hours 小时的数据到内存。"""
+        since = time.time() - self._replay_hours * 3600
+        try:
+            rows = self._db.query_request_log(since=since)
+            with self._lock:
+                for row in rows:
+                    self._samples.append({
+                        "model": row["model"],
+                        "status": row["status"],
+                        "error": row["error"],
+                        "ttft_ms": row["ttft_ms"],
+                        "duration_ms": row["duration_ms"],
+                        "tokens_in": row["tokens_in"],
+                        "tokens_out": row["tokens_out"],
+                        "route": row["route"],
+                        "cloud_provider": row["cloud_provider"],
+                        "timestamp": row["timestamp"],
+                    })
+            log.info("MetricsAggregator replayed %d rows from SQLite (last %.0fh)",
+                     len(rows), self._replay_hours)
+        except Exception as e:
+            log.warning("MetricsAggregator replay failed: %s", e)
 
     def record(self, entry):
         """记录一条请求日志（由 AggregatorThread 调用）
