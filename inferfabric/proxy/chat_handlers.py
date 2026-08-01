@@ -10,6 +10,7 @@ import uuid
 import logging
 from inferfabric.proxy_manager import AUTO_SWITCH
 from inferfabric import forwarder
+from inferfabric.proxy.sse_buffer import SSELineBuffer
 from inferfabric.proxy.request_logger import RequestLog
 
 log = logging.getLogger("inferfabric.proxy.chat")
@@ -166,6 +167,9 @@ def handle_chat(handler, pm, data):
     auth_header = handler.headers.get("Authorization", "") or handler.headers.get("x-api-key", "")
     key_name = pm.auth.key_name(auth_header) if pm.auth.enabled else "anonymous"
 
+    # G-1b: Initialize usage (before any early return)
+    handler._usage = {"prompt_tokens": 0, "completion_tokens": 0}
+
     # PR-A: Auth check
     if pm.auth.enabled:
         model_for_auth = model.split("/")[-1] if "/" in model else model
@@ -257,11 +261,14 @@ def handle_chat(handler, pm, data):
     try:
         for attempt in range(2):
             if _forward_request(handler, pm, target_port, body, stream):
-                # PR-B: Log successful request with TTFT
+                # PR-B: Log successful request with TTFT + usage
                 ttft = getattr(handler, '_ttft_ms', None)
+                usage = getattr(handler, '_usage', {})
                 pm.logger.log(RequestLog(
                     req_id=req_id, key_name=key_name, model=model,
                     status=200, ttft_ms=ttft, route="local",
+                    tokens_in=usage.get("prompt_tokens", 0),
+                    tokens_out=usage.get("completion_tokens", 0),
                     duration_ms=(time.monotonic()-handler._req_start)*1000,
                 ))
                 return
@@ -306,6 +313,7 @@ def _forward_request(handler, pm, target_port, body, stream):
             handler.end_headers()
             # PR-B: TTFT tracking — record time of first chunk
             ttft_recorded = False
+            sse_buf = SSELineBuffer()  # G-1b: SSE usage extractor
             try:
                 while True:
                     chunk = resp.read(8192)
@@ -320,10 +328,15 @@ def _forward_request(handler, pm, target_port, body, stream):
                     handler._safe_write(size)
                     handler._safe_write(chunk)
                     handler._safe_write(b"\r\n")
+                    # G-1b: 旁路观察提取 usage
+                    sse_buf.feed(chunk)
                 handler._safe_write(b"0\r\n\r\n")
             except Exception as e:
                 log.debug("Stream forwarding interrupted: %s", e)
             finally:
+                # G-1b: flush 残余 + 保存 usage（即使异常也保留已提取的部分）
+                sse_buf.flush()
+                handler._usage = dict(sse_buf.usage)
                 resp.close()
         else:
             # PR-B: TTFT for non-streaming
