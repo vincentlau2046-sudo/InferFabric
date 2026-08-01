@@ -13,7 +13,7 @@ vllm:
   conda_env: qw35-9b-vllm
   gpu_memory_utilization: 0.25
   max_model_len: 16384
-  max_num_seqs: 2
+  max_num_seqs: 8
   kv_cache_dtype: fp8
   startup_timeout: 180
   extra_flags: >-
