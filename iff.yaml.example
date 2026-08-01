@@ -1,0 +1,36 @@
+# InferFabric 运行时配置
+# 路径: ~/.inferfabric/iff.yaml
+# 不存在时使用代码默认值
+
+# 访问日志
+access_log_jsonl: true
+request_log_retention_days: 90
+
+# 流控配置
+# 核心原则：流控为了稳定生产，不是拒绝请求
+# 单用户系统默认 observe 模式 — 超限只记录不拒绝
+rate_limit:
+  # 限流模式
+  #   observe: RPM 门仅观测记录，不拒绝请求；Semaphore 排队等待确保请求被处理
+  #   reject:  RPM 门拒绝超限请求(429)；Semaphore 超时后也拒绝
+  mode: observe
+
+  # 服务级 RPM (每分钟请求数上限)
+  #   0 = 不限流
+  #   >0 = 启用服务级令牌桶
+  server_rpm: 0
+
+  # 模型级默认 RPM
+  #   0 = 不限流
+  #   >0 = 启用模型级令牌桶 (仅在 reject 模式下生效)
+  model_rpm_default: 0
+
+  # 并发上限 (同时在飞请求数)
+  #   auto: 从 vLLM max_num_seqs 动态获取（推荐）
+  #   数字: 硬编码值
+  max_concurrent: auto
+
+  # acquire 超时秒数
+  #   observe 模式: Semaphore 等待上限 (默认 300s)
+  #   reject 模式: RPM/Semaphore 超时上限
+  timeout: 5

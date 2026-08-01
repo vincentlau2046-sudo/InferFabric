@@ -55,13 +55,33 @@ class ProxyManager:
         # PR-D: Cloud discovery (must init before aggregator for price config)
         self.cloud = CloudDiscovery(IFF_DATA_DIR / "cloud_provider.yaml")
         self._cloud_discovered = False
-        # PR-E: DualGateLimiter — RPM 软门 + 并发硬门
-        self.dual_gate = DualGateLimiter(
-            rpm_limiter=RateLimiterV2(server_rpm=60, model_rpm_default=20, timeout=30),
-            max_concurrent=6,
-        )
         # v4.6.2: Runtime config (iff.yaml overrides)
         self._runtime_config = self._load_runtime_config()
+        # v4.6.3: DualGateLimiter — 可配置流控 (PR-G4/G1/G3)
+        rate_cfg = self._runtime_config.get("rate_limit", {})
+        rate_mode = rate_cfg.get("mode", "observe")
+        server_rpm = rate_cfg.get("server_rpm", 0)
+        model_rpm_default = rate_cfg.get("model_rpm_default", 0)
+        rate_timeout = rate_cfg.get("timeout", 5)
+        max_concurrent_cfg = rate_cfg.get("max_concurrent", "auto")
+        if max_concurrent_cfg == "auto":
+            max_concurrent = self._compute_max_concurrent()
+        else:
+            max_concurrent = int(max_concurrent_cfg)
+        self.dual_gate = DualGateLimiter(
+            rpm_limiter=RateLimiterV2(
+                server_rpm=server_rpm,
+                model_rpm_default=model_rpm_default,
+                timeout=rate_timeout,
+            ),
+            max_concurrent=max_concurrent,
+            mode=rate_mode,
+            timeout=rate_timeout,
+        )
+        log.info(
+            "Rate limit: mode=%s server_rpm=%s model_rpm_default=%s max_concurrent=%d timeout=%ds",
+            rate_mode, server_rpm, model_rpm_default, max_concurrent, rate_timeout,
+        )
         # G-2 + v4.6.2: Metrics aggregator (queue-decoupled) + SQLite replay
         self._reqlog_db = RequestLogDB(DEFAULT_REQUEST_LOG_DB)
         self._agg_queue = _queue.Queue()
@@ -93,12 +113,30 @@ class ProxyManager:
             # G-2: Update price config now that cloud models are available
             self.metrics.update_prices(self._load_price_config())
 
+    def _compute_max_concurrent(self) -> int:
+        """从 vLLM 模型配置中取 max_num_seqs 最大值作为并发上限。
+
+        确保 IFF 的并发限制不低于 vLLM 的处理能力，避免人为瓶颈。
+        仅考虑本地 vLLM 模型（cloud 模型不走本地并发门）。
+        """
+        max_seqs = 4  # 保守默认
+        for model in self.mgr._models.values():
+            if model.is_vllm and model.vllm:
+                max_seqs = max(max_seqs, model.vllm.max_num_seqs)
+        log.debug("Computed max_concurrent=%d from vLLM configs", max_seqs)
+        return max_seqs
+
     def _load_runtime_config(self) -> dict:
         """从 iff.yaml 加载运行时配置，不存在时返回空 dict。
 
         支持的配置项:
           - access_log_jsonl: bool (默认 True)
           - request_log_retention_days: int (默认 90)
+          - rate_limit.mode: "observe" | "reject" (默认 observe)
+          - rate_limit.server_rpm: int (默认 0=不限流)
+          - rate_limit.model_rpm_default: int (默认 0=不限流)
+          - rate_limit.max_concurrent: "auto" | int (默认 auto)
+          - rate_limit.timeout: int (默认 5)
         """
         config_path = IFF_DATA_DIR / "iff.yaml"
         if not config_path.exists():

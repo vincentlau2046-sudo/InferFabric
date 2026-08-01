@@ -182,6 +182,14 @@ def handle_chat(handler, pm, data):
             handler._send_json({"error": auth_reason, "status": "unauthorized"}, 401)
             return
 
+    # PR-G2: 流式请求自动注入 include_usage=true — 确保 token 提取生效
+    # vLLM 默认不在 SSE 流中返回 usage，需客户端传 stream_options.include_usage=true
+    # IFF 代理层透明注入，对客户端无感
+    if data.get("stream", False):
+        if "stream_options" not in data:
+            data["stream_options"] = {}
+        data["stream_options"].setdefault("include_usage", True)
+
     stream = data.get("stream", False)
 
     # Auto-switch
@@ -246,7 +254,8 @@ def handle_chat(handler, pm, data):
 
     # vLLM path — apply dynamic rate limiter
     body = json.dumps(data).encode("utf-8")
-    gate = pm.dual_gate.acquire(model, timeout=30)
+    # v4.6.3: 使用配置的 timeout (observe 模式下不会 429)
+    gate = pm.dual_gate.acquire(model)
     if not gate.ok:
         pm.logger.log(RequestLog(
             req_id=req_id, key_name=key_name, model=model,
