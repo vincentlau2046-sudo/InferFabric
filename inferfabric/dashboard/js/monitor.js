@@ -109,13 +109,46 @@ function renderCost(d) {
 }
 
 // ── Request Log Panel ──
+let _logInterval = null;
 async function loadRequestLog() {
   try {
-    document.getElementById('logBody').innerHTML = '<div class="m-empty">请求日志需 access log API（后续实现）</div>';
+    const since = Math.floor(Date.now() / 1000) - 3600; // last 1h
+    const r = await fetch('/api/request_log?limit=50&since=' + since);
+    if (!r.ok) return;
+    const d = await r.json();
+    const logs = d.logs || [];
+    const el = document.getElementById('logBody');
+    if (!logs.length) {
+      el.innerHTML = '<div class="m-empty">暂无请求日志</div>';
+    } else {
+      let html = '<table class="m-tbl"><tr><th>时间</th><th>模型</th><th>状态</th><th>Tokens</th><th>TTFT</th><th>耗时</th></tr>';
+      for (const l of logs) {
+        const ts = l.timestamp ? new Date(l.timestamp * 1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '—';
+        const model = (l.model || '').split('/').pop();
+        const statusCls = l.status < 400 ? 'color:var(--green)' : 'color:var(--red)';
+        const tokens = (l.tokens_in || 0) + '/' + (l.tokens_out || 0);
+        const ttft = l.ttft_ms != null ? l.ttft_ms.toFixed(0) + 'ms' : '—';
+        const dur = l.duration_ms != null ? l.duration_ms.toFixed(0) + 'ms' : '—';
+        html += '<tr><td>' + esc(ts) + '</td><td>' + esc(model) + '</td><td style="' + statusCls + '">' + esc(l.status) + '</td><td>' + esc(tokens) + '</td><td>' + esc(ttft) + '</td><td>' + esc(dur) + '</td></tr>';
+      }
+      html += '</table>';
+      el.innerHTML = html;
+    }
     document.getElementById('logTs').textContent = new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   } catch(e) { /* ignore */ }
 }
+function startLogPolling() {
+  if (_logInterval) return;
+  loadRequestLog();
+  _logInterval = setInterval(loadRequestLog, 5000);
+}
+function stopLogPolling() {
+  if (_logInterval) { clearInterval(_logInterval); _logInterval = null; }
+}
+document.addEventListener('visibilitychange', function() {
+  if (document.hidden) stopLogPolling(); else startLogPolling();
+});
 
 // ── Init ──
 startMetricsPolling();
-loadRequestLog();
+startLogPolling();

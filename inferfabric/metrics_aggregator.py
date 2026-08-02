@@ -51,12 +51,14 @@ class MetricsAggregator:
 
     def __init__(self, price_config: dict[str, CloudModelPrice] | None = None,
                  db: "RequestLogDB | None" = None,
-                 replay_hours: float = 24.0):
+                 replay_hours: float = 24.0,
+                 model_name_map: dict[str, str] | None = None):
         self._lock = threading.Lock()
         self._samples: collections.deque = collections.deque(maxlen=100000)
         self._price_config = price_config or {}
         self._db = db
         self._replay_hours = replay_hours
+        self._name_map = model_name_map or {}
 
         if self._db and self._replay_hours > 0:
             self._replay_from_db()
@@ -124,7 +126,10 @@ class MetricsAggregator:
             samples = [s for s in self._samples if s.get("timestamp", 0) >= cutoff]
 
         if not samples:
-            return {"window": window, "total": 0}
+            return {
+                "window": window, "total_requests": 0, "success": 0,
+                "fail": 0, "models": {}, "cost_yuan": 0.0, "success_rate": 0.0,
+            }
 
         # 按 model 分组
         by_model = defaultdict(list)
@@ -141,8 +146,8 @@ class MetricsAggregator:
         }
 
         for model, msamples in by_model.items():
-            ttfts = [s["ttft_ms"] for s in msamples if s.get("ttft_ms") and s["ttft_ms"] > 0]
-            durations = [s["duration_ms"] for s in msamples if s.get("duration_ms") and s["duration_ms"] > 0]
+            ttfts = [s["ttft_ms"] for s in msamples if s["status"] < 400 and s.get("ttft_ms") and s["ttft_ms"] > 0]
+            durations = [s["duration_ms"] for s in msamples if s["status"] < 400 and s.get("duration_ms") and s["duration_ms"] > 0]
             tokens_in = sum(s.get("tokens_in", 0) for s in msamples)
             tokens_out = sum(s.get("tokens_out", 0) for s in msamples)
 
@@ -171,7 +176,8 @@ class MetricsAggregator:
                 m["duration_p95"] = round(quantile(durations, 0.95), 1)
                 m["duration_p99"] = round(quantile(durations, 0.99), 1)
 
-            result["models"][model] = m
+            friendly = self._name_map.get(model, model)
+            result["models"][friendly] = m
             result["cost_yuan"] += cost
 
         result["cost_yuan"] = round(result["cost_yuan"], 4)

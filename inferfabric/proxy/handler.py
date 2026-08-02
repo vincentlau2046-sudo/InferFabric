@@ -94,6 +94,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(self._system_info())
             elif path == "/api/metrics":
                 self._handle_api_metrics(pm)
+            elif path == "/api/request_log":
+                self._handle_request_log(pm)
             elif self.path == "/history":
                 self._send_json(pm.mgr.state.get_history(limit=30))
             elif path == "/vllm_metrics":
@@ -540,6 +542,37 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": str(e)}, 502)
             return
         self._send_json(result, status)
+
+    def _handle_request_log(self, pm):
+        """返回最近请求日志 (D-1)"""
+        try:
+            from urllib.parse import urlparse, parse_qs
+            import time
+            qs = parse_qs(urlparse(self.path).query)
+            limit = min(int(qs.get("limit", ["50"])[0]), 500)
+            since = float(qs.get("since", ["0"])[0])
+            if pm._reqlog_db is None:
+                self._send_json({"logs": [], "count": 0}, 200)
+                return
+            rows = pm._reqlog_db.query_request_log(since=since, limit=limit)
+            logs = []
+            for r in rows:
+                logs.append({
+                    "timestamp": r["timestamp"],
+                    "model": r["model"],
+                    "status": r["status"],
+                    "tokens_in": r["tokens_in"],
+                    "tokens_out": r["tokens_out"],
+                    "ttft_ms": round(r["ttft_ms"], 1) if r["ttft_ms"] else None,
+                    "duration_ms": round(r["duration_ms"], 1) if r["duration_ms"] else None,
+                    "route": r["route"],
+                    "key_name": r.get("key_name", ""),
+                    "error": r.get("error", ""),
+                })
+            self._send_json({"logs": logs, "count": len(logs)}, 200)
+        except Exception as e:
+            log.error("/api/request_log failed: %s", e)
+            self._send_json({"error": "request log unavailable"}, 500)
 
     # ─── System Info ─────────────────────────────────────────────
 

@@ -85,7 +85,14 @@ class ProxyManager:
         # G-2 + v4.6.2: Metrics aggregator (queue-decoupled) + SQLite replay
         self._reqlog_db = RequestLogDB(DEFAULT_REQUEST_LOG_DB)
         self._agg_queue = _queue.Queue()
-        self.metrics = MetricsAggregator(db=self._reqlog_db, replay_hours=24.0)
+        # D-2: Build served_name → friendly_name mapping for dashboard
+        self._metrics_name_map = {}
+        for m in self.mgr._models.values():
+            sn = m.served_name
+            if sn and sn != m.name:
+                self._metrics_name_map[sn] = m.name
+        self.metrics = MetricsAggregator(db=self._reqlog_db, replay_hours=24.0,
+                                          model_name_map=self._metrics_name_map)
         self._agg_thread = AggregatorThread(self.metrics, self._agg_queue)
         self._agg_thread.start()
         # PR-B + v4.6.2: Request logger (feeds aggregator via queue + SQLite)
