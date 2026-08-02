@@ -845,12 +845,14 @@ class ProcessManager:
         """Get or cache the baseline GPU memory usage.
 
         P1-3: Uses a 7-day TTL on the cached baseline to prevent stale
-        measurements (e.g., from a prior GPU-heavy run).  Only updates
-        the cache when current usage is within 150% of the previous
-        baseline — if the GPU is currently loaded the measurement is
-        skipped to avoid polluting the idle baseline.
+        measurements.  Only persists new measurements when the GPU is
+        idle (measured <= cached baseline).  If the cache is expired
+        and the GPU is busy, returns the measured value for this call
+        but does not persist it — unless the cached value itself is
+        unreasonable (>2GB idle), in which case the cache is discarded.
         """
         SEVEN_DAYS = 7 * 86400  # seconds
+        REASONABLE_IDLE_MAX = 2048  # MB — idle baseline should never exceed this
         cache_file = Path.home() / ".inferfabric" / "gpu_baseline.json"
 
         # ── Read cached value ──────────────────────────────────────
@@ -882,8 +884,16 @@ class ProcessManager:
         # currently loaded, use measured value for this call but don't
         # persist it — and don't return a stale expired cache either.
         if cached_baseline and measured:
-            if measured > cached_baseline * 1.5 and cached_baseline < 2048:
-                # cached_baseline is reasonable (<2GB idle) and GPU is busy
+            # If cached value is unreasonable (>2GB idle), discard it entirely
+            if cached_baseline > REASONABLE_IDLE_MAX:
+                log.info(
+                    "Discarding unreasonable cached baseline (%d MB > %d MB)",
+                    cached_baseline, REASONABLE_IDLE_MAX,
+                )
+                # Fall through to persist measured value
+            elif measured > cached_baseline:
+                # GPU is currently loaded — return cached idle value,
+                # don't persist measured (would poison the idle baseline)
                 log.info(
                     "Skipping baseline persist — GPU appears busy "
                     "(used=%d MB, cached baseline=%d MB)",
