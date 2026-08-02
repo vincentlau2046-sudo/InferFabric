@@ -190,6 +190,21 @@ class ProcessManager:
             log.warning("No vLLM PID tracked and no port given — falling back to pkill")
             return self._pkill_vllm_fallback()
 
+        # P1-2: 校验 PID 是否已被操作系统复用到无关进程
+        if pgid is not None and not self._validate_pid(pgid, "vllm"):
+            log.warning(
+                "Tracked vLLM PID %d does not appear to be a vLLM process "
+                "(cmdline mismatch) — clearing stale PID and using fallback",
+                pgid,
+            )
+            self._set_vllm_pid(None)
+            if port:
+                self._pkill_by_port(port)
+                self._cleanup_pid_files("vllm")
+                self._wait_gpu_idle()
+                return {"status": "ok", "message": "port-based cleanup after stale PID"}
+            return self._pkill_vllm_fallback()
+
         if pgid is None:
             # Tracked PID gone but port given — skip PG path, go straight to port cleanup
             log.info("Tracked PID gone but port=%d given — port-based cleanup only", port)
@@ -430,7 +445,17 @@ class ProcessManager:
         """
         pgid = self.comfyui_pid
         if pgid is not None:
-            result = self._stop_comfyui_native(pgid)
+            # P1-2: 校验 PID 是否已被操作系统复用到无关进程
+            if self._validate_pid(pgid, "comfyui"):
+                result = self._stop_comfyui_native(pgid)
+            else:
+                log.warning(
+                    "Tracked ComfyUI PID %d does not appear to be a ComfyUI process "
+                    "(cmdline mismatch) — clearing stale PID and falling back",
+                    pgid,
+                )
+                self._set_comfyui_pid(None)
+                result = self._pkill_comfyui_fallback()
         elif self._comfyui_process_exists():
             log.warning("No ComfyUI PID tracked, falling back to pkill")
             result = self._pkill_comfyui_fallback()
@@ -817,29 +842,104 @@ class ProcessManager:
         return {"status": "timeout", "message": f"GPU did not return to idle (threshold={threshold}MB)"}
     
     def _get_gpu_baseline(self) -> int:
-        """Get or cache the baseline GPU memory usage."""
-        # Use a simple file-based cache for baseline
+        """Get or cache the baseline GPU memory usage.
+
+        P1-3: Uses a 7-day TTL on the cached baseline to prevent stale
+        measurements (e.g., from a prior GPU-heavy run).  Only updates
+        the cache when current usage is within 150% of the previous
+        baseline — if the GPU is currently loaded the measurement is
+        skipped to avoid polluting the idle baseline.
+        """
+        SEVEN_DAYS = 7 * 86400  # seconds
         cache_file = Path.home() / ".inferfabric" / "gpu_baseline.json"
+
+        # ── Read cached value ──────────────────────────────────────
+        cached_baseline: int | None = None
+        cached_ts: float = 0.0
         try:
             if cache_file.exists():
                 data = json.loads(cache_file.read_text())
-                return data.get("baseline_mb", 512)
+                cached_baseline = int(data.get("baseline_mb", 0)) or None
+                cached_ts = float(data.get("timestamp", 0))
         except Exception:
-            pass
-        
-        # Measure current idle usage
-        baseline = gpu_used_mb()
-        if baseline < 100:  # Unlikely, fallback to 512
-            baseline = 512
-        
-        # Save baseline
+            cached_baseline = None
+            cached_ts = 0.0
+
+        # Return cached value if still valid (within TTL)
+        if cached_baseline and cached_ts > 0:
+            age = time.time() - cached_ts
+            if age < SEVEN_DAYS:
+                return cached_baseline
+            else:
+                log.info("GPU baseline cache expired (age=%.0f days), re-sampling", age / 86400)
+
+        # ── Re-sample ──────────────────────────────────────────────
+        measured = gpu_used_mb()
+        baseline = measured if (measured and measured >= 100) else 512
+
+        # Guard: only persist if GPU is actually idle (current usage
+        # is within 150% of a reasonable baseline).  If the GPU is
+        # currently loaded, use measured value for this call but don't
+        # persist it — and don't return a stale expired cache either.
+        if cached_baseline and measured:
+            if measured > cached_baseline * 1.5 and cached_baseline < 2048:
+                # cached_baseline is reasonable (<2GB idle) and GPU is busy
+                log.info(
+                    "Skipping baseline persist — GPU appears busy "
+                    "(used=%d MB, cached baseline=%d MB)",
+                    measured, cached_baseline,
+                )
+                return cached_baseline
+        elif measured and measured < 100:
+            # measured < 100 is suspicious; keep cached if available
+            if cached_baseline:
+                return cached_baseline
+
+        # Persist new baseline with timestamp
         try:
             cache_file.parent.mkdir(parents=True, exist_ok=True)
-            cache_file.write_text(json.dumps({"baseline_mb": baseline}))
+            cache_file.write_text(json.dumps({
+                "baseline_mb": baseline,
+                "timestamp": time.time(),
+            }))
+            log.info("GPU baseline updated: %d MB", baseline)
         except Exception:
             pass
-        
+
         return baseline
+
+    # ─── PID Validation ────────────────────────────────────────────
+
+    def _validate_pid(self, pid: int, expected_substring: str) -> bool:
+        """P1-2: Validate that a PID still belongs to the expected process.
+
+        Reads ``/proc/<pid>/cmdline`` (null-separated bytes) and checks
+        for ``expected_substring`` (case-insensitive).  Returns False if
+        the PID has been recycled by the kernel to an unrelated process.
+        """
+        cmdline_path = f"/proc/{pid}/cmdline"
+        try:
+            raw = Path(cmdline_path).read_bytes()
+        except FileNotFoundError:
+            return False  # PID no longer exists
+        except PermissionError:
+            # Cannot read cmdline — conservatively assume PID is still valid
+            # to avoid accidentally killing an unrelated process via fallback.
+            log.debug("Cannot read /proc/%d/cmdline (permission denied), assuming valid", pid)
+            return True
+        except OSError:
+            return False
+
+        # Empty cmdline = kernel thread — PID recycled, not a user process
+        if not raw:
+            return False
+
+        try:
+            cmdline = raw.decode("utf-8", errors="replace")
+        except Exception:
+            return False
+
+        return expected_substring.lower() in cmdline.lower()
 
     # ─── Internal Helpers ────────────────────────────────────────
 

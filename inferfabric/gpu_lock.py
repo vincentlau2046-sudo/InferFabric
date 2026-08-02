@@ -76,6 +76,9 @@ class GPULock:
 
     def force_clear(self):
         """Emergency: close any stale lock. Only use when no other process could hold it."""
+        # P1-6: 如果当前进程持有锁时调用 force_clear，记录警告
+        if self.is_held:
+            log.warning("force_clear called while lock is held by current process — releasing first")
         self.release()
         try:
             os.unlink(self._lock_path)
