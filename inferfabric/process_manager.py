@@ -270,11 +270,36 @@ class ProcessManager:
                 )
                 time.sleep(1)
                 break
+            except subprocess.TimeoutExpired:
+                log.warning("fuser on port %d timed out, skipping", port)
+                break
         time.sleep(1)
 
     def _pkill_vllm_fallback(self) -> dict:
-        """Fallback: stop vLLM using pkill when no PID is tracked."""
-        # Try to discover vLLM ports from known models.d configs
+        """Fallback: stop vLLM when no PID is tracked.
+
+        Strategy (safe, no global pkill -f):
+          1. Scan PID files in log_dir → kill -9 <pid> → wait.
+          2. For each known vLLM port: fuser <port>/tcp (only kills on that port).
+        """
+        # Step 1: Kill by PID files
+        for pf in sorted(self._log_dir.glob("vllm_*.pid")):
+            try:
+                pid = int(pf.read_text().strip())
+                for sig in (signal.SIGTERM, signal.SIGKILL):
+                    try:
+                        os.kill(pid, sig)
+                        log.info("%s vLLM PID %d via PID file %s",
+                                 "SIGTERM" if sig == signal.SIGTERM else "SIGKILL",
+                                 pid, pf.name)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                time.sleep(1)
+            except (ValueError, OSError) as e:
+                log.debug("Failed to read PID from %s: %s", pf, e)
+            pf.unlink(missing_ok=True)
+
+        # Step 2: Port-based cleanup via fuser (last resort)
         vllm_ports = []
         try:
             from .config import load_models
@@ -284,17 +309,10 @@ class ProcessManager:
         except Exception:
             pass
         if not vllm_ports:
-            vllm_ports = [8000, 8001, 8002]  # fallback defaults
+            vllm_ports = [8000, 8001, 8002]
 
         for port in vllm_ports:
-            subprocess.run(["pkill", "-f", f"vllm.*{port}"], timeout=5, check=False, capture_output=True)
-
-        time.sleep(3)
-
-        for port in vllm_ports:
-            subprocess.run(["pkill", "-9", "-f", f"vllm.*{port}"], timeout=5, check=False)
-        subprocess.run(["pkill", "-9", "-f", "vllm serve"], timeout=5, check=False)
-        subprocess.run(["pkill", "-9", "-f", "VLLM::EngineCore"], timeout=5, check=False)
+            self._pkill_by_port(port)
 
         time.sleep(2)
         self._cleanup_pid_files("vllm")

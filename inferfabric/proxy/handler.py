@@ -14,11 +14,14 @@ import signal
 import socket
 import logging
 import json
+import hmac
+import ipaddress
 import http.server
 import socketserver
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 from http.client import HTTPConnection
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -633,7 +636,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if not _ADMIN_TOKEN:
             return True  # No token configured → open (localhost-only binding is security)
         token = self.headers.get("X-Admin-Token", "")
-        if token == _ADMIN_TOKEN:
+        if hmac.compare_digest(token, _ADMIN_TOKEN):
             return True
         self._send_json({"error": "Unauthorized", "status": "unauthorized"}, 401)
         return False
@@ -762,6 +765,86 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             ],
         })
 
+    def _validate_cloud_test_url(self, url: str, pm) -> tuple:
+        """Validate a cloud provider test URL for SSRF protection.
+
+        Returns (is_valid: bool, reason: str, resolved_ips: list[str]).
+        The resolved_ips list is returned on success so the caller can
+        connect directly to the verified IP (TOCTOU mitigation — prevents
+        DNS rebinding between validation and connection).
+        Checks:
+          - scheme must be https
+          - host must not resolve to a private/internal IP
+          - host must be a registered cloud provider base URL
+        """
+        # Parse URL
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return False, "invalid URL", []
+
+        # Only allow HTTPS
+        if parsed.scheme != "https":
+            return False, "only https URLs are allowed", []
+
+        hostname = parsed.hostname
+        if not hostname:
+            return False, "missing hostname in URL", []
+
+        # DNS resolve and check for private IPs
+        _PRIVATE_NETS = [
+            ipaddress.ip_network("127.0.0.0/8"),
+            ipaddress.ip_network("10.0.0.0/8"),
+            ipaddress.ip_network("172.16.0.0/12"),
+            ipaddress.ip_network("192.168.0.0/16"),
+            ipaddress.ip_network("169.254.0.0/16"),
+            ipaddress.ip_network("100.64.0.0/10"),  # CGNAT / cloud metadata
+            ipaddress.ip_network("::1/128"),
+            ipaddress.ip_network("fc00::/7"),
+        ]
+        safe_ips = []
+        try:
+            resolved = socket.getaddrinfo(hostname, None)
+            for family, _type, _proto, _canonname, sockaddr in resolved:
+                ip_str = sockaddr[0]
+                try:
+                    ip = ipaddress.ip_address(ip_str)
+                    # IPv4-mapped IPv6: unwrap and check against v4 nets
+                    check_ip = ip.ipv4_mapped if ip.version == 6 and ip.ipv4_mapped else ip
+                    for net in _PRIVATE_NETS:
+                        if check_ip in net:
+                            return False, f"private IP address not allowed: {ip_str}", []
+                    safe_ips.append(ip_str)
+                except ValueError:
+                    pass
+        except socket.gaierror:
+            return False, f"DNS resolution failed for {hostname}", []
+
+        if not safe_ips:
+            return False, "no valid IPs resolved", []
+
+        # Check against registered cloud provider whitelist
+        try:
+            pm.ensure_cloud_discovered()
+            provider_hosts = set()
+            for _pname, pcfg in pm.cloud.providers.items():
+                for base_field in ("openai_base", "anthropic_base"):
+                    base_url = getattr(pcfg, base_field, "") or ""
+                    if base_url:
+                        try:
+                            parsed_base = urlparse(base_url)
+                            if parsed_base.hostname:
+                                provider_hosts.add(parsed_base.hostname)
+                        except Exception:
+                            pass
+            if hostname not in provider_hosts:
+                return False, f"host '{hostname}' is not a registered cloud provider", []
+        except Exception as e:
+            log.warning("Cloud provider whitelist check failed: %s", e)
+            return False, "cloud provider registry unavailable", []
+
+        return True, "ok", safe_ips
+
     def _handle_cloud_test(self, pm):
         """POST /admin/cloud/test — 测试 Provider 连接。"""
         data = self._read_body()
@@ -773,16 +856,51 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if not url:
             self._send_json({"error": "Missing url"}, 400)
             return
+
+        # SSRF validation (returns resolved IPs to prevent DNS rebinding TOCTOU)
+        valid, reason, safe_ips = self._validate_cloud_test_url(url, pm)
+        if not valid:
+            log.warning("Cloud test URL rejected: %s — reason: %s", url, reason)
+            self._send_json({"error": f"SSRF check failed: {reason}"}, 400)
+            return
+
+        # Use the first resolved IP directly to prevent DNS rebinding
+        # between validation and connection (TOCTOU mitigation).
+        # We use http.client.HTTPConnection for the TCP socket to the
+        # verified IP, then manually wrap with ssl.SSLSocket using
+        # server_hostname=<original hostname> for SNI + cert validation.
+        resolved_ip = safe_ips[0]
         try:
-            import urllib.request
-            req = urllib.request.Request(url)
+            import http.client
+            import ssl
+            parsed = urlparse(url)
+            port = parsed.port or 443
+            path = parsed.path or "/"
+            if parsed.query:
+                path = f"{path}?{parsed.query}"
+
+            # Build TCP connection to verified IP, then TLS with original hostname
+            ctx = ssl.create_default_context()
+            # Step 1: TCP connect to the verified IP (no DNS rebind possible)
+            tcp_conn = http.client.HTTPConnection(resolved_ip, port, timeout=15)
+            tcp_conn.connect()
+            # Step 2: TLS wrap with server_hostname=original hostname (SNI + cert check)
+            sock = ctx.wrap_socket(tcp_conn.sock, server_hostname=parsed.hostname)
+            tcp_conn.sock = sock
+            tcp_conn._http_vsn_str = 'HTTP/1.1'
+
+            headers = {
+                "Host": parsed.hostname if not parsed.port else f"{parsed.hostname}:{parsed.port}",
+                "Content-Type": "application/json",
+            }
             if api_key:
-                req.add_header("Authorization", f"Bearer {api_key}")
-            req.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                body = json.loads(resp.read().decode("utf-8")) or {}
-                model_count = len(body.get("data", []))
-                self._send_json({"status": "ok", "model_count": model_count})
+                headers["Authorization"] = f"Bearer {api_key}"
+            tcp_conn.request("GET", path, headers=headers)
+            resp = tcp_conn.getresponse()
+            body = json.loads(resp.read().decode("utf-8")) or {}
+            model_count = len(body.get("data", []))
+            tcp_conn.close()
+            self._send_json({"status": "ok", "model_count": model_count})
         except Exception as e:
             self._send_json({"error": str(e)}, 502)
 
@@ -1017,6 +1135,27 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 # ─── Main ─────────────────────────────────────────────────────────
 
+def _validate_admin_token_safety():
+    """Validate that admin token configuration is safe before starting.
+
+    - If _ADMIN_TOKEN is empty and PROXY_HOST is not localhost → raise RuntimeError
+    - If _ADMIN_TOKEN is empty and PROXY_HOST is localhost → warn (acceptable)
+    """
+    if not _ADMIN_TOKEN:
+        if PROXY_HOST in ("127.0.0.1", "localhost", "::1"):
+            log.warning(
+                "Admin token is empty — control-plane routes are open. "
+                "This is acceptable for localhost-only binding but insecure for network access. "
+                "Set IFF_ADMIN_TOKEN to a secure value."
+            )
+        else:
+            raise RuntimeError(
+                f"Admin token is empty but PROXY_HOST={PROXY_HOST!r} is not localhost. "
+                "This would expose control-plane routes without authentication. "
+                "Set IFF_ADMIN_TOKEN to a secure value or set PROXY_HOST to 127.0.0.1."
+            )
+
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -1028,6 +1167,8 @@ def main():
     fh = RotatingFileHandler(log_dir / "proxy.log", maxBytes=10_000_000, backupCount=3)
     fh.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s %(message)s"))
     logging.getLogger("inferfabric").addHandler(fh)
+
+    _validate_admin_token_safety()
 
     mgr = ProxyManager()
     shutdown_event = threading.Event()

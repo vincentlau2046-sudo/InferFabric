@@ -4,6 +4,7 @@ inferfabric/proxy_manager.py — Model switching, health check, and request rout
 Extracted from proxy.py for modularity.
 """
 
+import itertools
 import json as _json
 import queue as _queue
 import uuid
@@ -18,7 +19,7 @@ import yaml as _yaml
 
 from inferfabric.manager import ModelManager
 from inferfabric.state import GPUMode
-from inferfabric.config import MODELS_DIR, DEFAULT_REQUEST_LOG_DB
+from inferfabric.config import MODELS_DIR, DEFAULT_REQUEST_LOG_DB, ConfigError
 from inferfabric.proxy.auth import AuthManager
 from inferfabric.proxy.request_logger import RequestLogger, RequestLog
 from inferfabric.cloud_discovery import CloudDiscovery, CloudModel
@@ -102,12 +103,16 @@ class ProxyManager:
                                      jsonl_enabled=self._runtime_config.get("access_log_jsonl", True),
                                      retention_days=self._runtime_config.get("request_log_retention_days", 90))
         # PR-B: Helper to create request context
-        self._req_counter = 0
+        self._req_counter = itertools.count()
 
     def new_request_id(self) -> str:
-        """Generate a unique request ID for logging."""
-        self._req_counter += 1
-        return f"iff-{uuid.uuid4().hex[:4]}"
+        """Generate a unique, thread-safe request ID for logging.
+
+        Format: {8-hex-counter}-{8-hex-uuid} (e.g. ``00000001-a3b4f2c1``).
+        The atomic counter guarantees uniqueness across threads; the random
+        suffix further eliminates any risk of collision across process restarts.
+        """
+        return f"{next(self._req_counter):08x}-{uuid.uuid4().hex[:8]}"
 
     def ensure_cloud_discovered(self):
         """首次请求时触发云端模型发现（懒加载）+ 启动后台轮询。"""
@@ -133,6 +138,61 @@ class ProxyManager:
         log.debug("Computed max_concurrent=%d from vLLM configs", max_seqs)
         return max_seqs
 
+    def _validate_runtime_config(self, config: dict):
+        """Validate iff.yaml schema. Raises ConfigError on invalid values.
+
+        Required fields and constraints:
+          - rate_limit.mode: "observe" or "reject"
+          - rate_limit.timeout: int > 0
+          - rate_limit.server_rpm: int >= 0
+          - rate_limit.model_rpm_default: int >= 0
+          - rate_limit.max_concurrent: "auto" or int > 0
+          - access_log_jsonl: bool
+          - request_log_retention_days: int > 0
+        """
+        from inferfabric.config import ConfigError
+
+        rate_cfg = config.get("rate_limit", {})
+        if not isinstance(rate_cfg, dict):
+            raise ConfigError("rate_limit must be a mapping")
+
+        mode = rate_cfg.get("mode", "observe")
+        if mode not in ("observe", "reject"):
+            raise ConfigError(f"rate_limit.mode must be 'observe' or 'reject', got {mode!r}")
+
+        timeout = rate_cfg.get("timeout", 5)
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
+            raise ConfigError(f"rate_limit.timeout must be int > 0, got {timeout!r}")
+
+        server_rpm = rate_cfg.get("server_rpm", 0)
+        if isinstance(server_rpm, bool) or not isinstance(server_rpm, int) or server_rpm < 0:
+            raise ConfigError(f"rate_limit.server_rpm must be int >= 0, got {server_rpm!r}")
+
+        model_rpm_default = rate_cfg.get("model_rpm_default", 0)
+        if isinstance(model_rpm_default, bool) or not isinstance(model_rpm_default, int) or model_rpm_default < 0:
+            raise ConfigError(f"rate_limit.model_rpm_default must be int >= 0, got {model_rpm_default!r}")
+
+        max_concurrent = rate_cfg.get("max_concurrent", "auto")
+        if isinstance(max_concurrent, bool):
+            raise ConfigError(f"rate_limit.max_concurrent must be 'auto' or int > 0, got {max_concurrent!r}")
+        elif isinstance(max_concurrent, str):
+            if max_concurrent != "auto":
+                raise ConfigError(f"rate_limit.max_concurrent must be 'auto' or int > 0, got {max_concurrent!r}")
+        elif isinstance(max_concurrent, int):
+            if max_concurrent <= 0:
+                raise ConfigError(f"rate_limit.max_concurrent must be int > 0, got {max_concurrent}")
+        else:
+            raise ConfigError(f"rate_limit.max_concurrent must be 'auto' or int, got {type(max_concurrent).__name__}")
+
+        if "access_log_jsonl" in config:
+            if not isinstance(config["access_log_jsonl"], bool):
+                raise ConfigError(f"access_log_jsonl must be bool, got {config['access_log_jsonl']!r}")
+
+        if "request_log_retention_days" in config:
+            rd = config["request_log_retention_days"]
+            if isinstance(rd, bool) or not isinstance(rd, int) or rd <= 0:
+                raise ConfigError(f"request_log_retention_days must be int > 0, got {rd!r}")
+
     def _load_runtime_config(self) -> dict:
         """从 iff.yaml 加载运行时配置，不存在时返回空 dict。
 
@@ -153,9 +213,13 @@ class ProxyManager:
                 cfg = _yaml.safe_load(f)
             if not cfg or not isinstance(cfg, dict):
                 return {}
+            self._validate_runtime_config(cfg)
             return cfg
+        except ConfigError as e:
+            log.warning("Invalid iff.yaml configuration: %s — using defaults", e)
+            return {}
         except Exception:
-            log.debug("Failed to load iff.yaml — using defaults", exc_info=True)
+            log.warning("Failed to load iff.yaml — using defaults", exc_info=True)
             return {}
 
     def _load_price_config(self) -> dict[str, CloudModelPrice]:
