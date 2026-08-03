@@ -122,7 +122,12 @@ class TokenStatsCollector:
     # --- 持久化 ---
 
     def _persist(self):
-        """Atomically write state to JSON using tmp + os.replace."""
+        """Atomically write state to JSON using tmp + os.replace.
+
+        Writes the full in-memory state. Since start() loads all historical data
+        from file into _state, and _state is a superset of file data during normal
+        operation, a full overwrite is safe and simpler than merge logic.
+        """
         with self._lock:
             data = dict(self._state)
 
@@ -146,7 +151,8 @@ class TokenStatsCollector:
                 del self._state[d]
         if expired:
             log.info("Cleaned up %d expired date(s)", len(expired))
-            self._persist()
+            # No immediate persist needed — next _collect_once() cycle will write
+            # the cleaned state. Calling _persist() here would be redundant.
 
     # --- 查询 ---
 
@@ -168,7 +174,6 @@ class TokenStatsCollector:
         else:  # 'all'
             since = None
 
-        # Load existing file data + in-memory state
         all_data = self._load_full_state()
 
         total = {}
@@ -184,11 +189,15 @@ class TokenStatsCollector:
         return [{"model": m, "total_tokens": d["total_tokens"], "requests": d["requests"]} for m, d in total.items()]
 
     def _load_from_file(self):
-        """Load state from JSON file into memory if file has newer data."""
+        """Load state from JSON file into memory.
+
+        Only loads dates not already present in _state. Since start() calls this
+        when _state is empty, all file data is loaded; subsequent calls (e.g. from
+        query) skip dates already tracked in memory to avoid double-counting.
+        """
         if not STATE_FILE.exists():
             return
         try:
-            mtime = os.path.getmtime(str(STATE_FILE))
             with open(STATE_FILE) as f:
                 file_data = json.load(f)
             with self._lock:
@@ -230,6 +239,9 @@ class TokenStatsCollector:
         """Start the background collection thread."""
         if self._thread and self._thread.is_alive():
             return
+        # Load historical data before first collection to prevent persist() from
+        # overwriting the file with empty state.
+        self._load_from_file()
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
