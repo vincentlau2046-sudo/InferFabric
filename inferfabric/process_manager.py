@@ -576,7 +576,7 @@ class ProcessManager:
 
     # ─── Ollama.cpp ───────────────────────────────────────────
 
-    def start_ollama_cpp(self, cfg: "OllamaCppConfig") -> dict:
+    def start_ollama_cpp(self, cfg: "OllamaCppConfig", model_type: str = "") -> dict:
         """Start Ollama.cpp / llama.cpp server for a specific model.
 
         Each model gets its own process with process group isolation.
@@ -618,10 +618,17 @@ class ProcessManager:
             "-c", str(cfg.context_size),
             "-t", str(cfg.threads),
         ]
-        # Enable embeddings endpoint for embedding models
-        cmd.append("--embeddings")
+        # Enable endpoint by model type
+        if model_type == 'rerank':
+            cmd.append("--reranking")
+        else:
+            # embedding (default) and other types get embeddings endpoint
+            cmd.append("--embeddings")
         if cfg.gpu_layers != 0:
             cmd.extend(["-ngl", str(cfg.gpu_layers)])
+        # Passthrough extra_flags
+        if cfg.extra_flags:
+            cmd.extend(shlex.split(cfg.extra_flags))
 
         log.info("Starting ollama.cpp: %s", " ".join(cmd[:6]) + "...")
         log_file = self._log_dir / f"ollama_cpp_{cfg.port}.log"

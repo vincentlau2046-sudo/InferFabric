@@ -71,7 +71,7 @@ class ModelLifecycle:
         elif model.is_ollama:
             return self._start_ollama_model(model)
         elif model.is_ollama_cpp:
-            return self._proc.start_ollama_cpp(model.ollama_cpp)
+            return self._proc.start_ollama_cpp(model.ollama_cpp, model_type=model.model_type or "")
         else:
             return {"status": "error", "message": f"Unknown model type: {model.type}"}
 

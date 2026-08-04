@@ -157,6 +157,7 @@ class OllamaCppConfig:
     threads: int = 8
     context_size: int = 8192
     gpu_layers: int = 0  # 0=CPU only, -1=all GPU, N=部分
+    extra_flags: str = ""  # 透传给 llama-server 的额外参数
 
 
 @dataclass
