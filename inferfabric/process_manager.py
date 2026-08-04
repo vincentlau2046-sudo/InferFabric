@@ -907,10 +907,9 @@ class ProcessManager:
             except (ProcessLookupError, PermissionError):
                 pass
 
-        subprocess.run(["pkill", "-9", "-f", "api.main"], timeout=5, check=False)
-        # Port-based cleanup for TTS default port
-        for port in [8880]:
-            subprocess.run(["pkill", "-9", "-f", f"python.*:{port}"], timeout=5, check=False)
+        subprocess.run(["pkill", "-9", "-f", "Qwen3-TTS-Openai-Fastapi/api"], timeout=5, check=False)
+        # Port-based cleanup for TTS
+        subprocess.run(["fuser", "-k", "8880/tcp"], timeout=5, check=False)
 
         time.sleep(2)
         self._set_vllm_pid(None)

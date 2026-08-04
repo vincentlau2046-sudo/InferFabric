@@ -186,6 +186,8 @@ MODEL_TYPE_TO_MODALITY = {
     "ocr": "text-vision",
     "aigc": "aigc",
     "embedding": "embedding",
+    "rerank": "rerank",
+    "infra": "infra",
     "tts": "tts",
 }
 
@@ -258,7 +260,7 @@ class ModelConfig:
             if dataclasses.is_dataclass(val) and not isinstance(val, type):
                 val = dataclasses.asdict(val)
                 # Exclude runtime-only fields from nested dataclasses
-                for excl in ("startup_timeout",):
+                for excl in ("startup_timeout", "health_check_timeout"):
                     val.pop(excl, None)
             payload[f.name] = val
         raw = json.dumps(payload, sort_keys=True, default=str)
