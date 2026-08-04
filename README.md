@@ -1,14 +1,9 @@
-# InferFabric - 本地 LLM 模型切换系统 v4.0
+# InferFabric — 本地 LLM 推理网关
 
-> **版本**: v4.5.0
-> **更新**: 2026-07-04
+> **版本**: v4.7.0
+> **更新**: 2026-08-04
 > **硬件**: RTX 5090D (32GB VRAM)
 > **核心理念**: 模型即插件 — 一个 YAML 文件 = 一个可部署的模型
-
----
-
-> ⚠️ `switch_vllm.sh` 和 `switch_comfyui.sh` 已废弃。统一使用 `iff` CLI。
-> CLI 完全独立于 proxy，即使 proxy 挂了也能操作。
 
 ---
 
@@ -17,15 +12,13 @@
 - [概述](#概述)
 - [快速开始](#快速开始)
 - [核心概念](#核心概念)
-  - [模型即插件](#模型即插件)
-  - [三态 GPU 状态机](#三态-gpu-状态机)
+- [云 Provider 预设](#云-provider-预设)
+- [API Key 安全模型](#api-key-安全模型)
 - [目录结构](#目录结构)
 - [CLI 参考](#cli-参考)
 - [模型配置格式](#模型配置格式)
-- [增删模型](#增删模型)
-- [OpenClaw / Codex / Claude Code 集成](#openclaw--codex--claude-code-集成)
-- [Proxy 服务](#proxy-服务)
-- [状态持久化](#状态持久化)
+- [OpenClaw / Claude Code 集成](#openclaw--claude-code-集成)
+- [Proxy API 端点](#proxy-api-端点)
 - [故障恢复](#故障恢复)
 - [版本历史](#版本历史)
 
@@ -33,18 +26,28 @@
 
 ## 概述
 
-InferFabric 管理单卡 GPU 上多个互斥/共存 LLM 推理服务和图像生成服务的生命周期。
+InferFabric 是单卡 GPU 上的 LLM 推理网关，统一管理本地模型（vLLM/llama.cpp/Ollama/ComfyUI）和云端 Provider（百度千帆/DeepSeek/OpenAI/Anthropic 等）的生命周期、路由与发现。
 
-**v4.0 核心变化**:
+**v4.7 核心能力**:
 
-| v3.x (Profile) | v4.0 (Model Plugin) |
-|-----------------|---------------------|
-| `profiles.yaml` 单文件 | `models.d/` 目录,一文件一模型 |
-| 独占/共享是 Profile 的组合策略 | 模型的 `mode` 属性 |
+| 能力 | 说明 |
+|------|------|
+| 本地模型切换 | 三态 GPU 状态机（idle/exclusive/shared），模型即插件 |
+| 云 Provider 预设 | 9 个预配置厂商，一键添加 + 自动模型发现 |
+| API Key 安全 | 明文自动转 `${ENV_VAR}` 引用，密钥存 secrets.env (chmod 600) |
+| 双引擎路由 | OpenAI `/v1/chat/completions` + Anthropic `/v1/messages` |
+| Dashboard | 实时 GPU/模型/Provider 状态，预设卡片式添加 |
+| 多后端支持 | vLLM、llama.cpp (CPU/CUDA 双构建)、Ollama、ComfyUI |
+
+**版本演进**:
+
+| v3.x (Profile) | v4.0+ (Model Plugin + Cloud) |
+|-----------------|-------------------------------|
+| `profiles.yaml` 单文件 | `models.d/` 目录, 一文件一模型 |
+| 仅本地模型 | 本地 + 云端 Provider 统一管理 |
 | GPU 锁二值(持有/不持有) | 三态(idle/exclusive/shared) |
-| N 模型 × M 组合 = Profile 爆炸 | N 文件,无组合 |
-| `iff switch <profile>` | `iff switch <model_name>` |
-| 停止只能 switch idle | `iff stop <model_name>` 停单个 |
+| N 模型 × M 组合 = Profile 爆炸 | N 文件 + 云预设, 无组合 |
+| API Key 明文存 YAML | `${ENV_VAR}` 引用 + secrets.env |
 
 ---
 
@@ -57,13 +60,13 @@ iff status
 # 列出可用模型
 iff models
 
-# 切换到 Qwen3.6-27B(独占模式)
+# 切换到 Qwen3.6-27B (独占模式)
 iff switch qwen36-27b
 
 # 释放 GPU
 iff switch idle
 
-# 切换到 Qwen3.5-9B(共享模式)
+# 切换到 Qwen3.5-9B (共享模式)
 iff switch qwen35-9b
 
 # 在共享模式下加入 ComfyUI
@@ -85,10 +88,11 @@ iff reset
 每个模型/服务由 `models.d/` 下的一个 YAML 文件定义。文件自带一切:
 
 - 模型参数(路径、端口、conda 环境、vLLM 参数)
-- 部署模式(`mode: exclusive` 或 `mode: shared`)
-- 服务类型(`type: vllm` 或 `type: comfyui`)
+- 部署模式(`mode: exclusive` / `mode: shared` / `mode: none`)
+- 服务类型(`type: vllm` / `type: llama` / `type: comfyui` / `type: tts`)
+- GPU 角色(`gpu_role: exclusive` / `gpu_role: shared` / `gpu_role: none`)
 
-**增删模型 = 增删 YAML 文件**,零改动代码。
+**增删模型 = 增删 YAML 文件**，零改动代码。
 
 ### 三态 GPU 状态机
 
@@ -114,8 +118,88 @@ iff reset
 | `shared` | `switch <shared_model/service>` | 加入共享服务 |
 | `shared` | `stop <model>` | 移除单个服务 |
 | `shared` | `switch idle` | 停所有,释放 GPU |
-| `exclusive` | `switch <shared_*>` | **❌ 拒绝** |
-| `shared` | `switch <exclusive_*>` | **❌ 拒绝** |
+
+### 双 llama.cpp 构建
+
+| 构建类型 | 路径 | 用途 |
+|----------|------|------|
+| CPU-only | `~/llama-cpp/build/bin/llama-server` | `gpu_layers: 0` / `gpu_role: none` 模型 (如 bge-m3) |
+| CUDA | `~/llama-cpp/build-cuda/bin/llama-server` | `gpu_layers != 0` / `gpu_role: shared` 模型 (如 TTS) |
+
+CPU-only 构建避免 CUDA runtime 开销 (~100-300MB)，为 GPU 模型腾出 VRAM。
+
+---
+
+## 云 Provider 预设
+
+### 预设厂商列表
+
+| 预设 | 图标 | Base URL | ENV 变量 | 模型发现 |
+|------|------|----------|----------|----------|
+| 百度千帆 Coding Plan | 🟦 | `qianfan.baidubce.com/v2/coding` | `IFF_BAIDU_QIANFAN_KEY` | ❌ Spec |
+| 火山方舟 | 🌋 | `ark.cn-beijing.volces.com/api/v3` | `IFF_VOLCENGINE_KEY` | ✅ |
+| 阿里百炼 | 🟦 | `dashscope.aliyuncs.com/compatible-mode/v1` | `IFF_ALI_BAILIAN_KEY` | ✅ |
+| DeepSeek 官方 | 🐋 | `api.deepseek.com/v1` | `IFF_DEEPSEEK_KEY` | ✅ |
+| 智谱AI | 🐋 | `open.bigmodel.cn/api/paas/v4` | `IFF_ZHIPU_KEY` | ✅ |
+| Moonshot (Kimi) | 🌙 | `api.moonshot.cn/v1` | `IFF_MOONSHOT_KEY` | ✅ |
+| OpenAI | 🟢 | `api.openai.com/v1` | `IFF_OPENAI_KEY` | ✅ |
+| Anthropic | 🟠 | `api.anthropic.com/v1` | `IFF_ANTHROPIC_KEY` | ❌ Spec |
+| 自定义 / 中转站 | 🔗 | (用户填写) | (用户填写) | ✅ |
+
+百度千帆和 Anthropic 使用 **Spec 模式**（预定义模型列表，避免不稳定的 auto-discovery）；其余厂商使用 **Discovery 模式**（自动发现可用模型）。
+
+### 通过 API 添加 Provider
+
+```bash
+# 预设模式（推荐）
+curl -X POST http://localhost:8999/admin/cloud/providers \
+  -H "Content-Type: application/json" \
+  -d '{"preset":"deepseek","api_key":"sk-xxx"}'
+
+# 手动模式
+curl -X POST http://localhost:8999/admin/cloud/providers \
+  -H "Content-Type: application/json" \
+  -d '{"name":"my-relay","api_key":"sk-xxx","openai_base":"https://relay.example.com/v1"}'
+```
+
+### 通过 Dashboard 添加
+
+1. 打开 `http://localhost:8999/` → Cloud 标签页
+2. 点击预设卡片（如 DeepSeek 🐋）
+3. 输入 API Key → 点击「添加 & 发现」
+4. 模型自动注册到路由表
+
+---
+
+## API Key 安全模型
+
+```
+┌──────────────────────────────────────────────────────┐
+│  用户输入明文 Key                                      │
+│       │                                              │
+│       ▼                                              │
+│  SecretsManager.write(env_var, plaintext_key)         │
+│       │  → 写入 ~/.inferfabric/secrets.env (chmod 600)│
+│       │  → YAML 只存 ${ENV_VAR} 引用                  │
+│       ▼                                              │
+│  cloud_provider.yaml: api_key: ${IFF_DEEPSEEK_KEY}   │
+│  secrets.env:        IFF_DEEPSEEK_KEY=sk-actual-key  │
+│       │                                              │
+│       ▼  Proxy 启动时                                 │
+│  _inject_secrets_env() → os.environ.setdefault()      │
+│       │                                              │
+│       ▼                                              │
+│  ${VAR} 展开为实际值，用于 API 调用                      │
+└──────────────────────────────────────────────────────┘
+```
+
+**安全保证**:
+- ✅ YAML 中永不存储明文 Key（自动转换为 `${ENV_VAR}` 引用）
+- ✅ `secrets.env` 权限 600，仅所有者可读写
+- ✅ `secrets.env` 不入 git（`.gitignore` 排除）
+- ✅ `_inject_secrets_env()` 使用 `os.environ.setdefault()`，不覆盖已有 ENV
+- ✅ `SecretsManager.write()` 线程安全（`threading.Lock`）
+- ✅ POST 添加 Provider 时，先写 secrets.env 再建内存配置（crash-safe）
 
 ---
 
@@ -126,34 +210,35 @@ iff reset
 ├── models.d/                        # 模型配置目录(插件式)
 │   ├── qwen36-27b.yaml              # mode: exclusive, type: vllm
 │   ├── qwen35-9b.yaml               # mode: shared, type: vllm
-│   ├── gemma4-26b.yaml              # mode: exclusive, type: vllm
+│   ├── qwen25-omni-3b.yaml          # mode: shared, type: tts (llama.cpp CUDA)
+│   ├── bge-m3.yaml                  # mode: none, gpu_role: none (CPU llama.cpp)
 │   └── comfyui.yaml                 # mode: shared, type: comfyui
 ├── inferfabric/
 │   ├── config.py                    # ModelConfig + load_models() + 常量
 │   ├── state.py                     # GPUMode + validate_transition + StateDB
 │   ├── gpu_lock.py                  # GPULock (flock)
 │   ├── health.py                    # HTTP/GPU 健康检查
-│   ├── process_manager.py           # vLLM + ComfyUI 进程管理
+│   ├── process_manager.py           # vLLM + ComfyUI + llama.cpp 进程管理
+│   ├── cloud_discovery.py           # 云端模型发现 + SecretsManager + 预设
+│   ├── cloud_presets.yaml           # 9 个云 Provider 预设配置
 │   ├── manager.py                   # ModelManager (编排层)
 │   ├── cli.py                       # CLI
-│   ├── proxy.py                     # HTTP 代理
-│   ├── dashboard.py                 # Dashboard HTML
+│   ├── proxy/
+│   │   ├── handler.py               # HTTP 路由 + Dashboard + Cloud API
+│   │   ├── chat_handlers.py         # Chat/Messages 转发
+│   │   └── request_logger.py        # 请求日志
+│   ├── dashboard/                   # Dashboard 静态资源
 │   └── preload.py                   # 模型预加载 (实验性)
 ├── scripts/
-│   ├── iff-recovery.sh         # 紧急恢复
-│   ├── switch_vllm.sh.bak           # 已废弃(iff CLI 替代)
-│   └── switch_comfyui.sh            # 已废弃(iff CLI 替代)
+│   └── iff-recovery.sh              # 紧急恢复
 └── tests/
-    ├── test_v4.py                   # v4.0 测试
-    └── test_local.py                # v3.x 旧测试 (待清理)
 ```
 
 ---
 
 ## CLI 参考
 
-> **CLI 完全独立于 proxy**。即使 proxy 挂掉,CLI 仍可直接操作 ModelManager + ProcessManager。
-> 当 proxy 故障时,CLI 是应急入口:`iff status` / `iff switch idle` / `iff reconcile`。
+> **CLI 完全独立于 proxy**。即使 proxy 挂掉，CLI 仍可直接操作。
 
 ### `iff status`
 
@@ -168,93 +253,44 @@ GPU      : 29140/32607 MiB used
 ### `iff models`
 
 ```
-Available Models (4):
+Available Models (5):
 name                 mode         type       description
 ----------------------------------------------------------------------
 comfyui              shared       comfyui    ComfyUI 图像生成
-gemma4-26b           exclusive    vllm       Gemma4-26B A4B NVFP4
-qwen35-9b            shared       vllm       Qwen3.5-9B GPTQ-4bit
-qwen36-27b           exclusive    vllm       Qwen3.6-27B NVFP4 + MTP
+qwen25-omni-3b      shared       tts        Qwen2.5-Omni-3B TTS
+qwen35-9b           shared       vllm       Qwen3.5-9B GPTQ-4bit
+qwen36-27b          exclusive    vllm       Qwen3.6-27B NVFP4 + MTP
+bge-m3              none         llama      BGE-M3 Embedding (CPU)
 ```
-
-过滤:`iff models --mode exclusive`
 
 ### `iff switch <model_name|idle>`
 
-遵守三态规则。独占模型全锁 GPU,共享模型允许共存。
-
-```bash
-# 常用操作
-iff switch qwen36-27b    # 启动 Qwen3.6-27B(独占,自动停其他服务)
-iff switch comfyui       # 启动 ComfyUI(共享)
-iff switch qwen35-9b     # 加入 Qwen3.5-9B(与 ComfyUI 共存)
-iff switch idle          # 释放 GPU(停所有服务)
-```
+遵守三态规则。独占模型全锁 GPU，共享模型允许共存。
 
 ### `iff stop <model_name>`
 
-停止单个共享服务。其他共享服务保留。最后一个停止后自动转 idle。
-
-```bash
-iff stop qwen35-9b       # 停 Qwen3.5-9B,保留 ComfyUI
-```
+停止单个共享服务。其他共享服务保留。
 
 ### `iff reset`
 
-强制重置到 idle。杀死所有服务进程,清空状态。
+强制重置到 idle。杀死所有服务进程，清空状态。
 
 ### `iff reconcile`
 
-状态对账:扫描所有模型端口健康状态,修正 state.db 与实际运行的差异。
-
-**使用场景**:
-- Dashboard 显示 idle 但服务实际在运行
-- 服务被外部方式启动(如直接 `python main.py`),state.db 无记录
-- proxy 启动时自动执行一次,也可手动触发
-
-### `iff history`
-
-切换历史。
-
----
-
-## Proxy 故障应急
-
-当 proxy (`:8999`) 无响应时:
-
-```bash
-# 1. 查看状态
-iff status
-
-# 2. 强制释放 GPU
-iff switch idle
-# 或强制重置
-iff reset
-
-# 3. 修复状态不一致
-iff reconcile
-
-# 4. 重启 proxy
-python3 -m inferfabric serve
-# 或 systemd
-sudo systemctl restart iff
-
-# 5. 紧急恢复(proxy + 状态 + GPU 锁)
-~/inferfabric/scripts/iff-recovery.sh --full
-```
+状态对账：扫描所有模型端口健康状态，修正 state.db 与实际运行的差异。
 
 ---
 
 ## 模型配置格式
 
-### vLLM 模型(独占)
+### vLLM 模型（独占）
 
 ```yaml
 # models.d/qwen36-27b.yaml
-name: qwen36-27b           # 必须匹配文件名(去掉 .yaml)
+name: qwen36-27b
 description: "Qwen3.6-27B NVFP4 + MTP"
-mode: exclusive             # exclusive = GPU 全锁
-type: vllm                  # 可省略,默认 vllm
+mode: exclusive
+type: vllm
 
 vllm:
   model_dir: Qwen3.6-27B-Text-NVFP4-MTP
@@ -263,7 +299,6 @@ vllm:
   conda_env: qw36-27b-vllm
   max_model_len: 128000
   gpu_memory_utilization: 0.90
-  max_num_seqs: 4
   kv_cache_dtype: fp8
   speculative_config: '{"method": "mtp", "num_speculative_tokens": 3}'
   extra_flags: >-
@@ -272,27 +307,38 @@ vllm:
     --trust-remote-code
 ```
 
-### vLLM 模型(共享)
+### llama.cpp 模型（共享 / CPU）
 
 ```yaml
-# models.d/qwen35-9b.yaml
-name: qwen35-9b
-description: "Qwen3.5-9B GPTQ-4bit"
-mode: shared                # shared = 允许与其他共享服务共存
-type: vllm
+# models.d/qwen25-omni-3b.yaml
+name: qwen25-omni-3b
+description: "Qwen2.5-Omni-3B TTS"
+mode: shared
+type: tts
+gpu_role: shared
+gpu_layers: -1           # -1 = 全部层 offload 到 GPU
+peak_vram_mb: 3800       # 预估 VRAM 占用
 
-vllm:
-  model_dir: Qwen3.5-9B-GPTQ-4bit/Qwen3.5-9B-GPTQ-4bit
-  served_name: vllm_qw35_gptq
-  port: 8002
-  conda_env: qw35-9b-vllm
-  max_model_len: 128000
-  gpu_memory_utilization: 0.4
-  max_num_seqs: 4
-  kv_cache_dtype: fp8
-  extra_flags: >-
-    --quantization gptq_marlin
-    --trust-remote-code
+llama:
+  model_path: ~/models/Qwen2.5-Omni-3B/qwen25-omni-3b-q4_k_m.gguf
+  port: 8035
+  conda_env: qwen25-omni
+```
+
+```yaml
+# models.d/bge-m3.yaml
+name: bge-m3
+description: "BGE-M3 Embedding"
+mode: none
+type: llama
+gpu_role: none            # 纯 CPU，不占 VRAM
+gpu_layers: 0
+
+llama:
+  model_path: ~/models/bge-m3/bge-m3-f16.gguf
+  port: 8036
+  conda_env: bge-m3
+  extra_flags: --embedding --pooling mean
 ```
 
 ### ComfyUI
@@ -308,120 +354,35 @@ conda_env: comfyui
 port: 8188
 working_dir: ~/ComfyUI
 health_url: http://localhost:8188/system_stats
-extra_flags: --cache-none --enable-manager
 ```
 
 ---
 
-## 增删模型
+## OpenClaw / Claude Code 集成
 
-### 添加新模型
-
-1. 下载模型到 `~/models/`
-2. 创建 conda 环境
-3. 写 `~/inferfabric/models.d/new-model.yaml`
-4. `iff models` 可见 → `iff switch new-model` 可用
-
-### 删除模型
-
-1. 删 `~/inferfabric/models.d/old-model.yaml`
-2. 已运行的模型不受影响(直到下次 switch)
-
-### name 字段规则
-
-YAML 内 `name` 字段必须与文件名(去掉 `.yaml` 后缀)一致。连字符命名:`qwen36-27b.yaml` → `name: qwen36-27b`。
-
----
-
-## OpenClaw / Codex / Claude Code 集成
-
-InferFabric Proxy (`:8999`) 作为 OpenClaw 的 Anthropic-compatible 后端，支持 OpenClaw、Codex、Claude Code (CC) 等客户端的自动化路由。
-
-### 客户端配置
-
-在 OpenClaw config 中，将 provider 指向 InferFabric Proxy：
-
-```
-# OpenClaw 配置示例 (providers 段落)
-provider:
-  id: inferfabric
-  base_url: http://127.0.0.1:8999
-  models:
-    - id: vllm_qwen27b
-      name: Qwen3.6-27B
-    - id: vllm_qw35_gptq
-      name: Qwen3.5-9B
-    - id: vllm_gemma26b
-      name: Gemma4-26B
-```
-
-客户端发送 OpenAI 格式请求到 `:8999/v1/chat/completions`，Proxy 自动路由到当前活跃的本地模型或云端 fallback。
+InferFabric Proxy (`:8999`) 作为 OpenClaw 的统一后端，支持 OpenAI 和 Anthropic 两种协议格式的自动化路由。
 
 ### 路由架构
 
 ```
-客户端 (OpenClaw/Codex/CC)
+客户端 (OpenClaw / Claude Code / Codex)
         │
-        ├── POST /v1/chat/completions ──→ [自动路由]
-        │                                    │
-        │                        ┌───────────┼───────────┐
-        │                        ▼         ▼           ▼
-        │                    vLLM路径   Ollama路径  Ollama原生
-        │                    (rate limit)│           (native)
-        │                        │
-        │                        ├── svc_name → 动态服务查找
-        │                        ├── AUTO_SWITCH → 自动切换模型
-        │                        └── Semaphore (8 slots, 30s)
+        ├── POST /v1/chat/completions ──→ 本地 vLLM / 云端 OpenAI-compatible
         │
-        ├── POST /v1/messages ──→ [Anthropic Messages]
-        │                              │
-        │                        ┌───────┴───────┐
-        │                        ▼             ▼
-        │                    本地 LLM     Baidu fallback
-        │                    (active svc)   (Coding Plan)
-        │                        │
-        │                        ├── 指数退避重试
-        │                        └── 429 rate limit
+        ├── POST /v1/messages ──→ 本地 vLLM / 百度千帆 Anthropic fallback
         │
-        └── GET /v1/models ──→ 聚合所有活跃服务的模型列表
+        ├── POST /v1/embeddings ──→ 本地 bge-m3 (CPU llama.cpp)
+        │
+        └── GET  /v1/models ──→ 聚合本地 + 云端模型列表
 ```
-
-### `/v1/chat/completions` 路由逻辑
-
-1. **模型解析**: `model` 字段 → `model_to_service()` 查找 aliases + `models.d/`
-2. **服务发现**: 检查当前活跃服务是否匹配；不匹配且 `AUTO_SWITCH=1` 时自动切换
-3. **Ollama 模型**: 如果模型配置 `num_gpu >= 0`，走原生 Ollama 转发（绕过 vLLM 路径）
-4. **vLLM 路径**: 应用 Semaphore rate limiter（8 slots, 30s timeout），成功后转发到目标端口
-5. **错误处理**: 409（切换进行中）、429（容量耗尽）、503（切换被阻止）
-
-### `/v1/messages` 路由逻辑
-
-1. **本地优先**: 扫描当前活跃服务，找第一个 `type: llm` 或 `vl` 的本地模型
-2. **本地转发**: 转发到活跃模型的 `/v1/messages` 端点，支持指数退避重试
-3. **Baidu Fallback**: 本地失败后自动回退到 Baidu Coding Plan (`BAIDU_MESSAGES_BASE`)
-4. **Rate Limit**: 本地路径通过 Semaphore 保护，Baidu 路径绕过
-
-### 模型别名系统
-
-`models.d/aliases.yaml` 定义语义化模型别名，客户端可直接使用：
-
-```yaml
-aliases:
-  fast: qwen35-9b       # 快速响应
-  powerful: qwen36-27b  # 高算力
-  balanced: qwen35-9b  # 平衡模式
-```
-
-客户端请求 `model: fast`，Proxy 自动解析为 `qwen35-9b` 并路由。
 
 ### AUTO_SWITCH 行为
 
 | 场景 | `AUTO_SWITCH=1` (默认) | `AUTO_SWITCH=0` |
-|------|-------------------------|----------------|
+|------|-------------------------|------------------|
 | 请求不活跃的模型 | 自动切换模型，等待健康检查 | 返回 404 |
 | 模型已在运行 | 直接转发 | 直接转发 |
 | 切换进行中 | 返回 409 | 返回 409 |
-| 手动停止的模型 | 被阻止，返回 503 | 同上 |
 
 ### 环境变量
 
@@ -431,26 +392,14 @@ aliases:
 | `EDGE_PROXY_PORT` | `8999` | 代理端口 |
 | `EDGE_AUTO_SWITCH` | `1` | 是否自动切换模型 |
 | `EDGE_HEALTH_CHECK` | `60` | 健康检查间隔（秒） |
-| `BAIDU_MESSAGES_BASE` | `https://qianfan.baidubce.com/anthropic/coding/v1` | Baidu fallback 端点 |
-
-### Proxy 启动
-
-```bash
-# 直接启动
-python3 -m inferfabric serve
-
-# systemd
-sudo systemctl start iff
-
-# 自定义端口
-EDGE_PROXY_PORT=9999 python3 -m inferfabric serve
-```
+| `IFF_ADMIN_TOKEN` | (空) | 管理端点鉴权 Token |
+| `BAIDU_MESSAGES_BASE` | `https://qianfan.baidubce.com/anthropic/coding/v1` | Anthropic fallback |
 
 ---
 
-## Proxy 服务
+## Proxy API 端点
 
-### API 端点
+### 核心路由
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -458,31 +407,24 @@ EDGE_PROXY_PORT=9999 python3 -m inferfabric serve
 | GET | `/health` | Proxy 健康检查 |
 | GET | `/status` | 完整状态 JSON |
 | GET | `/models` | 可用模型列表 |
-| GET | `/system` | 系统信息 |
-| GET | `/history` | 切换历史 |
-| POST | `/v1/chat/completions` | 转发到 vLLM |
+| POST | `/v1/chat/completions` | OpenAI Chat 转发 |
+| POST | `/v1/messages` | Anthropic Messages 转发 |
+| POST | `/v1/embeddings` | Embedding 请求转发 |
+
+### 管理端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
 | POST | `/switch` | 切换模型 `{"model": "qwen36-27b"}` |
 | POST | `/stop` | 停止单个服务 `{"model": "comfyui"}` |
 | POST | `/reset` | 强制重置 |
 | POST | `/reconcile` | 状态对账 |
-
-### 自动路由
-
-Proxy 根据 `model` 字段动态查找 `models.d/` 中的配置,自动切换到对应模型。
-
----
-
-## 状态持久化
-
-### StateDB (`~/.inferfabric/state.db`)
-
-| key | 示例 | 说明 |
-|-----|------|------|
-| `gpu_mode` | `exclusive` / `shared` / `idle` | GPU 状态机 |
-| `active_services` | `["qwen36-27b"]` | JSON 数组 |
-| `vllm_pid` | `12345` | vLLM 进程组 PGID |
-| `comfyui_pid` | `67890` | ComfyUI PGID |
-| `profile_state` | `healthy` | 服务健康状态 |
+| GET | `/admin/cloud/presets` | 云 Provider 预设列表 |
+| GET | `/admin/cloud/providers` | 已添加 Provider 列表 + 模型 + ENV 状态 |
+| POST | `/admin/cloud/providers` | 添加 Provider (预设/手动) |
+| DELETE | `/admin/cloud/providers` | 删除 Provider |
+| POST | `/admin/cloud/discover` | 手动触发模型发现 |
+| POST | `/admin/cloud/test` | 测试 Provider 连接 |
 
 ---
 
@@ -500,6 +442,11 @@ iff reset
 
 # state.db 损坏
 rm -f ~/.inferfabric/state.db && iff reconcile
+
+# Proxy 无响应
+iff status              # CLI 独立于 proxy
+iff switch idle         # 强制释放
+python3 -m inferfabric serve  # 重启 proxy
 ```
 
 ---
@@ -509,45 +456,29 @@ rm -f ~/.inferfabric/state.db && iff reconcile
 | 版本 | 日期 | 关键变更 |
 |------|------|----------|
 | v1.0 | 2026-06-25 | bash-only switch_vllm.sh |
-| v2.0 | 2026-06-27 | Python 重写,8 个 bug 修复 |
+| v2.0 | 2026-06-27 | Python 重写, 8 个 bug 修复 |
 | v3.0 | 2026-06-28 | 进程组管理、状态机、三态健康检查 |
 | v3.1 | 2026-06-28 | 模块化拆分、ComfyUI 原生管理 |
 | v3.2 | 2026-06-28 | Proxy 稳健重写、systemd watchdog |
 | **v4.0** | **2026-06-28** | **模型即插件、三态 GPU 状态机、消除 Profile、models.d/ 目录** |
 | v4.1 | 2026-07-01 | 双引擎负载均衡、流式管道修复 |
 | v4.2 | 2026-07-02 | AICF 管线集成、Flux Dev 切换 |
-| v4.3 | 2026-07-03 | CCR 架构 Anthropic Messages、模块化拆分 forwarder.py |
-| v4.4 | 2026-07-04 | Stability+ — 线程安全锁、连接泄漏审计修复 |
-| **v4.5** | **2026-07-04** | **Semaphore rate limiter (8 slots, 30s timeout), vLLM 过载保护** |
+| v4.3 | 2026-07-03 | CCR 架构 Anthropic Messages、模块化拆分 |
+| v4.4 | 2026-07-04 | Stability+ — 线程安全锁、连接泄漏审计 |
+| v4.5 | 2026-07-04 | Semaphore rate limiter、vLLM 过载保护 |
+| v4.6 | 2026-07-15 | Cloud Discovery — 云端模型发现、Provider 管理、Dashboard |
+| **v4.7** | **2026-08-04** | **Cloud Presets 预设厂商、API Key ENV 安全模型、SecretsManager、TTS 模型支持、llama.cpp CPU/CUDA 双构建** |
 
 ---
 
 ## 技术笔记
 
-### KV Offload 配置
-
-**参数**: `--kv-offloading-backend native --kv-offloading-size 8`
-
-**已知限制**:
-- `expandable_segments` 与 KV offload 冲突 — `process_manager.py` 自动跳过
-- `sleep_mode` 不可用（cumem 导致 OOM）
-- 有效 backend: `native`（vLLM 内置）
-
-**参考配置 (qwen36-27b)**:
-```yaml
-gpu_memory_utilization: 0.90
-extra_flags: >-
-  --kv-offloading-backend native
-  --kv-offloading-size 8
-```
-
-### TMA Patch
+### TMA Patch（vLLM 兼容 RTX 5090D）
 
 **根因**: `matmul_ogs.py` 中 `CC[0] > 9` 在 RTX 5090D (CC 12.0) 误启 TMA → OOM
 
 **修复**: `CC[0] > 9` → `CC[0] > 9 and CC[0] < 12`
 
-**Patch 命令**:
 ```bash
 for env in qw36-27b-vllm qw35-9b-vllm gm4-26b-vllm; do
   FILE=~/miniconda3/envs/$env/lib/python3.11/site-packages/vllm/third_party/triton_kernels/matmul_ogs.py
@@ -556,4 +487,4 @@ for env in qw36-27b-vllm qw35-9b-vllm gm4-26b-vllm; do
 done
 ```
 
-**注意**: `VLLM_USE_TMA=0` 不存在，patch 是唯一方案。pip upgrade 会覆盖，需重新打。
+**注意**: pip upgrade 会覆盖 patch，需重新打。vLLM 0.26+ 已修复此问题。
