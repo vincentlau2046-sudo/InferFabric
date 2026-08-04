@@ -507,8 +507,8 @@ async function loadModels() {
     const fwIcon = fwIcons[m.type] || '📦';
     const ctxStr = m.context_window ? (m.context_window >= 1024 ? (m.context_window/1024).toFixed(0)+'K ctx' : m.context_window+' ctx') : '';
     // Icon/label by model_type (not modality) — ocr vs vl both → text-vision but need different icons
-    const mtIcon = { llm:'🧠', vl:'👁', omni:'🌐', ocr:'📄', aigc:'✨', embedding:'📊', rerank:'🔄', infra:'⚙️', tts:'🔊' };
-    const mtLabel = { llm:'LLM', vl:'VL', omni:'Omni', ocr:'OCR', aigc:'AIGC', embedding:'Embed', rerank:'Rerank', infra:'Infra', tts:'TTS' };
+    const mtIcon = { llm:'🧠', vl:'👁', omni:'🌐', ocr:'📄', aigc:'✨', embedding:'📊', rerank:'🔄', infra:'⚙️', tts:'🔊', asr:'🎤' };
+    const mtLabel = { llm:'LLM', vl:'VL', omni:'Omni', ocr:'OCR', aigc:'AIGC', embedding:'Embed', rerank:'Rerank', infra:'Infra', tts:'TTS', asr:'ASR' };
     // badge 文案：modeBadge 取值 excl/shrd/free，对应独占/共享/空闲
     const modeLabel = { excl:'独占', shrd:'共享', free:'空闲' };
     const modality = m.modality || 'text';

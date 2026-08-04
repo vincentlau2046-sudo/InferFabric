@@ -1,0 +1,17 @@
+name: sensevoice-small
+description: "FunASR ASR — SenseVoice (默认) + Paraformer-zh (词级时间戳)"
+gpu_role: shared
+model_type: asr
+type: asr_server
+quantization: fp16
+peak_vram_mb: 1000
+
+asr_server:
+  conda_env: sensevoice
+  port: 8881
+  working_dir: ~/services/funasr-asr
+  health_url: http://localhost:8881/health
+  health_check_timeout: 120
+  start_cmd: funasr-server --model sensevoice --device cuda --port 8881
+  extra_env:
+    MODELSCOPE_CACHE: ~/models/funasr

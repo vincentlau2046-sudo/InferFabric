@@ -92,6 +92,8 @@ class IProcessManager(Protocol):
         comfyui_cfg: "ComfyUIConfig | None" = None,
         vllm_ports: list[int] | None = None,
         comfyui_port: int | None = None,
+        tts_port: int | None = None,
+        asr_port: int | None = None,
     ) -> dict: ...
     def force_kill_all(self) -> dict: ...
 

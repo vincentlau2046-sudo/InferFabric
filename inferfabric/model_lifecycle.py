@@ -66,6 +66,8 @@ class ModelLifecycle:
             return self._proc.start_comfyui(model.comfyui)
         elif model.is_tts_server:
             return self._proc.start_tts_server(model.tts)
+        elif model.is_asr_server:
+            return self._proc.start_asr_server(model.asr)
         elif model.is_ollama_daemon:
             return {"status": "ok", "message": "Ollama daemon external — verify with 'ollama serve'"}
         elif model.is_ollama:
@@ -176,6 +178,7 @@ class ModelLifecycle:
             # Clean up partial start with port-based cleanup
             ports = []
             tts_port = None
+            asr_port = None
             if model.is_vllm:
                 ports.append(model.vllm.port)
             elif model.is_comfyui:
@@ -184,11 +187,14 @@ class ModelLifecycle:
                 ports.append(model.ollama_cpp.port)
             elif model.is_tts_server:
                 tts_port = model.tts.port
+            elif model.is_asr_server:
+                asr_port = model.asr.port
             self._proc.stop_all(
                 comfyui_cfg=model.comfyui if model.is_comfyui else None,
                 vllm_ports=ports if model.is_vllm else [],
                 comfyui_port=ports[-1] if model.is_comfyui and ports else None,
                 tts_port=tts_port,
+                asr_port=asr_port,
             )
             self.state.set_multi({
                 "gpu_mode": GPUMode.IDLE,
@@ -196,6 +202,7 @@ class ModelLifecycle:
                 "vllm_pid": "",
                 "comfyui_pid": "",
                 "tts_pid": "",
+                "asr_pid": "",
             })
             elapsed = round(time.time() - t0, 1)
             return {
@@ -310,6 +317,8 @@ class ModelLifecycle:
             self._proc.stop_comfyui_with_config(model.comfyui, port=model.comfyui.port)
         elif model.is_tts_server:
             self._proc.stop_tts_server(port=model.tts.port)
+        elif model.is_asr_server:
+            self._proc.stop_asr_server(port=model.asr.port)
         elif model.is_ollama:
             log.info("Unregistering Ollama model %s", name)
         elif model.is_ollama_daemon:
@@ -442,6 +451,7 @@ class ModelLifecycle:
             ports = []
             comfyui_cfg = None
             tts_port = None
+            asr_port = None
             for svc_name in from_services:
                 m = self._models.get(svc_name)
                 if m:
@@ -452,11 +462,14 @@ class ModelLifecycle:
                         comfyui_cfg = m.comfyui
                     elif m.is_tts_server:
                         tts_port = m.tts.port
+                    elif m.is_asr_server:
+                        asr_port = m.asr.port
             self._proc.stop_all(
                 comfyui_cfg=comfyui_cfg,
                 vllm_ports=[p for t, p in ports if t == "vllm"],
                 comfyui_port=comfyui_cfg.port if comfyui_cfg else None,
                 tts_port=tts_port,
+                asr_port=asr_port,
             )
 
             gpu_idle = self._proc._wait_gpu_idle(timeout=30)
@@ -475,6 +488,7 @@ class ModelLifecycle:
                 "vllm_pid": "",
                 "comfyui_pid": "",
                 "tts_pid": "",
+                "asr_pid": "",
                 "profile_state": ServiceState.IDLE,
             })
 

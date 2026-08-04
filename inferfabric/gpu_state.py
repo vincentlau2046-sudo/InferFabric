@@ -94,6 +94,7 @@ class GpuStateMachine:
             ("vllm_pid", "vllm_pid", lambda m: m.vllm.port if m.vllm else None, lambda m: m.is_vllm),
             ("comfyui_pid", "comfyui_pid", lambda m: m.comfyui.port if m.comfyui else None, lambda m: m.is_comfyui),
             ("tts_pid", "tts_pid", lambda m: m.tts.port if m.tts else None, lambda m: m.is_tts_server),
+            ("asr_pid", "asr_pid", lambda m: m.asr.port if m.asr else None, lambda m: m.is_asr_server),
         ]
 
         for pid_attr, state_key, port_getter, model_filter in pid_checks:
@@ -144,6 +145,7 @@ class GpuStateMachine:
             ("vllm_pid", "vllm_pid", lambda m: m.vllm.port if m.vllm else None, lambda m: m.is_vllm),
             ("comfyui_pid", "comfyui_pid", lambda m: m.comfyui.port if m.comfyui else None, lambda m: m.is_comfyui),
             ("tts_pid", "tts_pid", lambda m: m.tts.port if m.tts else None, lambda m: m.is_tts_server),
+            ("asr_pid", "asr_pid", lambda m: m.asr.port if m.asr else None, lambda m: m.is_asr_server),
         ]
 
         for pid_attr, state_key, port_getter, model_filter in pid_restore_checks:
@@ -291,6 +293,8 @@ class GpuStateMachine:
             m = self._models.get(svc_name)
             if m and m.is_ollama_cpp:
                 self._proc.stop_ollama_cpp(m.ollama_cpp.port)
+            elif m and m.is_asr_server:
+                self._proc.stop_asr_server(port=m.asr.port)
         self._proc.force_kill_all()
 
         if not wait_gpu_free(timeout=20):
@@ -310,6 +314,7 @@ class GpuStateMachine:
             "vllm_pid": "",
             "comfyui_pid": "",
             "tts_pid": "",
+            "asr_pid": "",
             "sleep_state": "{}",
         })
 

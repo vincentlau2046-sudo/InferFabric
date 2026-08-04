@@ -61,6 +61,9 @@ def check_model_health(model) -> str:
     elif model.is_tts_server:
         url = model.tts.health_url or f"http://localhost:{model.tts.port}/health"
         return check_http_status(url)
+    elif model.is_asr_server:
+        url = model.asr.health_url or f"http://localhost:{model.asr.port}/health"
+        return check_http_status(url)
     elif model.is_ollama_cpp:
         return check_http_status(f"http://localhost:{model.ollama_cpp.port}/health")
     return "?"

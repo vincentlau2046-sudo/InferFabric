@@ -260,10 +260,11 @@ GPU      : 29140/32607 MiB used
 ### `iff models`
 
 ```
-Available Models (11):
+Available Models (12):
 name                 gpu_role     type          model_type   description
 -----------------------------------------------------------------------------------------
 bge-m3               none         ollama_cpp    embedding    BGE-M3 Q4_K_M CPU embedding
+bge-reranker-v2-m3   none         ollama_cpp    rerank       BGE-Reranker-V2-M3 Q8_0 CPU reranker
 comfyui              shared       comfyui       aigc         ComfyUI 图像生成
 gemma4-31b-vl        exclusive    vllm          vl           Gemma4-31B IT NVFP4 Dense
 ollama-daemon        none         ollama_daemon infra        Ollama 守护进程
@@ -272,7 +273,7 @@ qwen25-omni-3b       shared       ollama_cpp    omni         Qwen2.5 Omni 3B GPU
 qwen35-9b-vl         shared       vllm          vl           Qwen3.5-9B GPTQ-4bit
 qwen36-27b-vl        exclusive    vllm          vl           Qwen3.6-27B NVFP4 + MTP
 qwen36-35b-vl        exclusive    vllm          vl           Qwen3.6-35B A3B MoE NVFP4
-qwen3-embedding-0.6b none         ollama_cpp    embedding    Qwen3 Embedding 0.6B CPU
+sensevoice-small     shared       asr_server    asr          FunASR SenseVoice + Paraformer-zh
 tts-qwen3            shared       tts_server    tts          Qwen3-TTS 1.7B CustomVoice
 ```
 
