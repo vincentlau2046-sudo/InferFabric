@@ -33,7 +33,83 @@ function toast(m,t) {
   clearTimeout(e._t); e._t=setTimeout(()=>e.classList.remove('show'),2800);
 }
 
-// ═══ Cloud Management (v4.6.0) ═══
+// ═══ Cloud Management (v4.7.0) ═══
+let _cloudPresets = [];
+let _selectedPreset = null;
+
+function _esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+async function cloudLoadPresets() {
+  try {
+    const r = await fetch('/admin/cloud/presets', {headers: adminHeaders()});
+    const d = await r.json();
+    if (d.error) { document.getElementById('presetGrid').textContent = '加载失败'; return; }
+    _cloudPresets = d.presets || [];
+    const grid = document.getElementById('presetGrid');
+    grid.innerHTML = '';
+    if (!_cloudPresets.length) { grid.innerHTML = '<div class="svc-empty">无预设</div>'; return; }
+    _cloudPresets.forEach(p => {
+      const card = document.createElement('div');
+      card.className = 'preset-card';
+      card.dataset.presetId = p.id;
+      card.style.cssText = 'cursor:pointer;display:flex;flex-direction:column;align-items:center;padding:10px 14px;border-radius:10px;border:1.5px solid var(--border);background:var(--bg);transition:all .2s;min-width:72px';
+      const iconSpan = document.createElement('span');
+      iconSpan.style.fontSize = '22px';
+      iconSpan.textContent = p.icon;
+      const nameSpan = document.createElement('span');
+      nameSpan.style.cssText = 'font-size:11px;margin-top:4px;color:var(--text2);white-space:nowrap';
+      nameSpan.textContent = p.display_name;
+      card.appendChild(iconSpan);
+      card.appendChild(nameSpan);
+      card.addEventListener('click', () => cloudSelectPreset(p.id));
+      grid.appendChild(card);
+    });
+  } catch(e) { document.getElementById('presetGrid').textContent = '加载失败'; }
+}
+
+function cloudSelectPreset(id) {
+  _selectedPreset = _cloudPresets.find(p => p.id === id);
+  if (!_selectedPreset) return;
+  // Highlight selected card
+  document.querySelectorAll('.preset-card').forEach(c => { c.style.borderColor = 'var(--border)'; c.style.background = 'var(--bg)'; });
+  const card = document.getElementById('preset-' + id);
+  if (card) { card.style.borderColor = 'var(--primary)'; card.style.background = 'var(--bg-card)'; }
+  // Show preset form
+  document.getElementById('presetForm').style.display = 'block';
+  document.getElementById('presetSelected').textContent = _selectedPreset.icon + ' ' + _selectedPreset.display_name;
+  document.getElementById('cpPresetApiKey').value = '';
+  document.getElementById('cpPresetApiKey').focus();
+  const envHint = _selectedPreset.env_var
+    ? `Key 将存为 ${_selectedPreset.env_var}，写入 ~/.inferfabric/secrets.env`
+    : `Key 将存为 IFF_${id.toUpperCase().replace(/-/g,'_')}_KEY`;
+  document.getElementById('presetEnvHint').textContent = envHint;
+}
+
+function cloudDeselectPreset() {
+  _selectedPreset = null;
+  document.querySelectorAll('.preset-card').forEach(c => { c.style.borderColor = 'var(--border)'; c.style.background = 'var(--bg)'; });
+  document.getElementById('presetForm').style.display = 'none';
+}
+
+async function cloudAddPreset() {
+  if (!_selectedPreset) { toast('请先选择预设', 'error'); return; }
+  const apiKey = document.getElementById('cpPresetApiKey').value.trim();
+  if (!apiKey) { toast('请填写 API Key', 'error'); return; }
+  try {
+    const r = await fetch('/admin/cloud/providers', {
+      method: 'POST',
+      headers: adminHeaders(),
+      body: JSON.stringify({preset: _selectedPreset.id, api_key: apiKey})
+    });
+    const d = await r.json();
+    if (d.error) { toast(d.error, 'error'); return; }
+    toast(`Provider ${_selectedPreset.display_name} 已添加`, 'success');
+    if (_selectedPreset.discovery) { await cloudDiscoverOne(_selectedPreset.id); }
+    cloudDeselectPreset();
+    cloudLoadProviders();
+  } catch(e) { toast('添加失败: '+e, 'error'); }
+}
+
 async function cloudLoadProviders() {
   try {
     const r = await fetch('/admin/cloud/providers', {headers: adminHeaders()});
@@ -52,16 +128,21 @@ async function cloudLoadProviders() {
       const stColor = p.enabled ? '#4ade80' : '#f87171';
       const oi = p.openai_base ? '✓' : '-';
       const ai = p.anthropic_base ? '✓' : '-';
+      // v4.7.0: Key ENV status
+      const keyStatus = p.key_env_set ? '✅ 已设置' : '⚠️ ENV 未设置';
+      const keyLine = p.key_env_var ? `<span style="font-size:11px;color:var(--text3)">Key: \${${p.key_env_var}} ${keyStatus}</span>` : '';
+      // Preset icon
+      const presetIcon = p.preset_id ? (_cloudPresets.find(pr => pr.id === p.preset_id) || {}).icon || '' : '';
       html += `<div class="disc-card">
         <div class="disc-info">
-          <div class="disc-name">${p.name}</div>
+          <div class="disc-name">${presetIcon ? presetIcon + ' ' : ''}${p.name}</div>
           <div class="disc-meta">
             <span style="color:${stColor}">${st}</span>
             · OpenAI ${oi} · Anthropic ${ai}
             · ${p.model_count} 模型
             · ${p.discovery_interval}s 间隔
-            ${p.last_discovery ? ' · 发现于 ' + new Date(p.last_discovery*1000).toLocaleTimeString() : ''}
           </div>
+          ${keyLine ? '<div style="margin-top:2px">' + keyLine + '</div>' : ''}
         </div>
         <div style="display:flex;gap:4px;flex-shrink:0">
           <button class="disc-model-btn deploy" onclick="cloudDiscoverOne('${p.name}')">🔍 发现</button>
@@ -211,7 +292,7 @@ function adminHeaders() {
 const origSwitchTab = switchTab;
 switchTab = function(tabId) {
   origSwitchTab(tabId);
-  if (tabId === 'tab-cloud') cloudLoadProviders();
+  if (tabId === 'tab-cloud') { cloudLoadPresets(); cloudLoadProviders(); }
 };
 async function j(p,o) { return (await fetch(p,o)).json(); }
 
@@ -426,8 +507,8 @@ async function loadModels() {
     const fwIcon = fwIcons[m.type] || '📦';
     const ctxStr = m.context_window ? (m.context_window >= 1024 ? (m.context_window/1024).toFixed(0)+'K ctx' : m.context_window+' ctx') : '';
     // Icon/label by model_type (not modality) — ocr vs vl both → text-vision but need different icons
-    const mtIcon = { llm:'🧠', vl:'👁', omni:'🌐', ocr:'📄', aigc:'✨', embedding:'📊', rerank:'🔄', infra:'⚙️' };
-    const mtLabel = { llm:'LLM', vl:'VL', omni:'Omni', ocr:'OCR', aigc:'AIGC', embedding:'Embed', rerank:'Rerank', infra:'Infra' };
+    const mtIcon = { llm:'🧠', vl:'👁', omni:'🌐', ocr:'📄', aigc:'✨', embedding:'📊', rerank:'🔄', infra:'⚙️', tts:'🔊' };
+    const mtLabel = { llm:'LLM', vl:'VL', omni:'Omni', ocr:'OCR', aigc:'AIGC', embedding:'Embed', rerank:'Rerank', infra:'Infra', tts:'TTS' };
     // badge 文案：modeBadge 取值 excl/shrd/free，对应独占/共享/空闲
     const modeLabel = { excl:'独占', shrd:'共享', free:'空闲' };
     const modality = m.modality || 'text';

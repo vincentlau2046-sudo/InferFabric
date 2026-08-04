@@ -1,0 +1,121 @@
+# Cloud Presets — IFF v4.7
+# 随 IFF 发布的厂商预设模板，用户可扩展
+
+presets:
+  baidu-qianfan:
+    display_name: "百度千帆 Coding Plan"
+    icon: "🟦"
+    openai_base: "https://qianfan.baidubce.com/v2/coding"
+    anthropic_base: "https://qianfan.baidubce.com/anthropic/coding/v1"
+    env_var: "IFF_BAIDU_QIANFAN_KEY"
+    discovery: false
+    models:
+      deepseek-v4-flash:
+        name: "DeepSeek V4 Flash"
+        context_window: 1048576
+        max_output_tokens: 393216
+        reasoning: true
+        supports_tools: true
+        price_input: 1.0
+        price_output: 2.0
+      deepseek-v4-pro:
+        name: "DeepSeek V4 Pro"
+        context_window: 1048576
+        max_output_tokens: 393216
+        reasoning: true
+        supports_tools: true
+        price_input: 4.0
+        price_output: 16.0
+      glm-5:
+        name: "GLM-5"
+        context_window: 198000
+        max_output_tokens: 131072
+        reasoning: true
+        supports_tools: true
+        price_input: 0.5
+        price_output: 0.5
+      glm-5.1:
+        name: "GLM-5.1"
+        context_window: 198000
+        max_output_tokens: 131072
+        reasoning: true
+        supports_tools: true
+        price_input: 0.5
+        price_output: 0.5
+
+  volcengine:
+    display_name: "火山方舟"
+    icon: "🌋"
+    openai_base: "https://ark.cn-beijing.volces.com/api/v3"
+    env_var: "IFF_VOLCENGINE_KEY"
+    discovery: true
+
+  ali-bailian:
+    display_name: "阿里百炼"
+    icon: "🟦"
+    openai_base: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    env_var: "IFF_ALI_BAILIAN_KEY"
+    discovery: true
+
+  deepseek:
+    display_name: "DeepSeek 官方"
+    icon: "🐋"
+    openai_base: "https://api.deepseek.com/v1"
+    env_var: "IFF_DEEPSEEK_KEY"
+    discovery: true
+
+  zhipu:
+    display_name: "智谱AI"
+    icon: "🐋"
+    openai_base: "https://open.bigmodel.cn/api/paas/v4"
+    env_var: "IFF_ZHIPU_KEY"
+    discovery: true
+
+  moonshot:
+    display_name: "Moonshot (Kimi)"
+    icon: "🌙"
+    openai_base: "https://api.moonshot.cn/v1"
+    env_var: "IFF_MOONSHOT_KEY"
+    discovery: true
+
+  openai:
+    display_name: "OpenAI"
+    icon: "🟢"
+    openai_base: "https://api.openai.com/v1"
+    env_var: "IFF_OPENAI_KEY"
+    discovery: true
+
+  anthropic:
+    display_name: "Anthropic"
+    icon: "🟠"
+    anthropic_base: "https://api.anthropic.com/v1"
+    env_var: "IFF_ANTHROPIC_KEY"
+    discovery: false
+    models:
+      claude-sonnet-4-6:
+        name: "Claude Sonnet 4.6"
+        context_window: 200000
+        max_output_tokens: 64000
+        reasoning: true
+        supports_tools: true
+        supports_vision: true
+      claude-haiku-4-5:
+        name: "Claude Haiku 4.5"
+        context_window: 200000
+        max_output_tokens: 8192
+        reasoning: false
+        supports_tools: true
+        supports_vision: true
+      claude-opus-4-8:
+        name: "Claude Opus 4.8"
+        context_window: 200000
+        max_output_tokens: 32000
+        reasoning: true
+        supports_tools: true
+        supports_vision: true
+
+  custom:
+    display_name: "自定义 / 中转站"
+    icon: "🔗"
+    env_var: ""
+    discovery: true

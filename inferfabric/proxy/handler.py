@@ -112,6 +112,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             elif path == "/admin/cloud/providers":
                 if not self._check_admin(): return
                 self._handle_cloud_providers(pm)
+            elif path == "/admin/cloud/presets":
+                if not self._check_admin(): return
+                self._handle_cloud_presets(pm)
             else:
                 self._send_json({"error": "not found"}, 404)
         except (BrokenPipeError, ConnectionResetError):
@@ -176,6 +179,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             pass
         except Exception as e:
             log.error("POST %s error: %s", self.path, e)
+
+    def do_DELETE(self):
+        pm = self.proxy
+        try:
+            from urllib.parse import urlparse
+            path = urlparse(self.path).path
+            if path == "/admin/cloud/providers":
+                if not self._check_admin(): return
+                self._handle_cloud_providers(pm)
+            else:
+                self._send_json({"error": "not found"}, 404)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:
+            log.error("DELETE %s error: %s", self.path, e)
 
     # ─── Dashboard ────────────────────────────────────────────────
 
@@ -905,10 +923,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": str(e)}, 502)
 
     def _handle_cloud_providers(self, pm):
-        """GET/POST /admin/cloud/providers — 列出或添加 provider。"""
+        """GET/POST/DELETE /admin/cloud/providers — 列出、添加或删除 provider。"""
         if self.command == "GET":
             providers = []
             for name, cfg in pm.cloud.providers.items():
+                env_set = bool(os.environ.get(cfg.key_env_var, "")) if cfg.key_env_var else False
                 providers.append({
                     "name": name,
                     "enabled": cfg.enabled,
@@ -921,6 +940,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                         1 for m in pm.cloud.cloud_models.values()
                         if m.provider == name
                     ),
+                    "key_env_var": cfg.key_env_var,
+                    "key_env_set": env_set,
+                    "preset_id": cfg.preset_id,
                 })
             # Include cloud models with capabilities (deduplicate: skip provider/ prefixed keys)
             models = []
@@ -968,23 +990,80 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             data = self._read_body()
             if data is None:
                 return
-            name = data.get("name")
-            if not name:
-                self._send_json({"error": "Missing provider name"}, 400)
+
+            # v4.7.0: Support preset-based addition
+            preset_id = data.get("preset")
+            if preset_id:
+                presets = pm.cloud.load_presets()
+                preset = presets.get(preset_id)
+                if not preset:
+                    self._send_json({"error": f"Unknown preset: {preset_id}"}, 400)
+                    return
+                name = data.get("name", preset_id)
+                env_var = preset.env_var or pm.cloud._env_key_for_provider(name)
+                # Build model_specs from preset models
+                model_specs = {}
+                for mid, mspec in preset.models.items():
+                    if isinstance(mspec, dict):
+                        model_specs[mid] = mspec
+            else:
+                # Manual mode (backward compatible)
+                name = data.get("name")
+                if not name:
+                    self._send_json({"error": "Missing provider name"}, 400)
+                    return
+                env_var = pm.cloud._env_key_for_provider(name)
+
+            # #7: Duplicate provider name check
+            if name in pm.cloud._providers:
+                self._send_json({"error": f"Provider '{name}' already exists"}, 400)
                 return
+
+            # #5: Write API key to secrets.env FIRST, before in-memory config
+            api_key = data.get("api_key", "")
+            if api_key and not api_key.startswith("${"):
+                try:
+                    pm.cloud.secrets.write(env_var, api_key)
+                except Exception as e:
+                    log.error("Failed to write secrets.env: %s", e)
+                    self._send_json({"error": "Failed to save API key", "detail": str(e)}, 500)
+                    return
+                api_key_ref = f"${{{env_var}}}"
+            else:
+                api_key_ref = api_key
+
+            # Inject secrets.env so newly written keys are available immediately
+            pm.cloud._inject_secrets_env()
+
             from inferfabric.cloud_discovery import ProviderConfig
-            cfg = ProviderConfig(
-                name=name,
-                api_key=data.get("api_key", ""),
-                openai_base=data.get("openai_base", ""),
-                anthropic_base=data.get("anthropic_base", ""),
-                timeout=data.get("timeout", 60),
-                enabled=data.get("enabled", True),
-                discovery_enabled=data.get("discovery_enabled", True),
-                discovery_endpoint=data.get("discovery_endpoint", "/models"),
-                discovery_interval=data.get("discovery_interval", 3600),
-                include_pattern=data.get("include_pattern", ""),
-            )
+            if preset_id:
+                cfg = ProviderConfig(
+                    name=name,
+                    api_key=api_key_ref,
+                    openai_base=preset.openai_base,
+                    anthropic_base=preset.anthropic_base,
+                    timeout=preset.timeout,
+                    enabled=True,
+                    discovery_enabled=preset.discovery,
+                    key_env_var=env_var,
+                    preset_id=preset_id,
+                    model_specs=model_specs,
+                )
+            else:
+                cfg = ProviderConfig(
+                    name=name,
+                    api_key=api_key_ref,
+                    openai_base=data.get("openai_base", ""),
+                    anthropic_base=data.get("anthropic_base", ""),
+                    timeout=data.get("timeout", 60),
+                    enabled=data.get("enabled", True),
+                    discovery_enabled=data.get("discovery_enabled", True),
+                    discovery_endpoint=data.get("discovery_endpoint", "/models"),
+                    discovery_interval=data.get("discovery_interval", 3600),
+                    include_pattern=data.get("include_pattern", ""),
+                    key_env_var=env_var,
+                )
+
             with pm.cloud._models_lock:
                 pm.cloud._providers[name] = cfg
                 # Register spec-only models from new provider
@@ -996,6 +1075,24 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"error": "Failed to save config", "detail": str(e)}, 500)
                 return
             self._send_json({"status": "added", "provider": name})
+
+    def _handle_cloud_presets(self, pm):
+        """GET /admin/cloud/presets — 返回预设厂商列表。"""
+        from inferfabric.cloud_discovery import CloudDiscovery
+        presets = CloudDiscovery.load_presets()
+        result = []
+        for pid, p in presets.items():
+            result.append({
+                "id": p.id,
+                "display_name": p.display_name,
+                "icon": p.icon,
+                "openai_base": p.openai_base,
+                "anthropic_base": p.anthropic_base,
+                "env_var": p.env_var,
+                "discovery": p.discovery,
+                "model_count": len(p.models),
+            })
+        self._send_json({"presets": result})
 
     def _handle_embeddings(self, pm):
         """Handle OpenAI-compatible /v1/embeddings requests."""

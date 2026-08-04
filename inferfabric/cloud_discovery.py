@@ -106,8 +106,84 @@ class ProviderConfig:
     include_pattern: str = ""
     # Routing
     routing_default: str = "cloud_only"
+    # v4.7.0: ENV-based key management
+    key_env_var: str = ""           # API Key 对应的 ENV 变量名
+    preset_id: str = ""            # 来源预设 ID（可选）
     # v4.6.0: 模型能力属性手动覆盖
     model_specs: dict[str, dict] = field(default_factory=dict)
+
+
+@dataclass
+class CloudPreset:
+    """v4.7.0: 云厂商预设模板。"""
+    id: str
+    display_name: str = ""
+    icon: str = "📦"
+    openai_base: str = ""
+    anthropic_base: str = ""
+    env_var: str = ""
+    discovery: bool = True
+    timeout: int = 60
+    models: dict = field(default_factory=dict)  # 预置模型规格
+
+
+class SecretsManager:
+    """v4.7.0: 管理 ~/.inferfabric/secrets.env — API Key 安全存储。"""
+
+    def __init__(self, path: Path | None = None):
+        self._path = path or (Path.home() / ".inferfabric" / "secrets.env")
+        self._lock = threading.Lock()
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def ensure_file(self):
+        """创建 secrets.env（如不存在）并设置权限 600。"""
+        if not self._path.exists():
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                self._path.write_text("# IFF Cloud Provider API Keys — auto-generated\n# Do not commit to git!\n")
+                self._path.chmod(0o600)
+                log.info("Created secrets.env at %s", self._path)
+            except OSError as e:
+                log.error("Failed to create secrets.env: %s", e)
+                raise
+
+    def load(self) -> dict[str, str]:
+        """读取所有 key=value 对。"""
+        result = {}
+        if not self._path.exists():
+            return result
+        try:
+            for line in self._path.read_text().splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, _, v = line.partition("=")
+                    result[k.strip()] = v.strip()
+        except OSError as e:
+            log.error("Failed to read secrets.env: %s", e)
+        return result
+
+    def write(self, key: str, value: str):
+        """追加或更新单条 key=value（线程安全）。"""
+        with self._lock:
+            self.ensure_file()
+            existing = self.load()
+            existing[key] = value
+            lines = ["# IFF Cloud Provider API Keys — auto-generated", "# Do not commit to git!"]
+            for k, v in existing.items():
+                lines.append(f"{k}={v}")
+            try:
+                self._path.write_text("\n".join(lines) + "\n")
+                self._path.chmod(0o600)
+            except OSError as e:
+                log.error("Failed to write secrets.env: %s", e)
+                raise
+
+    def env_set(self, var_name: str) -> bool:
+        """检查 ENV 变量是否已设置且非空。"""
+        return bool(os.environ.get(var_name, ""))
 
 
 class CloudDiscovery:
@@ -144,6 +220,75 @@ class CloudDiscovery:
     def cloud_models(self) -> dict[str, CloudModel]:
         with self._models_lock:
             return dict(self._cloud_models)  # return snapshot, not mutable reference
+
+    # ── v4.7.0: Preset Management ──────────────────────────────────
+
+    @staticmethod
+    def load_presets(presets_path: Path | None = None) -> dict[str, CloudPreset]:
+        """加载预设模板库。"""
+        if presets_path is None:
+            presets_path = Path.home() / ".inferfabric" / "cloud_presets.yaml"
+        # Fallback to bundled presets
+        if not presets_path.exists():
+            bundled = Path(__file__).parent / "cloud_presets.yaml"
+            if bundled.exists():
+                presets_path = bundled
+            else:
+                return {}
+        try:
+            with open(presets_path) as f:
+                cfg = yaml.safe_load(f)
+        except Exception as e:
+            log.error("Failed to load cloud_presets.yaml: %s", e)
+            return {}
+        if not cfg or "presets" not in cfg:
+            return {}
+        result = {}
+        for pid, pdata in cfg["presets"].items():
+            if not isinstance(pdata, dict):
+                continue
+            result[pid] = CloudPreset(
+                id=pid,
+                display_name=pdata.get("display_name", pid),
+                icon=pdata.get("icon", "📦"),
+                openai_base=pdata.get("openai_base", ""),
+                anthropic_base=pdata.get("anthropic_base", ""),
+                env_var=pdata.get("env_var", ""),
+                discovery=pdata.get("discovery", True),
+                timeout=pdata.get("timeout", 60),
+                models=pdata.get("models", {}),
+            )
+        return result
+
+    @staticmethod
+    def _env_key_for_provider(name: str) -> str:
+        """根据 provider name 生成 ENV 变量名。"""
+        return f"IFF_{name.upper().replace('-', '_')}_KEY"
+
+    @staticmethod
+    def _inject_secrets_env(secrets_path: Path | None = None):
+        """v4.7.0: 从 secrets.env 注入环境变量（不覆盖已有）。"""
+        sp = secrets_path or (Path.home() / ".inferfabric" / "secrets.env")
+        if not sp.exists():
+            return
+        try:
+            for line in sp.read_text().splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, _, v = line.partition("=")
+                    k, v = k.strip(), v.strip()
+                    if k:
+                        os.environ.setdefault(k, v)
+        except Exception as e:
+            log.warning("Failed to inject secrets.env: %s", e)
+
+    # ── Secrets Manager ────────────────────────────────────────────
+
+    @property
+    def secrets(self) -> SecretsManager:
+        if not hasattr(self, '_secrets_mgr'):
+            self._secrets_mgr = SecretsManager()
+        return self._secrets_mgr
 
     def discover_all(self) -> dict[str, CloudModel]:
         """对所有 enabled provider 执行模型发现。返回合并后的模型注册表。"""
@@ -254,13 +399,30 @@ class CloudDiscovery:
                 raise
 
     def _serialize_providers(self) -> dict:
-        """序列化当前 providers 为 YAML-compatible dict"""
+        """序列化当前 providers 为 YAML-compatible dict
+
+        v4.7.0: 明文 api_key 自动转为 ${ENV_VAR} 引用，明文写入 secrets.env。
+        """
         result = {"providers": {}}
-        for name, p in self._providers.items():
+        # #12: Snapshot to avoid dict mutation during iteration
+        for name, p in list(self._providers.items()):
+            # ── API Key ENV 转换 ──
+            api_key = p.api_key or ""
+            env_var = p.key_env_var or self._env_key_for_provider(name)
+            if api_key and not api_key.startswith("${"):
+                # 明文 key → 写入 secrets.env，YAML 存引用
+                self.secrets.write(env_var, api_key)
+                api_key = f"${{{env_var}}}"
+
             pd = {
                 "openai_base": p.openai_base or "",
-                "api_key": p.api_key or "",
+                "api_key": api_key,
             }
+            # v4.7.0: 持久化 key_env_var 和 preset_id
+            if p.key_env_var:
+                pd["key_env_var"] = p.key_env_var
+            if p.preset_id:
+                pd["preset_id"] = p.preset_id
             if p.anthropic_base:
                 pd["anthropic_base"] = p.anthropic_base
             if p.timeout and p.timeout != 60:
@@ -372,6 +534,9 @@ class CloudDiscovery:
                 log.debug("Registered spec-only model: %s/%s", name, mid)
 
     def _load_config(self, config_path: Path):
+        # v4.7.0: Inject secrets.env before expanding ${VAR}
+        self._inject_secrets_env()
+
         if not config_path.exists():
             log.info("cloud_provider.yaml not found — cloud discovery disabled")
             return
@@ -405,9 +570,17 @@ class CloudDiscovery:
             for mid, mspec in (pcfg.get("models") or {}).items():
                 if isinstance(mspec, dict):
                     model_specs[mid] = mspec
+            # v4.7.0: Derive key_env_var from raw api_key if it's a ${VAR} reference
+            raw_api_key = pcfg.get("api_key", "")
+            key_env_var = pcfg.get("key_env_var", "")
+            if not key_env_var and raw_api_key.startswith("${") and raw_api_key.endswith("}"):
+                key_env_var = raw_api_key[2:-1]
+            if not key_env_var:
+                key_env_var = self._env_key_for_provider(name)
+
             provider = ProviderConfig(
                 name=name,
-                api_key=pcfg.get("api_key", ""),
+                api_key=raw_api_key,
                 openai_base=pcfg.get("openai_base", ""),
                 anthropic_base=pcfg.get("anthropic_base", ""),
                 timeout=pcfg.get("timeout", 60),
@@ -418,6 +591,8 @@ class CloudDiscovery:
                 include_pattern=discovery.get("filter", {}).get("include_pattern", ""),
                 routing_default=routing.get("default", "cloud_only"),
                 model_specs=model_specs,
+                key_env_var=key_env_var,
+                preset_id=pcfg.get("preset_id", ""),
             )
             self._providers[name] = provider
 

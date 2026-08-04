@@ -1,34 +1,60 @@
   <div class="tab-content" id="tab-cloud">
 
-    <!-- 添加 Provider 表单 -->
+    <!-- 添加 Provider — 预设 + 手动双模式 -->
     <div class="panel" style="margin-bottom:14px">
       <div class="panel-hdr">
         <div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(37,99,235,.2)">➕</div>
         <span class="panel-title">添加 Provider</span>
       </div>
       <div class="panel-content" style="padding:12px 14px">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <div class="deploy-form-field">
-            <label class="deploy-form-label">Provider 名称</label>
-            <input class="deploy-form-input" id="cpName" type="text" placeholder="例: baidu-codingplan">
+        <!-- 方式一：预设选择 -->
+        <div style="margin-bottom:12px">
+          <div style="font-size:12px;color:var(--text3);margin-bottom:8px">方式一：从预设选择（推荐）</div>
+          <div id="presetGrid" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">加载中...</div>
+        </div>
+        <div id="presetForm" style="display:none;margin-bottom:14px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div class="deploy-form-field">
+              <label class="deploy-form-label">选中预设</label>
+              <div id="presetSelected" style="font-size:14px;font-weight:600;padding:6px 0">—</div>
+            </div>
+            <div class="deploy-form-field">
+              <label class="deploy-form-label">API Key</label>
+              <input class="deploy-form-input" id="cpPresetApiKey" type="password" placeholder="sk-... 或 ${ENV_VAR}">
+            </div>
           </div>
-          <div class="deploy-form-field">
-            <label class="deploy-form-label">API Key</label>
-            <input class="deploy-form-input" id="cpApiKey" type="password" placeholder="sk-... 或 ${ENV_VAR}">
-          </div>
-          <div class="deploy-form-field">
-            <label class="deploy-form-label">OpenAI Base URL</label>
-            <input class="deploy-form-input" id="cpOpenaiBase" type="url" placeholder="https://api.example.com/v1">
-          </div>
-          <div class="deploy-form-field">
-            <label class="deploy-form-label">Anthropic Base URL</label>
-            <input class="deploy-form-input" id="cpAnthropicBase" type="url" placeholder="https://api.example.com/anthropic/v1">
+          <div id="presetEnvHint" style="font-size:11px;color:var(--text3);margin-top:4px"></div>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="act-btn pri" onclick="cloudAddPreset()" style="font-size:13px;padding:6px 18px">添加 & 发现</button>
+            <button class="act-btn sec" onclick="cloudDeselectPreset()" style="font-size:13px;padding:6px 18px">取消选择</button>
           </div>
         </div>
-        <div style="display:flex;gap:8px;margin-top:10px">
-          <button class="act-btn pri" onclick="cloudAddProvider()" style="font-size:13px;padding:6px 18px">添加 & 发现</button>
-          <button class="act-btn sec" onclick="cloudTestProvider()" style="font-size:13px;padding:6px 18px">仅测试连接</button>
-        </div>
+        <!-- 方式二：手动配置 -->
+        <details style="margin-top:8px">
+          <summary style="font-size:12px;color:var(--text3);cursor:pointer">或手动配置</summary>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+            <div class="deploy-form-field">
+              <label class="deploy-form-label">Provider 名称</label>
+              <input class="deploy-form-input" id="cpName" type="text" placeholder="例: my-relay">
+            </div>
+            <div class="deploy-form-field">
+              <label class="deploy-form-label">API Key</label>
+              <input class="deploy-form-input" id="cpApiKey" type="password" placeholder="sk-... 或 ${ENV_VAR}">
+            </div>
+            <div class="deploy-form-field">
+              <label class="deploy-form-label">OpenAI Base URL</label>
+              <input class="deploy-form-input" id="cpOpenaiBase" type="url" placeholder="https://api.example.com/v1">
+            </div>
+            <div class="deploy-form-field">
+              <label class="deploy-form-label">Anthropic Base URL</label>
+              <input class="deploy-form-input" id="cpAnthropicBase" type="url" placeholder="https://api.example.com/anthropic/v1">
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button class="act-btn pri" onclick="cloudAddProvider()" style="font-size:13px;padding:6px 18px">添加 & 发现</button>
+            <button class="act-btn sec" onclick="cloudTestProvider()" style="font-size:13px;padding:6px 18px">仅测试连接</button>
+          </div>
+        </details>
       </div>
     </div>
 

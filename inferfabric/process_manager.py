@@ -587,18 +587,28 @@ class ProcessManager:
         if not model_path.exists():
             return {"status": "error", "message": f"GGUF model not found: {model_path}"}
 
-        # Conda base env is at ~/miniconda3/ (not ~/miniconda3/envs/base/)
-        conda_base = Path.home() / "miniconda3"
-        conda_bin = conda_base / "bin"
-        llama_server = conda_bin / "llama-server"
-        if not llama_server.exists():
-            # Fallback to PATH lookup
-            import shutil
-            llama_server_path = shutil.which("llama-server")
-            if llama_server_path:
-                llama_server = Path(llama_server_path)
-            else:
-                return {"status": "error", "message": f"llama-server not found at {llama_server} or in PATH"}
+        # ── Select llama-server binary by GPU offload mode ──
+        # gpu_layers != 0 → CUDA build (GPU offload)
+        # gpu_layers == 0 → CPU-only build (no CUDA runtime overhead)
+        llama_cpp_base = Path.home() / "llama-cpp"
+        if cfg.gpu_layers != 0:
+            llama_server = llama_cpp_base / "build-cuda" / "bin" / "llama-server"
+            if not llama_server.exists():
+                return {"status": "error", "message": f"CUDA llama-server not found at {llama_server}"}
+        else:
+            llama_server = llama_cpp_base / "build" / "bin" / "llama-server"
+            if not llama_server.exists():
+                # Fallback to conda/PATH for backward compat
+                conda_base = Path.home() / "miniconda3"
+                conda_bin = conda_base / "bin"
+                llama_server = conda_bin / "llama-server"
+                if not llama_server.exists():
+                    import shutil
+                    llama_server_path = shutil.which("llama-server")
+                    if llama_server_path:
+                        llama_server = Path(llama_server_path)
+                    else:
+                        return {"status": "error", "message": f"llama-server not found"}
 
         cmd = [
             str(llama_server),
@@ -618,7 +628,9 @@ class ProcessManager:
         log_file.write_text("")
 
         env = dict(os.environ)
-        env["PATH"] = str(conda_bin) + ":" + env.get("PATH", "")
+        # Ensure llama-server can find its shared libs
+        llama_server_dir = str(llama_server.parent)
+        env["PATH"] = llama_server_dir + ":" + env.get("PATH", "")
 
         log_fh = open(str(log_file), "a")
         try:
