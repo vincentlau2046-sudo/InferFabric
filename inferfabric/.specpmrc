@@ -1,0 +1,6 @@
+# spec-code-pm 配置
+output_dir=inferfabric
+phase_mode=sequential
+auto_analyze=true
+incremental=true
+compress=false
