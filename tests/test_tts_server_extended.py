@@ -313,8 +313,8 @@ class TestForceKillAllTts:
 class TestOrphanPidDetection:
     """Test that orphan PID detection covers tts_pid and comfyui_pid.
 
-    Currently only vllm_pid is covered in _detect_orphan_pids/_restore_dead_pids.
-    These tests document the expected behavior and flag the gap.
+    After v4.7.0 refactor, _detect_orphan_pids and _restore_dead_pids
+    are generic across vllm_pid, comfyui_pid, and tts_pid.
     """
 
     def _make_gpu_state(self, models=None):
@@ -331,50 +331,174 @@ class TestOrphanPidDetection:
         return gpu, state, mock_proc
 
     def test_orphan_tts_pid_dead_process_cleared(self):
-        """If tts_pid points to a dead process, it should be cleared during reconcile."""
-        gpu, state, mock_proc = self._make_gpu_state()
+        """If tts_pid points to a dead process, reconcile clears it."""
+        from inferfabric.config import ModelConfig, TTSConfig
+
+        tts_model = ModelConfig(
+            name="tts-qwen3", description="test", type="tts_server",
+            gpu_role="shared", tts=TTSConfig(conda_env="test", port=8880),
+        )
+        gpu, state, mock_proc = self._make_gpu_state({"tts-qwen3": tts_model})
         mock_proc.tts_pid = 99999  # non-existent PID
+        mock_proc.vllm_pid = None
+        mock_proc.comfyui_pid = None
         state.set("tts_pid", "99999")
         state.set("gpu_mode", "shared")
         state.set_active_services(["tts-qwen3"])
 
-        # Current implementation only checks vllm_pid — tts_pid orphan is NOT detected
-        # This test documents the GAP: reconcile should clear orphan tts_pid
-        result = gpu.reconcile()
+        # _port_pid should return None (no process on port 8880)
+        with patch.object(gpu, "_port_pid", return_value=None):
+            result = gpu.reconcile()
 
-        # After reconcile, if orphan detection is extended to TTS,
-        # tts_pid should be cleared. Currently it's NOT.
-        # We test the expected future behavior:
-        # If this test fails after extending _detect_orphan_pids, that means the fix works.
-        current_tts_pid = state.get("tts_pid")
-        # Document: currently NOT cleared (gap), should be "" after fix
-        # assert current_tts_pid == "", f"Orphan tts_pid should be cleared, got {current_tts_pid}"
-        # For now, just verify reconcile runs without error
-        assert "actions" in result
+        assert state.get("tts_pid") == "", \
+            f"Orphan tts_pid should be cleared, got '{state.get('tts_pid')}'"
+        assert any("tts_pid" in a and "dead" in a for a in result["actions"]), \
+            f"Expected orphan tts_pid action, got {result['actions']}"
 
     def test_orphan_comfyui_pid_dead_process_cleared(self):
-        """If comfyui_pid points to a dead process, it should be cleared during reconcile."""
-        gpu, state, mock_proc = self._make_gpu_state()
+        """If comfyui_pid points to a dead process, reconcile clears it."""
+        from inferfabric.config import ModelConfig, ComfyUIConfig
+
+        comfy_model = ModelConfig(
+            name="comfyui", description="test", type="comfyui",
+            gpu_role="shared", comfyui=ComfyUIConfig(conda_env="test", port=8188),
+        )
+        gpu, state, mock_proc = self._make_gpu_state({"comfyui": comfy_model})
         mock_proc.comfyui_pid = 88888  # non-existent PID
+        mock_proc.vllm_pid = None
+        mock_proc.tts_pid = None
         state.set("comfyui_pid", "88888")
         state.set("gpu_mode", "shared")
         state.set_active_services(["comfyui"])
 
-        result = gpu.reconcile()
-        # Same gap as TTS — comfyui_pid orphan not detected
-        assert "actions" in result
+        with patch.object(gpu, "_port_pid", return_value=None):
+            result = gpu.reconcile()
+
+        assert state.get("comfyui_pid") == "", \
+            f"Orphan comfyui_pid should be cleared, got '{state.get('comfyui_pid')}'"
+        assert any("comfyui_pid" in a and "dead" in a for a in result["actions"])
+
+    def test_orphan_vllm_pid_dead_process_cleared(self):
+        """Regression: vllm_pid orphan detection still works after refactor."""
+        from inferfabric.config import ModelConfig, VLLMConfig
+
+        vllm_model = ModelConfig(
+            name="test-vl", description="test", type="vllm",
+            vllm=VLLMConfig(
+                port=11441, served_name="test-vl", model_dir="/fake",
+                conda_env="test", max_model_len=4096, gpu_memory_utilization=0.9,
+            ),
+        )
+        gpu, state, mock_proc = self._make_gpu_state({"test-vl": vllm_model})
+        mock_proc.vllm_pid = 77777
+        mock_proc.comfyui_pid = None
+        mock_proc.tts_pid = None
+        state.set("vllm_pid", "77777")
+        state.set("gpu_mode", "exclusive")
+        state.set_active_services(["test-vl"])
+
+        with patch.object(gpu, "_port_pid", return_value=None):
+            result = gpu.reconcile()
+
+        assert state.get("vllm_pid") == ""
+        assert any("vllm_pid" in a and "dead" in a for a in result["actions"])
 
     def test_stale_tts_pid_with_no_active_services(self):
-        """If tts_pid exists but no active services, PID should be cleared."""
-        gpu, state, mock_proc = self._make_gpu_state()
+        """If tts_pid exists but no active services and port is free, PID is cleared."""
+        from inferfabric.config import ModelConfig, TTSConfig
+
+        tts_model = ModelConfig(
+            name="tts-qwen3", description="test", type="tts_server",
+            gpu_role="shared", tts=TTSConfig(conda_env="test", port=8880),
+        )
+        gpu, state, mock_proc = self._make_gpu_state({"tts-qwen3": tts_model})
         mock_proc.tts_pid = 99999
+        mock_proc.vllm_pid = None
+        mock_proc.comfyui_pid = None
         state.set("tts_pid", "99999")
         state.set("gpu_mode", "idle")
         state.set_active_services([])
 
-        result = gpu.reconcile()
-        # Gap: stale tts_pid not cleaned when no active services
-        assert "actions" in result
+        # Port 8880 has no process (stale PID, no services)
+        with patch.object(gpu, "_port_pid", return_value=None):
+            result = gpu.reconcile()
+
+        assert state.get("tts_pid") == ""
+        assert any("tts_pid" in a and "Stale" in a for a in result["actions"])
+
+    def test_tts_pid_kept_if_port_occupied(self):
+        """If tts_pid is alive and port is occupied, PID is kept (false negative)."""
+        from inferfabric.config import ModelConfig, TTSConfig
+
+        tts_model = ModelConfig(
+            name="tts-qwen3", description="test", type="tts_server",
+            gpu_role="shared", tts=TTSConfig(conda_env="test", port=8880),
+        )
+        gpu, state, mock_proc = self._make_gpu_state({"tts-qwen3": tts_model})
+        mock_proc.tts_pid = 99999
+        mock_proc.vllm_pid = None
+        mock_proc.comfyui_pid = None
+        state.set("tts_pid", "99999")
+        state.set("gpu_mode", "idle")
+        state.set_active_services([])
+
+        # Process alive (killpg succeeds) but no active services
+        # Port 8880 still occupied
+        with patch("os.killpg", return_value=None), \
+             patch.object(gpu, "_port_pid", return_value=99999), \
+             patch.object(gpu._health, "check_model", return_value="❌"):
+            result = gpu.reconcile()
+
+        # PID kept because port is occupied (health check false negative)
+        assert state.get("tts_pid") == "99999"
+        assert any("still owns port" in a for a in result["actions"])
+
+    def test_restore_tts_pid_via_fuser(self):
+        """If TTS port is occupied but tts_pid not tracked, restore via fuser."""
+        from inferfabric.config import ModelConfig, TTSConfig
+
+        tts_model = ModelConfig(
+            name="tts-qwen3", description="test", type="tts_server",
+            gpu_role="shared", tts=TTSConfig(conda_env="test", port=8880),
+        )
+        gpu, state, mock_proc = self._make_gpu_state({"tts-qwen3": tts_model})
+        mock_proc.tts_pid = None  # not tracked
+        mock_proc.vllm_pid = None
+        mock_proc.comfyui_pid = None
+        state.set("tts_pid", "")
+        state.set("gpu_mode", "shared")
+        state.set_active_services(["tts-qwen3"])
+
+        # Mock health check to say TTS is healthy, and fuser finds PID 55555
+        with patch.object(gpu, "_port_pid", return_value=55555), \
+             patch.object(gpu._health, "check_model", return_value="✅"):
+            result = gpu.reconcile()
+
+        assert state.get("tts_pid") == "55555"
+        assert any("Recovered tts_pid=55555" in a for a in result["actions"])
+
+    def test_restore_comfyui_pid_via_fuser(self):
+        """If ComfyUI port is occupied but comfyui_pid not tracked, restore via fuser."""
+        from inferfabric.config import ModelConfig, ComfyUIConfig
+
+        comfy_model = ModelConfig(
+            name="comfyui", description="test", type="comfyui",
+            gpu_role="shared", comfyui=ComfyUIConfig(conda_env="test", port=8188),
+        )
+        gpu, state, mock_proc = self._make_gpu_state({"comfyui": comfy_model})
+        mock_proc.comfyui_pid = None
+        mock_proc.vllm_pid = None
+        mock_proc.tts_pid = None
+        state.set("comfyui_pid", "")
+        state.set("gpu_mode", "shared")
+        state.set_active_services(["comfyui"])
+
+        with patch.object(gpu, "_port_pid", return_value=44444), \
+             patch.object(gpu._health, "check_model", return_value="✅"):
+            result = gpu.reconcile()
+
+        assert state.get("comfyui_pid") == "44444"
+        assert any("Recovered comfyui_pid=44444" in a for a in result["actions"])
 
     def test_force_reset_clears_tts_pid(self):
         """force_reset() clears tts_pid unconditionally."""

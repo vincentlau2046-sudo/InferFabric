@@ -87,46 +87,80 @@ class GpuStateMachine:
     # ── Orphan / Stale PID Detection ──────────────────────────────
 
     def _detect_orphan_pids(self, actual_services: list[str], actions: list[str]) -> None:
-        """P0-4/P0-5: Clean up orphan or stale vllm_pid entries."""
-        if self._proc.vllm_pid:
+        """P0-4/P0-5: Clean up orphan or stale PID entries for all service types."""
+        # Generic orphan detection for each PID type
+        pid_checks = [
+            # (pid_property_name, state_key, port_accessor, model_type_filter)
+            ("vllm_pid", "vllm_pid", lambda m: m.vllm.port if m.vllm else None, lambda m: m.is_vllm),
+            ("comfyui_pid", "comfyui_pid", lambda m: m.comfyui.port if m.comfyui else None, lambda m: m.is_comfyui),
+            ("tts_pid", "tts_pid", lambda m: m.tts.port if m.tts else None, lambda m: m.is_tts_server),
+        ]
+
+        for pid_attr, state_key, port_getter, model_filter in pid_checks:
+            pid = getattr(self._proc, pid_attr)
+            if not pid:
+                continue
+
+            # Check if process is still alive
             try:
-                os.killpg(self._proc.vllm_pid, 0)
+                os.killpg(pid, 0)
+                is_alive = True
             except (ProcessLookupError, PermissionError):
-                has_live_vllm = False
+                is_alive = False
+
+            if not is_alive:
+                # Orphan: PID tracked but process dead — check if port still occupied
+                has_live_service = False
                 for svc_name in actual_services:
                     m = self._models.get(svc_name)
-                    if m and m.is_vllm:
-                        if self._port_pid(m.vllm.port) is not None:
-                            has_live_vllm = True
+                    if m and model_filter(m):
+                        port = port_getter(m)
+                        if port is not None and self._port_pid(port) is not None:
+                            has_live_service = True
                             break
-                if not has_live_vllm:
-                    actions.append(f"Orphan vllm_pid={self._proc.vllm_pid} dead — clearing")
-                    self.state.set("vllm_pid", "")
+                if not has_live_service:
+                    actions.append(f"Orphan {pid_attr}={pid} dead — clearing")
+                    self.state.set(state_key, "")
 
-        if self._proc.vllm_pid and not actual_services:
-            has_live_vllm = False
-            for name, m in self._models.items():
-                if m.is_vllm:
-                    if self._port_pid(m.vllm.port) is not None:
-                        has_live_vllm = True
-                        break
-            if not has_live_vllm:
-                actions.append(f"Stale vllm_pid={self._proc.vllm_pid} with no active services — clearing")
-                self.state.set("vllm_pid", "")
-            else:
-                actions.append(f"vllm_pid={self._proc.vllm_pid} still owns port — keeping (health check false negative)")
+            # Stale: PID alive but no active services — check port ownership
+            if pid and not actual_services:
+                has_live_service = False
+                for name, m in self._models.items():
+                    if model_filter(m):
+                        port = port_getter(m)
+                        if port is not None and self._port_pid(port) is not None:
+                            has_live_service = True
+                            break
+                if not has_live_service:
+                    actions.append(f"Stale {pid_attr}={pid} with no active services — clearing")
+                    self.state.set(state_key, "")
+                else:
+                    actions.append(f"{pid_attr}={pid} still owns port — keeping (health check false negative)")
 
     def _restore_dead_pids(self, actual_services: list[str], actions: list[str]) -> None:
-        """P0-5: If a vLLM is actually running but PID is not tracked, recover via fuser."""
-        if not self._proc.vllm_pid:
+        """P0-5: If a service is actually running but PID is not tracked, recover via fuser."""
+        pid_restore_checks = [
+            # (pid_property_name, state_key, port_accessor, model_type_filter)
+            ("vllm_pid", "vllm_pid", lambda m: m.vllm.port if m.vllm else None, lambda m: m.is_vllm),
+            ("comfyui_pid", "comfyui_pid", lambda m: m.comfyui.port if m.comfyui else None, lambda m: m.is_comfyui),
+            ("tts_pid", "tts_pid", lambda m: m.tts.port if m.tts else None, lambda m: m.is_tts_server),
+        ]
+
+        for pid_attr, state_key, port_getter, model_filter in pid_restore_checks:
+            pid = getattr(self._proc, pid_attr)
+            if pid:
+                continue  # already tracked
+
             for svc_name in actual_services:
                 m = self._models.get(svc_name)
-                if m and m.is_vllm:
-                    pid = self._port_pid(m.vllm.port)
-                    if pid is not None:
-                        self.state.set("vllm_pid", str(pid))
-                        actions.append(f"Recovered vllm_pid={pid} for {svc_name} via fuser")
-                        break
+                if m and model_filter(m):
+                    port = port_getter(m)
+                    if port is not None:
+                        recovered_pid = self._port_pid(port)
+                        if recovered_pid is not None:
+                            self.state.set(state_key, str(recovered_pid))
+                            actions.append(f"Recovered {pid_attr}={recovered_pid} for {svc_name} via fuser")
+                            break
 
     # ── VRAM ──────────────────────────────────────────────────────
 
