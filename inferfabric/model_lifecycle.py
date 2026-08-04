@@ -175,22 +175,27 @@ class ModelLifecycle:
             self.state.set("profile_state", ServiceState.ERROR)
             # Clean up partial start with port-based cleanup
             ports = []
+            tts_port = None
             if model.is_vllm:
                 ports.append(model.vllm.port)
             elif model.is_comfyui:
                 ports.append(model.comfyui.port)
             elif model.is_ollama_cpp:
                 ports.append(model.ollama_cpp.port)
+            elif model.is_tts_server:
+                tts_port = model.tts.port
             self._proc.stop_all(
                 comfyui_cfg=model.comfyui if model.is_comfyui else None,
                 vllm_ports=ports if model.is_vllm else [],
                 comfyui_port=ports[-1] if model.is_comfyui and ports else None,
+                tts_port=tts_port,
             )
             self.state.set_multi({
                 "gpu_mode": GPUMode.IDLE,
                 "active_services": json.dumps([]),
                 "vllm_pid": "",
                 "comfyui_pid": "",
+                "tts_pid": "",
             })
             elapsed = round(time.time() - t0, 1)
             return {
