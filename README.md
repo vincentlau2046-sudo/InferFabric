@@ -60,20 +60,20 @@ iff status
 # 列出可用模型
 iff models
 
-# 切换到 Qwen3.6-27B (独占模式)
-iff switch qwen36-27b
+# 切换到 Qwen3.6-35B (独占模式)
+iff switch qwen36-35b-vl
 
 # 释放 GPU
 iff switch idle
 
 # 切换到 Qwen3.5-9B (共享模式)
-iff switch qwen35-9b
+iff switch qwen35-9b-vl
 
-# 在共享模式下加入 ComfyUI
-iff switch comfyui
+# 在共享模式下加入 TTS
+iff switch tts-qwen3
 
 # 停止单个共享服务
-iff stop qwen35-9b
+iff stop qwen35-9b-vl
 
 # 强制重置
 iff reset
@@ -88,9 +88,9 @@ iff reset
 每个模型/服务由 `models.d/` 下的一个 YAML 文件定义。文件自带一切:
 
 - 模型参数(路径、端口、conda 环境、vLLM 参数)
-- 部署模式(`mode: exclusive` / `mode: shared` / `mode: none`)
-- 服务类型(`type: vllm` / `type: llama` / `type: comfyui` / `type: tts`)
-- GPU 角色(`gpu_role: exclusive` / `gpu_role: shared` / `gpu_role: none`)
+- 部署模式(`gpu_role: exclusive` / `gpu_role: shared` / `gpu_role: none`)
+- 服务类型(`type: vllm` / `type: ollama_cpp` / `type: comfyui` / `type: tts_server`)
+- 模型类型(`model_type: vl` / `embedding` / `omni` / `ocr` / `tts` / `aigc` / `infra`)
 
 **增删模型 = 增删 YAML 文件**，零改动代码。
 
@@ -208,17 +208,24 @@ curl -X POST http://localhost:8999/admin/cloud/providers \
 ```
 ~/inferfabric/
 ├── models.d/                        # 模型配置目录(插件式)
-│   ├── qwen36-27b.yaml              # mode: exclusive, type: vllm
-│   ├── qwen35-9b.yaml               # mode: shared, type: vllm
-│   ├── qwen25-omni-3b.yaml          # mode: shared, type: tts (llama.cpp CUDA)
-│   ├── bge-m3.yaml                  # mode: none, gpu_role: none (CPU llama.cpp)
-│   └── comfyui.yaml                 # mode: shared, type: comfyui
+│   ├── qwen36-35b-vl.yaml           # gpu_role: exclusive, type: vllm, model_type: vl
+│   ├── qwen36-27b-vl.yaml           # gpu_role: exclusive, type: vllm, model_type: vl
+│   ├── qwen35-9b-vl.yaml            # gpu_role: shared, type: vllm, model_type: vl
+│   ├── gemma4-31b-vl.yaml           # gpu_role: exclusive, type: vllm, model_type: vl
+│   ├── qwen25-omni-3b.yaml          # gpu_role: shared, type: ollama_cpp, model_type: omni
+│   ├── tts-qwen3.yaml               # gpu_role: shared, type: tts_server, model_type: tts
+│   ├── ovis-ocr2.yaml               # gpu_role: shared, type: vllm, model_type: ocr
+│   ├── bge-m3.yaml                  # gpu_role: none, type: ollama_cpp, model_type: embedding
+│   ├── qwen3-embedding-0.6b.yaml    # gpu_role: none, type: ollama_cpp, model_type: embedding
+│   ├── comfyui.yaml                 # gpu_role: shared, type: comfyui, model_type: aigc
+│   ├── ollama-daemon.yaml           # gpu_role: none, type: ollama_daemon, model_type: infra
+│   └── model_affinity.yaml          # 静态路由亲和性配置
 ├── inferfabric/
 │   ├── config.py                    # ModelConfig + load_models() + 常量
 │   ├── state.py                     # GPUMode + validate_transition + StateDB
 │   ├── gpu_lock.py                  # GPULock (flock)
 │   ├── health.py                    # HTTP/GPU 健康检查
-│   ├── process_manager.py           # vLLM + ComfyUI + llama.cpp 进程管理
+│   ├── process_manager.py           # vLLM + ComfyUI + Ollama/llama.cpp 进程管理
 │   ├── cloud_discovery.py           # 云端模型发现 + SecretsManager + 预设
 │   ├── cloud_presets.yaml           # 9 个云 Provider 预设配置
 │   ├── manager.py                   # ModelManager (编排层)
@@ -253,14 +260,20 @@ GPU      : 29140/32607 MiB used
 ### `iff models`
 
 ```
-Available Models (5):
-name                 mode         type       description
-----------------------------------------------------------------------
-comfyui              shared       comfyui    ComfyUI 图像生成
-qwen25-omni-3b      shared       tts        Qwen2.5-Omni-3B TTS
-qwen35-9b           shared       vllm       Qwen3.5-9B GPTQ-4bit
-qwen36-27b          exclusive    vllm       Qwen3.6-27B NVFP4 + MTP
-bge-m3              none         llama      BGE-M3 Embedding (CPU)
+Available Models (11):
+name                 gpu_role     type          model_type   description
+-----------------------------------------------------------------------------------------
+bge-m3               none         ollama_cpp    embedding    BGE-M3 Q4_K_M CPU embedding
+comfyui              shared       comfyui       aigc         ComfyUI 图像生成
+gemma4-31b-vl        exclusive    vllm          vl           Gemma4-31B IT NVFP4 Dense
+ollama-daemon        none         ollama_daemon infra        Ollama 守护进程
+ovis-ocr2            shared       vllm          ocr          OvisOCR2 0.8B 文档 OCR
+qwen25-omni-3b       shared       ollama_cpp    omni         Qwen2.5 Omni 3B GPU
+qwen35-9b-vl         shared       vllm          vl           Qwen3.5-9B GPTQ-4bit
+qwen36-27b-vl        exclusive    vllm          vl           Qwen3.6-27B NVFP4 + MTP
+qwen36-35b-vl        exclusive    vllm          vl           Qwen3.6-35B A3B MoE NVFP4
+qwen3-embedding-0.6b none         ollama_cpp    embedding    Qwen3 Embedding 0.6B CPU
+tts-qwen3            shared       tts_server    tts          Qwen3-TTS 1.7B CustomVoice
 ```
 
 ### `iff switch <model_name|idle>`
@@ -286,17 +299,19 @@ bge-m3              none         llama      BGE-M3 Embedding (CPU)
 ### vLLM 模型（独占）
 
 ```yaml
-# models.d/qwen36-27b.yaml
-name: qwen36-27b
-description: "Qwen3.6-27B NVFP4 + MTP"
-mode: exclusive
-type: vllm
+# models.d/qwen36-35b-vl.yaml
+name: qwen36-35b-vl
+description: "Qwen3.6-35B A3B MoE NVFP4 + MTP"
+gpu_role: exclusive
+model_type: vl
+quantization: NVFP4
 
+type: vllm
 vllm:
-  model_dir: Qwen3.6-27B-Text-NVFP4-MTP
-  served_name: vllm_qwen27b
+  model_dir: Qwen3.6-35B-A3B-NVFP4-MTP
+  served_name: vllm_qwen35b
   port: 8000
-  conda_env: qw36-27b-vllm
+  conda_env: qwen36-35b
   max_model_len: 128000
   gpu_memory_utilization: 0.90
   kv_cache_dtype: fp8
@@ -307,38 +322,50 @@ vllm:
     --trust-remote-code
 ```
 
-### llama.cpp 模型（共享 / CPU）
+### Ollama/llama.cpp 模型（共享 / CPU）
 
 ```yaml
 # models.d/qwen25-omni-3b.yaml
 name: qwen25-omni-3b
-description: "Qwen2.5-Omni-3B TTS"
-mode: shared
-type: tts
+description: "Qwen2.5 Omni 3B Q8_0 — Ollama.cpp GPU shared"
 gpu_role: shared
-gpu_layers: -1           # -1 = 全部层 offload 到 GPU
-peak_vram_mb: 3800       # 预估 VRAM 占用
+model_type: omni
+peak_vram_mb: 3800
 
-llama:
-  model_path: ~/models/Qwen2.5-Omni-3B/qwen25-omni-3b-q4_k_m.gguf
+type: ollama_cpp
+ollama:
+  model_path: qwen2.5-omni-3b:q8_0
   port: 8035
-  conda_env: qwen25-omni
+  gpu_layers: -1           # -1 = 全部层 offload 到 GPU
 ```
 
 ```yaml
 # models.d/bge-m3.yaml
 name: bge-m3
-description: "BGE-M3 Embedding"
-mode: none
-type: llama
-gpu_role: none            # 纯 CPU，不占 VRAM
-gpu_layers: 0
+description: "BGE-M3 Q4_K_M — Ollama.cpp CPU embedding"
+gpu_role: none
+model_type: embedding
 
-llama:
-  model_path: ~/models/bge-m3/bge-m3-f16.gguf
+type: ollama_cpp
+ollama:
+  model_path: bge-m3:q4_k_m
   port: 8036
-  conda_env: bge-m3
-  extra_flags: --embedding --pooling mean
+  gpu_layers: 0            # 纯 CPU，不占 VRAM
+  extra_flags: --embedding
+```
+
+### TTS 服务
+
+```yaml
+# models.d/tts-qwen3.yaml
+name: tts-qwen3
+description: "Qwen3-TTS 1.7B CustomVoice"
+gpu_role: shared
+model_type: tts
+
+type: tts_server
+port: 8040
+conda_env: tts-qwen3
 ```
 
 ### ComfyUI
@@ -347,9 +374,10 @@ llama:
 # models.d/comfyui.yaml
 name: comfyui
 description: "ComfyUI 图像生成"
-mode: shared
-type: comfyui
+gpu_role: shared
+model_type: aigc
 
+type: comfyui
 conda_env: comfyui
 port: 8188
 working_dir: ~/ComfyUI
