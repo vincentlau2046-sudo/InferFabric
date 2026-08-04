@@ -342,9 +342,55 @@ class ModelManager:
             "gpu_util_pct": gpu_used_mb() / gpu_total_mb() * 100 if gpu_total_mb() > 0 else 0.0,
             "vllm_pid": self._proc.vllm_pid,
             "comfyui_pid": self._proc.comfyui_pid,
+            "tts_pid": self._proc.tts_pid,
+            "asr_pid": self._proc.asr_pid,
+            "local_services": self._get_local_services_info(),
         }
 
     # ── Delegation: GpuStateMachine ───────────────────────────────
+
+    def _get_local_services_info(self) -> dict:
+        """Collect asr/tts local service endpoints from iff.yaml + model state."""
+        result = {}
+        # Load iff.yaml directly (runtime config from ProxyManager not accessible here)
+        try:
+            from inferfabric.config import IFF_DATA_DIR
+            import yaml
+            cfg_path = IFF_DATA_DIR / "iff.yaml"
+            if cfg_path.exists():
+                with open(cfg_path) as f:
+                    runtime = yaml.safe_load(f) or {}
+            else:
+                runtime = {}
+        except Exception:
+            runtime = {}
+
+        for svc_name in ("asr", "tts"):
+            svc_cfg = runtime.get(svc_name, {})
+            if not svc_cfg or not svc_cfg.get("enabled", False):
+                continue
+            info = {
+                "enabled": True,
+                "port": svc_cfg.get("port"),
+                "health_url": svc_cfg.get("health_url"),
+                "api_base": svc_cfg.get("api_base"),
+            }
+            # PID from process manager
+            pid = self._proc.asr_pid if svc_name == "asr" else self._proc.tts_pid
+            info["pid"] = pid
+            info["running"] = pid is not None
+            # Active from model type matching
+            info["active"] = False
+            for svc_name_inner in self.active_services:
+                m = self._models.get(svc_name_inner)
+                if m and (
+                    (svc_name == "asr" and m.is_asr_server) or
+                    (svc_name == "tts" and m.is_tts_server)
+                ):
+                    info["active"] = True
+                    break
+            result[svc_name] = info
+        return result
 
     def reconcile(self) -> dict:
         return self._gpu_state.reconcile()

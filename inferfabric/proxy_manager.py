@@ -29,7 +29,7 @@ from inferfabric.request_log_db import RequestLogDB
 from pathlib import Path as _Path
 
 # IFF data directory (consistent with config.py / token_stats.py)
-IFF_DATA_DIR = _Path.home() / ".inferfabric"
+from inferfabric.config import IFF_DATA_DIR
 
 log = logging.getLogger("inferfabric.proxy_manager")
 
@@ -149,6 +149,10 @@ class ProxyManager:
           - rate_limit.max_concurrent: "auto" or int > 0
           - access_log_jsonl: bool
           - request_log_retention_days: int > 0
+          - tts.enabled: bool (optional)
+          - tts.port: int > 0 (optional)
+          - asr.enabled: bool (optional)
+          - asr.port: int > 0 (optional)
         """
         from inferfabric.config import ConfigError
 
@@ -192,6 +196,20 @@ class ProxyManager:
             rd = config["request_log_retention_days"]
             if isinstance(rd, bool) or not isinstance(rd, int) or rd <= 0:
                 raise ConfigError(f"request_log_retention_days must be int > 0, got {rd!r}")
+
+        # Validate asr/tts local service config
+        for svc_name in ("asr", "tts"):
+            svc_cfg = config.get(svc_name)
+            if svc_cfg is None:
+                continue
+            if not isinstance(svc_cfg, dict):
+                raise ConfigError(f"{svc_name} must be a mapping, got {type(svc_cfg).__name__}")
+            if "enabled" in svc_cfg and not isinstance(svc_cfg["enabled"], bool):
+                raise ConfigError(f"{svc_name}.enabled must be bool, got {svc_cfg['enabled']!r}")
+            if "port" in svc_cfg:
+                p = svc_cfg["port"]
+                if isinstance(p, bool) or not isinstance(p, int) or p <= 0:
+                    raise ConfigError(f"{svc_name}.port must be int > 0, got {p!r}")
 
     def _load_runtime_config(self) -> dict:
         """从 iff.yaml 加载运行时配置，不存在时返回空 dict。

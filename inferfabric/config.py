@@ -30,9 +30,10 @@ _PROTECTED_ENV_KEYS = frozenset({"PATH", "HOME", "CONDA_DEFAULT_ENV", "CUDA_VISI
 
 BASE_DIR = Path(__file__).parent.parent
 MODELS_DIR = BASE_DIR / "models.d"
-DEFAULT_STATE_DB = Path.home() / ".inferfabric" / "state.db"
-DEFAULT_REQUEST_LOG_DB = Path.home() / ".inferfabric" / "request_log.db"
-DEFAULT_LOG_DIR = Path.home() / ".inferfabric" / "logs"
+IFF_DATA_DIR = Path.home() / ".inferfabric"
+DEFAULT_STATE_DB = IFF_DATA_DIR / "state.db"
+DEFAULT_REQUEST_LOG_DB = IFF_DATA_DIR / "request_log.db"
+DEFAULT_LOG_DIR = IFF_DATA_DIR / "logs"
 GPU_LOCK_PATH = Path("/tmp/inferfabric_gpu.lock")
 MODEL_BASE = Path.home() / "models"
 CONDA_ENVS = Path.home() / "miniconda3" / "envs"
