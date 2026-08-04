@@ -15,9 +15,10 @@ tts_server:
   start_cmd: python -m api.main
   extra_env:
     TTS_BACKEND: official
-    TTS_MODEL_NAME: /home/vince/ComfyUI/models/TTS/Qwen3-TTS/Qwen3-TTS-12Hz-1.7B-CustomVoice
+    TTS_MODEL_NAME: ~/models/TTS/Qwen3-TTS/Qwen3-TTS-12Hz-1.7B-CustomVoice
     TTS_LAZY_LOAD: "false"
     TTS_WARMUP_ON_START: "true"
+    TTS_LOAD_ALL_MODELS: "true"
     TTS_MAX_CONCURRENT: "1"
     TTS_AUTOCHUNK: "true"
     HF_ENDPOINT: https://hf-mirror.com
