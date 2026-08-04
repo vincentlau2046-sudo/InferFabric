@@ -1,0 +1,23 @@
+name: tts-qwen3
+description: "Qwen3-TTS 1.7B CustomVoice — OpenAI-Compatible TTS Server"
+gpu_role: shared
+type: tts_server
+model_type: tts
+quantization: bf16
+peak_vram_mb: 5500
+
+tts_server:
+  conda_env: qwen3-tts
+  port: 8880
+  working_dir: ~/services/Qwen3-TTS-Openai-Fastapi
+  health_url: http://localhost:8880/health
+  health_check_timeout: 180
+  start_cmd: python -m api.main
+  extra_env:
+    TTS_BACKEND: official
+    TTS_MODEL_NAME: /home/vince/ComfyUI/models/TTS/Qwen3-TTS/Qwen3-TTS-12Hz-1.7B-CustomVoice
+    TTS_LAZY_LOAD: "false"
+    TTS_WARMUP_ON_START: "true"
+    TTS_MAX_CONCURRENT: "1"
+    TTS_AUTOCHUNK: "true"
+    HF_ENDPOINT: https://hf-mirror.com

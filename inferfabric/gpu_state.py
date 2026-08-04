@@ -275,6 +275,7 @@ class GpuStateMachine:
             "profile_state": ServiceState.IDLE,
             "vllm_pid": "",
             "comfyui_pid": "",
+            "tts_pid": "",
             "sleep_state": "{}",
         })
 

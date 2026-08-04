@@ -120,6 +120,28 @@ class ComfyUIConfig:
 
 
 @dataclass
+class TTSConfig:
+    """TTS server configuration — OpenAI-compatible /v1/audio/speech API.
+
+    Manages a standalone TTS process (e.g. Qwen3-TTS-Openai-Fastapi)
+    with Conda-based deployment, process group isolation, and
+    health check via HTTP endpoint.
+    """
+    conda_env: str
+    port: int = 8880
+    working_dir: str = ""
+    health_url: str = ""
+    health_check_timeout: int = 180  # seconds; TTS warmup can be slow
+    start_cmd: str = "python -m api.main"
+    extra_env: dict[str, str] = field(default_factory=dict)  # inject into subprocess env
+
+    @property
+    def resolved_working_dir(self) -> Path:
+        wd = self.working_dir or str(Path.home() / "services" / "tts")
+        return Path(wd).expanduser().resolve()
+
+
+@dataclass
 class OllamaModelConfig:
     """Ollama 模型引用 — 不管理 daemon，只声明模型名."""
     model_ref: str  # "llama3.1:8b"
@@ -164,8 +186,7 @@ MODEL_TYPE_TO_MODALITY = {
     "ocr": "text-vision",
     "aigc": "aigc",
     "embedding": "embedding",
-    "rerank": "rerank",
-    "infra": "infra",
+    "tts": "tts",
 }
 
 
@@ -202,16 +223,17 @@ class ModelConfig:
             return self.modality
         return MODEL_TYPE_TO_MODALITY.get(self.model_type, "text")
 
-    type: str = "vllm"  # 'vllm' | 'comfyui' | 'ollama' | 'ollama_cpp' | 'ollama_daemon'
+    type: str = "vllm"  # 'vllm' | 'comfyui' | 'ollama' | 'ollama_cpp' | 'ollama_daemon' | 'tts_server'
     vllm: Optional[VLLMConfig] = None
     comfyui: Optional[ComfyUIConfig] = None
     ollama: Optional[OllamaModelConfig] = None
     ollama_cpp: Optional[OllamaCppConfig] = None
     ollama_daemon: Optional[OllamaDaemonConfig] = None
+    tts: Optional[TTSConfig] = None
     typical_vram_pct: float = 0.0
     peak_vram_mb: int = 0  # measured peak VRAM + safety margin; 0 = unknown/unchecked
-    model_type: str = "llm"  # 'llm' | 'vl' | 'omni' | 'ocr' | 'aigc' | 'embedding' | 'rerank' | 'infra'
-    modality: str = ""  # derived from model_type if empty; 'text' | 'text-vision' | 'multimodal' | 'aigc' | 'embedding' | 'rerank' | 'infra'
+    model_type: str = "llm"  # 'llm' | 'vl' | 'omni' | 'ocr' | 'aigc' | 'embedding' | 'rerank' | 'infra' | 'tts'
+    modality: str = ""  # derived from model_type if empty; 'text' | 'text-vision' | 'multimodal' | 'aigc' | 'embedding' | 'rerank' | 'infra' | 'tts'
     quantization: str = ""  # quantization format: 'NVFP4', 'GPTQ-4bit', 'Q8_0', etc.
 
     # Fields excluded from config hash (runtime / non-startup)
@@ -247,6 +269,8 @@ class ModelConfig:
         """Unified port accessor — eliminates per-backend if/else in proxy."""
         if self.vllm:
             return self.vllm.port
+        if self.tts:
+            return self.tts.port
         if self.ollama_daemon:
             return self.ollama_daemon.port
         if self.ollama:
@@ -299,6 +323,10 @@ class ModelConfig:
     @property
     def is_ollama_cpp(self) -> bool:
         return self.type == "ollama_cpp" and self.ollama_cpp is not None
+
+    @property
+    def is_tts_server(self) -> bool:
+        return self.type == "tts_server" and self.tts is not None
 
     @property
     def is_ollama_daemon(self) -> bool:
@@ -400,6 +428,33 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
         if raw.get("ollama_daemon"):
             ollama_daemon_cfg = OllamaDaemonConfig(**raw["ollama_daemon"])
 
+        # Parse tts_server config if present
+        tts_cfg = None
+        if raw.get("tts_server"):
+            tts_raw = dict(raw["tts_server"])
+            # Extract and validate extra_env (same protection as VLLMConfig)
+            extra_env = tts_raw.pop("extra_env", {}) or {}
+            if not isinstance(extra_env, dict):
+                log.warning("extra_env is not a dict in %s, ignoring", model_name)
+                extra_env = {}
+            for k in list(extra_env.keys()):
+                if k in _PROTECTED_ENV_KEYS:
+                    raise ConfigError(
+                        f"extra_env key '{k}' is protected and cannot be overridden "
+                        f"in model '{model_name}'"
+                    )
+                extra_env[k] = str(extra_env[k])
+            tts_cfg = TTSConfig(**tts_raw, extra_env=extra_env)
+
+        # For type=tts_server, parse top-level tts_server fields
+        if model_type == "tts_server" and not tts_cfg:
+            tts_fields = {}
+            for f in ("conda_env", "port", "working_dir", "health_url", "start_cmd"):
+                if f in raw:
+                    tts_fields[f] = raw[f]
+            if tts_fields:
+                tts_cfg = TTSConfig(**tts_fields)
+
         # For type=ollama, parse top-level ollama fields
         if model_type == "ollama" and not ollama_cfg:
             ollama_fields = {}
@@ -439,6 +494,7 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             ollama=ollama_cfg,
             ollama_cpp=ollama_cpp_cfg,
             ollama_daemon=ollama_daemon_cfg,
+            tts=tts_cfg,
             typical_vram_pct=float(raw.get("typical_vram_pct", 0)),
             peak_vram_mb=int(raw.get("peak_vram_mb", 0)),
             model_type=raw.get("model_type", "llm"),

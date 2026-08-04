@@ -58,6 +58,9 @@ def check_model_health(model) -> str:
         return check_http_status(f"http://localhost:{model.ollama_daemon.port}/api/tags")
     elif model.is_ollama:
         return check_http_status("http://localhost:11434/api/tags")
+    elif model.is_tts_server:
+        url = model.tts.health_url or f"http://localhost:{model.tts.port}/health"
+        return check_http_status(url)
     elif model.is_ollama_cpp:
         return check_http_status(f"http://localhost:{model.ollama_cpp.port}/health")
     return "?"
