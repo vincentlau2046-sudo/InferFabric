@@ -243,7 +243,7 @@ class TestAuthManagerBasic:
         cfg = {
             "primary": "sk-iff-primary",
             "guests": [
-                {"key": "sk-guest-1", "name": "测试用户", "models": ["qwen35-9b"]},
+                {"key": "sk-guest-1", "name": "测试用户", "models": ["qwen35-9b-vl"]},
                 {"key": "sk-guest-expired", "name": "过期用户",
                  "models": ["glm-5"],
                  "expires": (datetime.now(tz=timezone.utc) - timedelta(days=1)).isoformat()},
@@ -281,7 +281,7 @@ class TestAuthManagerBasic:
         assert ok
 
     def test_guest_model_whitelist(self, auth_with_guests):
-        ok, _ = auth_with_guests.check("Bearer sk-guest-1", "qwen35-9b")
+        ok, _ = auth_with_guests.check("Bearer sk-guest-1", "qwen35-9b-vl")
         assert ok
         ok, reason = auth_with_guests.check("Bearer sk-guest-1", "other-model")
         assert not ok
@@ -686,7 +686,7 @@ class TestCloudDiscoveryBasic:
     def test_resolve_route_local(self, tmp_path):
         from inferfabric.cloud_discovery import CloudDiscovery
         cd = CloudDiscovery(tmp_path / "nonexistent.yaml")
-        route = cd.resolve_route("qwen35-9b", local_models={"qwen35-9b"})
+        route = cd.resolve_route("qwen35-9b-vl", local_models={"qwen35-9b-vl"})
         assert route == "local"
 
     def test_resolve_route_cloud(self, tmp_path):
@@ -936,9 +936,9 @@ class TestProxyManagerInit:
 
     def test_model_to_service_found(self, pm):
         mock_model = MagicMock()
-        mock_model.name = "qwen35-9b"
+        mock_model.name = "qwen35-9b-vl"
         pm.mgr.find_model_by_served_name.return_value = mock_model
-        assert pm.model_to_service("vllm_qwen27b") == "qwen35-9b"
+        assert pm.model_to_service("vllm_qwen27b") == "qwen35-9b-vl"
 
     def test_model_to_service_not_found(self, pm):
         pm.mgr.find_model_by_served_name.return_value = None
@@ -951,8 +951,8 @@ class TestProxyManagerInit:
         assert pm.get_target_port("vllm_qwen27b") == 8000
 
     def test_current_property(self, pm):
-        pm.mgr.current_service = "qwen35-9b"
-        assert pm.current == "qwen35-9b"
+        pm.mgr.current_service = "qwen35-9b-vl"
+        assert pm.current == "qwen35-9b-vl"
 
     def test_ensure_cloud_discovered(self, pm):
         pm.cloud.providers = {"test-provider": MagicMock()}
@@ -1453,9 +1453,9 @@ class TestV1ModelsCapabilities:
     def test_local_model_caps_not_clobbered(self):
         """本地模型不应被云端同 ID 模型覆盖"""
         # 在 /v1/models handler 中，existing_ids 检查确保本地模型优先
-        local_models = [{"id": "qwen35-9b", "object": "model", "owned_by": "local"}]
+        local_models = [{"id": "qwen35-9b-vl", "object": "model", "owned_by": "local"}]
         existing_ids = {m.get("id") for m in local_models}
-        assert "qwen35-9b" in existing_ids  # 不会重复添加
+        assert "qwen35-9b-vl" in existing_ids  # 不会重复添加
 
 
 if __name__ == "__main__":

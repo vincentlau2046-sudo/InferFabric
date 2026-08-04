@@ -1,4 +1,4 @@
-name: gemma-4-31B-it-NVFP4
+name: gemma4-31b-vl
 description: "Huihui Gemma4-31B IT Abliterated v2 NVFP4 Dense"
 type: vllm
 gpu_role: exclusive
@@ -8,7 +8,7 @@ peak_vram_mb: 30000
 
 vllm:
   model_dir: Huihui-gemma-4-31B-it-abliterated-v2-NVFP4
-  served_name: gemma-4-31B-it-NVFP4
+  served_name: gemma4-31b-vl
   port: 8005
   conda_env: gemma-4-31b
   gpu_memory_utilization: 0.92
@@ -27,7 +27,7 @@ vllm:
     --trust-remote-code
     --limit-mm-per-prompt '{"image": 2, "audio": 0}'
     --kv-offloading-backend native
-    --kv-offloading-size 24
+    --kv-offloading-size 16
   extra_env:
     FLASHINFER_DISABLE_VERSION_CHECK: "1"
     VLLM_USE_DEEP_GEMM: "0"

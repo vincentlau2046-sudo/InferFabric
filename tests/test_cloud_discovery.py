@@ -234,7 +234,7 @@ class TestCloudDiscoveryRoute:
         cd._cloud_models = {
             "deepseek-v4-flash": CloudModel("deepseek-v4-flash", "baidu-codingplan"),
         }
-        result = cd.resolve_route("qwen36-35b", local_models={"qwen36-35b"})
+        result = cd.resolve_route("qwen36-35b-vl", local_models={"qwen36-35b-vl"})
         assert result == "local"
 
     def test_route_cloud(self, tmp_path):
@@ -262,7 +262,7 @@ class TestCloudDiscoveryRoute:
     def test_route_local_takes_priority(self, tmp_path):
         cd = CloudDiscovery(tmp_path / "none.yaml")
         cd._cloud_models = {
-            "qwen36-35b": CloudModel("qwen36-35b", "baidu-codingplan"),
+            "qwen36-35b-vl": CloudModel("qwen36-35b-vl", "baidu-codingplan"),
         }
-        result = cd.resolve_route("qwen36-35b", local_models={"qwen36-35b"})
+        result = cd.resolve_route("qwen36-35b-vl", local_models={"qwen36-35b-vl"})
         assert result == "local"

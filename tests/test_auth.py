@@ -51,27 +51,27 @@ class TestAuthPrimary:
 
     def test_valid_primary(self, tmp_path):
         mgr = self._mgr(tmp_path)
-        ok, reason = mgr.check("sk-test-primary", "qwen36-35b")
+        ok, reason = mgr.check("sk-test-primary", "qwen36-35b-vl")
         assert ok and reason == "ok"
 
     def test_valid_primary_with_bearer_prefix(self, tmp_path):
         mgr = self._mgr(tmp_path)
-        ok, reason = mgr.check("Bearer sk-test-primary", "qwen36-35b")
+        ok, reason = mgr.check("Bearer sk-test-primary", "qwen36-35b-vl")
         assert ok and reason == "ok"
 
     def test_invalid_key(self, tmp_path):
         mgr = self._mgr(tmp_path)
-        ok, reason = mgr.check("sk-wrong", "qwen36-35b")
+        ok, reason = mgr.check("sk-wrong", "qwen36-35b-vl")
         assert not ok and "invalid" in reason
 
     def test_empty_token(self, tmp_path):
         mgr = self._mgr(tmp_path)
-        ok, reason = mgr.check("", "qwen36-35b")
+        ok, reason = mgr.check("", "qwen36-35b-vl")
         assert not ok
 
     def test_primary_allows_all_models(self, tmp_path):
         mgr = self._mgr(tmp_path)
-        for model in ["qwen36-35b", "qwen35-9b", "gemma-4-31B-it-NVFP4", "deepseek-v4-flash"]:
+        for model in ["qwen36-35b-vl", "qwen35-9b-vl", "gemma4-31b-vl", "deepseek-v4-flash"]:
             ok, _ = mgr.check("sk-test-primary", model)
             assert ok, f"primary should allow model {model}"
 
@@ -90,16 +90,16 @@ class TestAuthGuest:
 
     def test_guest_allowed_model(self, tmp_path):
         mgr = self._mgr(tmp_path, guests=[
-            {"key": "sk-guest1", "name": "test", "models": ["qwen35-9b"]},
+            {"key": "sk-guest1", "name": "test", "models": ["qwen35-9b-vl"]},
         ])
-        ok, _ = mgr.check("sk-guest1", "qwen35-9b")
+        ok, _ = mgr.check("sk-guest1", "qwen35-9b-vl")
         assert ok
 
     def test_guest_blocked_model(self, tmp_path):
         mgr = self._mgr(tmp_path, guests=[
-            {"key": "sk-guest1", "name": "test", "models": ["qwen35-9b"]},
+            {"key": "sk-guest1", "name": "test", "models": ["qwen35-9b-vl"]},
         ])
-        ok, reason = mgr.check("sk-guest1", "qwen36-35b")
+        ok, reason = mgr.check("sk-guest1", "qwen36-35b-vl")
         assert not ok and "not allowed" in reason
 
     def test_guest_no_expiry(self, tmp_path):

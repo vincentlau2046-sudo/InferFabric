@@ -433,7 +433,7 @@ def test_model_config_has_vram_field():
 def test_load_models_parses_vram():
     """load_models() reads typical_vram_pct from YAML."""
     models = load_models()
-    assert_eq(models["qwen35-9b"].typical_vram_pct, 38.0)
+    assert_eq(models["qwen35-9b-vl"].typical_vram_pct, 38.0)
     assert_eq(models["comfyui"].typical_vram_pct, 50.0)
     # exclusive models default to 0
     assert_eq(models["qwen36-27b"].typical_vram_pct, 0.0)
@@ -943,7 +943,7 @@ def test_model_config_has_vram_field():
 def test_load_models_parses_vram():
     """load_models() reads typical_vram_pct from YAML."""
     models = load_models()
-    assert_eq(models["qwen35-9b"].typical_vram_pct, 38.0)
+    assert_eq(models["qwen35-9b-vl"].typical_vram_pct, 38.0)
     assert_eq(models["comfyui"].typical_vram_pct, 50.0)
     # exclusive models default to 0
     assert_eq(models["qwen36-27b"].typical_vram_pct, 0.0)

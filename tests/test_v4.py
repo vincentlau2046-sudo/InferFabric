@@ -40,8 +40,8 @@ def test_models_dir_loading():
             "  max_num_seqs: 4\n"
             "  kv_cache_dtype: fp8\n"
         )
-        (models_dir / "qwen35-9b.yaml").write_text(
-            "name: qwen35-9b\ndescription: 'test small'\nmode: shared\n"
+        (models_dir / "qwen35-9b-vl.yaml").write_text(
+            "name: qwen35-9b-vl\ndescription: 'test small'\nmode: shared\n"
             "vllm:\n"
             "  model_dir: test-small\n"
             "  served_name: vllm_small\n"
@@ -55,11 +55,11 @@ def test_models_dir_loading():
 
         models = load_models(models_dir)
         assert "qwen36-27b" in models
-        assert "qwen35-9b" in models
+        assert "qwen35-9b-vl" in models
         assert models["qwen36-27b"].mode == "exclusive"
-        assert models["qwen35-9b"].mode == "shared"
+        assert models["qwen35-9b-vl"].mode == "shared"
         assert models["qwen36-27b"].vllm.port == 8000
-        assert models["qwen35-9b"].vllm.port == 8002
+        assert models["qwen35-9b-vl"].vllm.port == 8002
     print("  ✅ load_models from models.d/")
 
 
@@ -213,8 +213,8 @@ def test_state_db_active_services():
         assert db.get_active_services() == ["qwen36-27b"]
 
         # Multiple
-        db.set_active_services(["qwen35-9b", "comfyui"])
-        assert db.get_active_services() == ["qwen35-9b", "comfyui"]
+        db.set_active_services(["qwen35-9b-vl", "comfyui"])
+        assert db.get_active_services() == ["qwen35-9b-vl", "comfyui"]
     print("  ✅ StateDB active_services CRUD")
 
 
@@ -252,12 +252,12 @@ def test_switch_idle_to_shared():
 
         db.set_multi({
             "gpu_mode": "shared",
-            "active_services": json.dumps(["qwen35-9b"]),
+            "active_services": json.dumps(["qwen35-9b-vl"]),
             "vllm_pid": "12345",
             "profile_state": "healthy",
         })
         assert db.get("gpu_mode") == "shared"
-        assert db.get_active_services() == ["qwen35-9b"]
+        assert db.get_active_services() == ["qwen35-9b-vl"]
     print("  ✅ idle→shared switch updates state correctly")
 
 
@@ -290,7 +290,7 @@ def test_switch_shared_to_idle():
         db = StateDB(Path(tmp) / "test.db")
         db.set_multi({
             "gpu_mode": "shared",
-            "active_services": json.dumps(["qwen35-9b", "comfyui"]),
+            "active_services": json.dumps(["qwen35-9b-vl", "comfyui"]),
             "vllm_pid": "12345",
             "comfyui_pid": "12346",
             "profile_state": "healthy",
@@ -341,7 +341,7 @@ def test_switch_shared_add_service():
         db = StateDB(Path(tmp) / "test.db")
         db.set_multi({
             "gpu_mode": "shared",
-            "active_services": json.dumps(["qwen35-9b"]),
+            "active_services": json.dumps(["qwen35-9b-vl"]),
             "vllm_pid": "12345",
             "profile_state": "healthy",
         })
@@ -351,10 +351,10 @@ def test_switch_shared_add_service():
 
         # After adding
         db.set_multi({
-            "active_services": json.dumps(["qwen35-9b", "comfyui"]),
+            "active_services": json.dumps(["qwen35-9b-vl", "comfyui"]),
             "comfyui_pid": "12346",
         })
-        assert db.get_active_services() == ["qwen35-9b", "comfyui"]
+        assert db.get_active_services() == ["qwen35-9b-vl", "comfyui"]
     print("  ✅ shared mode: add service allowed")
 
 
@@ -366,7 +366,7 @@ def test_stop_single_shared_service():
         db = StateDB(Path(tmp) / "test.db")
         db.set_multi({
             "gpu_mode": "shared",
-            "active_services": json.dumps(["qwen35-9b", "comfyui"]),
+            "active_services": json.dumps(["qwen35-9b-vl", "comfyui"]),
             "vllm_pid": "12345",
             "comfyui_pid": "12346",
             "profile_state": "healthy",
@@ -435,7 +435,7 @@ def test_cli_switch_by_model_name():
     """iff switch <model_name> uses model name, not profile name."""
     # Structural: verify model names are used as switch targets
     # No 'qw36_full' profile name — just 'qwen36_27b'
-    valid_model_names = ["qwen36-27b", "qwen35-9b", "gemma4-26b", "comfyui", "idle"]
+    valid_model_names = ["qwen36-27b", "qwen35-9b-vl", "gemma4-26b", "comfyui", "idle"]
     # These are the valid switch targets
     assert "qw36_full" not in valid_model_names  # Old profile name gone
     assert "qw35_comfyui" not in valid_model_names  # Old profile name gone
@@ -494,7 +494,7 @@ def test_dashboard_gpu_mode_display():
         db = StateDB(Path(tmp) / "test.db")
         db.set_multi({
             "gpu_mode": "shared",
-            "active_services": json.dumps(["qwen35-9b", "comfyui"]),
+            "active_services": json.dumps(["qwen35-9b-vl", "comfyui"]),
         })
         assert db.get("gpu_mode") == "shared"
         assert len(db.get_active_services()) == 2
@@ -512,7 +512,7 @@ def test_backward_compat_switch_vllm_sh():
     # gemma → gemma4_26b
     mapping = {
         "qw36": "qwen36-27b",
-        "qw35": "qwen35-9b",
+        "qw35": "qwen35-9b-vl",
         "gemma": "gemma4-26b",
     }
     for old, new in mapping.items():

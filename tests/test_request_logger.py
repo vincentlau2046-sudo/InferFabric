@@ -22,7 +22,7 @@ class TestRequestLog:
 
     def test_asdict(self):
         entry = RequestLog(
-            req_id="iff-1", key_name="primary", model="qwen36-35b",
+            req_id="iff-1", key_name="primary", model="qwen36-35b-vl",
             status=200, ttft_ms=487.5, duration_ms=2100, route="local",
         )
         d = entry.__dict__.copy()
@@ -55,7 +55,7 @@ class TestRequestLoggerEnabled:
     def test_write_single_entry(self, tmp_path):
         logger = RequestLogger(log_dir=tmp_path, enabled=True)
         entry = RequestLog(
-            req_id="iff-7f3a", key_name="primary", model="qwen36-35b",
+            req_id="iff-7f3a", key_name="primary", model="qwen36-35b-vl",
             status=200, ttft_ms=487, duration_ms=2100, route="local",
         )
         logger.log(entry)
@@ -69,7 +69,7 @@ class TestRequestLoggerEnabled:
         assert len(lines) == 1
         data = json.loads(lines[0])
         assert data["req_id"] == "iff-7f3a"
-        assert data["model"] == "qwen36-35b"
+        assert data["model"] == "qwen36-35b-vl"
         assert data["ttft_ms"] == 487
         assert data["route"] == "local"
 

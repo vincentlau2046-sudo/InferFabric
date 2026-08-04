@@ -1,4 +1,4 @@
-name: qwen35-9b
+name: qwen35-9b-vl
 description: "Qwen3.5-9B GPTQ-4bit"
 gpu_role: shared
 model_type: vl
@@ -7,7 +7,7 @@ peak_vram_mb: 12500
 
 vllm:
   model_dir: Qwen3.5-9B-GPTQ-4bit/Qwen3.5-9B-GPTQ-4bit
-  served_name: vllm_qw35_gptq
+  served_name: qwen35-9b-vl
   port: 8002
   conda_env: qw35-9b-vllm
   max_model_len: 65536

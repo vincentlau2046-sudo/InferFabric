@@ -428,7 +428,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def _forward_local(self, pm, data, auth_header, model_obj, original_model):
         """Forward request to a local model with rate limiting."""
-        model_name = data.get("model", "vllm_qwen27b")
+        model_name = data.get("model", "")
         gate = pm.dual_gate.acquire(model_name, timeout=30)
         if not gate.ok:
             self._send_json(

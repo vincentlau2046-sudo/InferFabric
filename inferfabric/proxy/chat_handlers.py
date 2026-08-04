@@ -158,7 +158,10 @@ def handle_chat(handler, pm, data):
     Replaces ProxyHandler._handle_chat. Dispatches to either
     handle_ollama_native or the vLLM forwarding path.
     """
-    model = data.get("model", "vllm_qwen27b")
+    model = data.get("model")
+    if not model:
+        handler._send_json({"error": "model field is required", "status": "bad_request"}, 400)
+        return
     log.debug("Incoming request: model=%s", model)
 
     # PR-B: Request context for logging

@@ -5,7 +5,7 @@
   guests:                        # 可选
     - key: "***"
       name: "测试用"
-      models: ["qwen35-9b"]
+      models: ["qwen35-9b-vl"]
       expires: "2026-08-30T00:00:00+08:00"
 
 文件不存在或为空 = 不开启鉴权（当前行为不变）。

@@ -1,4 +1,4 @@
-name: qwen36-35b
+name: qwen36-35b-vl
 description: "Qwen3.6-35B A3B MoE NVFP4 + MTP (nvidia modelopt)"
 gpu_role: exclusive
 model_type: vl
@@ -7,7 +7,7 @@ peak_vram_mb: 28000
 
 vllm:
   model_dir: Qwen3.6-35B-A3B-NVFP4-nvidia
-  served_name: vllm_qwen36_35b
+  served_name: qwen36-35b-vl
   port: 8001
   conda_env: qwen36-35b-vllm
   max_model_len: 131072

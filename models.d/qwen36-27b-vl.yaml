@@ -7,7 +7,7 @@ peak_vram_mb: 28000
 
 vllm:
   model_dir: Huihui-Qwen3.6-27B-abliterated-NVFP4-MTP
-  served_name: vllm_qwen27b_vl
+  served_name: qwen36-27b-vl
   port: 8003
   conda_env: qwen36-27b-vllm-vl
   max_model_len: 131072

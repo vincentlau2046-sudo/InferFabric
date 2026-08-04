@@ -121,8 +121,8 @@ class RateLimiterV2:
 
     用法：
         limiter = RateLimiterV2(server_rpm=60, model_rpm_default=20)
-        ok = limiter.acquire("qwen36-35b")
-        limiter.release("qwen36-35b")
+        ok = limiter.acquire("qwen36-35b-vl")
+        limiter.release("qwen36-35b-vl")
     """
 
     def __init__(

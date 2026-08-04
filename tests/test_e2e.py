@@ -49,20 +49,20 @@ def ensure_idle():
 
 def test_shared_lifecycle():
     """Shared model: start → verify → stop (释放) → verify idle."""
-    print("\n=== Shared model lifecycle (qwen35-9b) ===")
+    print("\n=== Shared model lifecycle (qwen35-9b-vl) ===")
     ensure_idle()
 
     # 1. Start
-    print("  [1] Starting qwen35-9b...")
-    d, s = post("/switch", {"model": "qwen35-9b"})
+    print("  [1] Starting qwen35-9b-vl...")
+    d, s = post("/switch", {"model": "qwen35-9b-vl"})
     assert d.get("status") == "switched", f"Start failed: {d}"
     print(f"      ✅ Started in {d.get('elapsed_sec')}s")
 
     # 2. Verify healthy
     st, _ = get("/status")
-    assert "qwen35-9b" in st.get("active_services", []), f"Not in active: {st}"
+    assert "qwen35-9b-vl" in st.get("active_services", []), f"Not in active: {st}"
     assert st["gpu_mode"] == "shared", f"Not shared: {st}"
-    health = st.get("services_health", {}).get("qwen35-9b", "")
+    health = st.get("services_health", {}).get("qwen35-9b-vl", "")
     print(f"      Health: {health}")
 
     # 3. Test /v1/models returns model info
@@ -74,8 +74,8 @@ def test_shared_lifecycle():
         print(f"      /v1/models: {models}")
 
     # 4. Release (shared → POST /stop)
-    print("  [2] Releasing qwen35-9b (POST /stop)...")
-    d2, s2 = post("/stop", {"model": "qwen35-9b"})
+    print("  [2] Releasing qwen35-9b-vl (POST /stop)...")
+    d2, s2 = post("/stop", {"model": "qwen35-9b-vl"})
     assert d2.get("status") == "stopped", f"Stop failed: {d2}"
     print(f"      ✅ Stopped: {d2.get('message', '')}")
 
@@ -128,18 +128,18 @@ def test_release_button_idempotent():
     ensure_idle()
 
     # Start shared model
-    print("  [1] Starting qwen35-9b...")
-    d, _ = post("/switch", {"model": "qwen35-9b"})
+    print("  [1] Starting qwen35-9b-vl...")
+    d, _ = post("/switch", {"model": "qwen35-9b-vl"})
     assert d.get("status") == "switched", f"Start failed: {d}"
 
     # Release once
     print("  [2] First release...")
-    d1, _ = post("/stop", {"model": "qwen35-9b"})
+    d1, _ = post("/stop", {"model": "qwen35-9b-vl"})
     assert d1.get("status") == "stopped", f"First stop failed: {d1}"
 
     # Release again (should error gracefully, not crash)
     print("  [3] Second release (should be graceful error)...")
-    d2, _ = post("/stop", {"model": "qwen35-9b"})
+    d2, _ = post("/stop", {"model": "qwen35-9b-vl"})
     assert d2.get("status") == "error", f"Should be error: {d2}"
     print(f"      ✅ Graceful error: {d2.get('message', '')}")
 
@@ -161,22 +161,22 @@ def test_switch_while_running():
     d1, _ = post("/switch", {"model": "qwen36-27b"})
     assert d1.get("status") == "switched", f"Start failed: {d1}"
 
-    # Try to switch to qwen35-9b directly (should fail — exclusive→shared not allowed)
-    print("  [2] Direct switch to qwen35-9b (should fail)...")
-    d2, _ = post("/switch", {"model": "qwen35-9b"})
+    # Try to switch to qwen35-9b-vl directly (should fail — exclusive→shared not allowed)
+    print("  [2] Direct switch to qwen35-9b-vl (should fail)...")
+    d2, _ = post("/switch", {"model": "qwen35-9b-vl"})
     assert d2.get("status") == "error", f"Should reject: {d2}"
     print(f"      ✅ Correctly rejected: {d2.get('message', '')[:60]}")
 
     # Proper: idle first, then switch
-    print("  [3] Proper: idle → qwen35-9b...")
+    print("  [3] Proper: idle → qwen35-9b-vl...")
     d3, _ = post("/switch", {"model": "idle"}, timeout=120)
     time.sleep(2)
-    d4, _ = post("/switch", {"model": "qwen35-9b"})
+    d4, _ = post("/switch", {"model": "qwen35-9b-vl"})
     assert d4.get("status") == "switched", f"Switch failed: {d4}"
-    print(f"      ✅ Switched to qwen35-9b in {d4.get('elapsed_sec')}s")
+    print(f"      ✅ Switched to qwen35-9b-vl in {d4.get('elapsed_sec')}s")
 
     # Cleanup
-    post("/stop", {"model": "qwen35-9b"})
+    post("/stop", {"model": "qwen35-9b-vl"})
     time.sleep(2)
     print("      ✅ Cleaned up")
 
