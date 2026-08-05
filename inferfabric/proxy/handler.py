@@ -1335,7 +1335,14 @@ def main():
 
     try:
         while not shutdown_event.is_set():
-            server.handle_request()
+            # handle_request() blocks indefinitely when no connections arrive,
+            # preventing shutdown_event from being checked.
+            # Use select with timeout to make the loop responsive to SIGTERM.
+            import select as _select
+            readable, _, _ = _select.select([server.socket], [], [], 1.0)
+            if readable:
+                server.handle_request()
+            # If no readable sockets, loop back and check shutdown_event
     except KeyboardInterrupt:
         pass
     finally:
