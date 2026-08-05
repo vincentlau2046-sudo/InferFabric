@@ -15,6 +15,7 @@
 - [云 Provider 预设](#云-provider-预设)
 - [API Key 安全模型](#api-key-安全模型)
 - [目录结构](#目录结构)
+- [端口分配表](#端口分配表)
 - [CLI 参考](#cli-参考)
 - [模型配置格式](#模型配置格式)
 - [OpenClaw / Claude Code 集成](#openclaw--claude-code-集成)
@@ -48,6 +49,33 @@ InferFabric 是单卡 GPU 上的 LLM 推理网关，统一管理本地模型（v
 | GPU 锁二值(持有/不持有) | 三态(idle/exclusive/shared) |
 | N 模型 × M 组合 = Profile 爆炸 | N 文件 + 云预设, 无组合 |
 | API Key 明文存 YAML | `${ENV_VAR}` 引用 + secrets.env |
+
+---
+
+## 端口分配表
+
+所有本地服务的端口固定分配，新增模型时**必须检查此表避免冲突**。
+
+| 端口 | 模型 | 类型 | GPU Role | Conda 环境 |
+|------|------|------|----------|------------|
+| 8001 | qwen36-35b-vl | vllm | exclusive | qwen36-35b-vllm |
+| 8003 | qwen36-27b-vl | vllm | shared | qwen36-27b-vllm-vl |
+| 8004 | ovis-ocr2 | vllm | shared | ovis-vllm |
+| 8005 | gemma4-31b-vl | vllm | exclusive | gemma-4-31b-vllm |
+| 8002 | qwen3-vl-4b | vllm | shared | qwen3-vl-4b-vllm |
+| 8188 | comfyui | comfyui | exclusive | comfyui |
+| 8880 | tts-qwen3 | tts_server | none | tts-qwen3 |
+| 8881 | sensevoice-small | asr_server | shared | sensevoice |
+| 11434 | ollama-daemon | ollama_daemon | none | — |
+| 11441 | bge-m3 | ollama_cpp | none | — |
+| 11442 | bge-reranker-v2-m3 | ollama_cpp | none | — |
+
+**端口分配规则**:
+- vLLM GPU 模型: 8001-8099
+- 专用服务 (ComfyUI): 8100-8999
+- ASR/TTS 服务: 8880-8899
+- Ollama/llama.cpp: 11400-11499
+- Proxy: 8999 (固定)
 
 ---
 

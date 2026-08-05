@@ -1,5 +1,5 @@
 name: sensevoice-small
-description: "FunASR ASR — SenseVoice (默认) + Paraformer-zh (词级时间戳)"
+description: "SenseVoice-Small — 中文 ASR + 情感/事件检测"
 gpu_role: shared
 model_type: asr
 type: asr_server
