@@ -9,7 +9,7 @@ vllm:
   served_name: qwen3-vl-4b
   port: 8002
   conda_env: qwen3-vl-4b-vllm
-  max_model_len: 32768
+  max_model_len: 65536
   gpu_memory_utilization: 0.30
   max_num_seqs: 8
   kv_cache_dtype: fp8
@@ -19,4 +19,8 @@ vllm:
   extra_flags: >-
     --trust-remote-code
     --enable-chunked-prefill
+    --enable-prefix-caching
+    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 8]}'
+    --async-scheduling
+    --attention-backend flashinfer
     --max-num-batched-tokens 4096
