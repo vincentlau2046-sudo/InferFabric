@@ -20,4 +20,4 @@ from .health import (
     check_http_status,
 )
 
-__version__ = "4.7.1"
+# __version__ centralized at top of file
