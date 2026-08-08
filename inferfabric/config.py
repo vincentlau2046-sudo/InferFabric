@@ -363,6 +363,25 @@ class ModelConfig:
         return self.type == "asr_server" and self.asr is not None
 
     @property
+    def health_url(self) -> Optional[str]:
+        """Unified health URL accessor — reads backend-specific health_url or falls back to /health."""
+        if self.vllm:
+            return self.vllm.health_url or f"http://localhost:{self.vllm.port}/health"
+        if self.comfyui:
+            return self.comfyui.health_url or f"http://localhost:{self.comfyui.port}/health"
+        if self.tts:
+            return self.tts.health_url or f"http://localhost:{self.tts.port}/health"
+        if self.asr:
+            return self.asr.health_url or f"http://localhost:{self.asr.port}/health"
+        if self.ollama_daemon:
+            return self.ollama_daemon.health_url or f"http://localhost:{self.ollama_daemon.port}/health"
+        if self.ollama:
+            return f"http://localhost:11434/api/tags"
+        if self.ollama_cpp:
+            return f"http://localhost:{self.ollama_cpp.port}/health"
+        return f"http://localhost:{self.port}/health"
+
+    @property
     def is_ollama_daemon(self) -> bool:
         return self.type == "ollama_daemon" and self.ollama_daemon is not None
 

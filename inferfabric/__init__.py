@@ -1,4 +1,6 @@
-"""InferFabric — Single-User LLM Hub (v4.6.0)"""
+"""InferFabric — Single-User LLM Hub (v4.7.2)"""
+
+__version__ = "4.7.2"
 
 from .manager import ModelManager, ProfileManager
 from .state import GPUMode, ServiceState, ProfileState, StateDB, validate_transition
