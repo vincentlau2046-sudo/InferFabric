@@ -1348,6 +1348,7 @@ def main():
     finally:
         log.info("Closing server...")
         watchdog.stop()
+        token_collector.stop()
         try:
             server.server_close()
         except Exception:

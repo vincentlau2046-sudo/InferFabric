@@ -92,7 +92,7 @@ class ProxyManager:
             sn = m.served_name
             if sn and sn != m.name:
                 self._metrics_name_map[sn] = m.name
-        self.metrics = MetricsAggregator(db=self._reqlog_db, replay_hours=24.0,
+        self.metrics = MetricsAggregator(db=self._reqlog_db, replay_hours=720.0,
                                           model_name_map=self._metrics_name_map)
         self._agg_thread = AggregatorThread(self.metrics, self._agg_queue)
         self._agg_thread.start()
