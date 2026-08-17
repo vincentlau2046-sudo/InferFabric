@@ -36,5 +36,9 @@ class EngineAdapter(ABC):
     def get_metrics_flags(self, model: ModelConfig) -> list[str]:
         return []
 
+    def set_process_manager(self, proc) -> None:
+        """Inject ProcessManager reference for lifecycle delegation."""
+        self._proc = proc
+
     def fetch_engine_metrics(self, model: ModelConfig) -> dict | None:
         return None

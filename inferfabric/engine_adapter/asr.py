@@ -42,7 +42,7 @@ class ASRAdapter(EngineAdapter):
     def start(self, model: ModelConfig) -> dict:
         """Start asr via ProcessManager delegation."""
         if self._proc is None:
-            raise RuntimeError("ProcessManager not set — call set_process_manager() first")
+            raise RuntimeError("ProcessManager not set — call inject ._proc on the adapter instance first")
         cfg = getattr(model, 'asr')
         return self._proc.start_asr_server(cfg)
 

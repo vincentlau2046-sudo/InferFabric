@@ -203,7 +203,7 @@ class ProcessManager:
 
         if port:
             try:
-                wait_gpu_free(port=port)
+                wait_gpu_free()
             except Exception:
                 pass
         self._set_sglang_pid(None)

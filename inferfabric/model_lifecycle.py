@@ -63,7 +63,7 @@ class ModelLifecycle:
         from inferfabric.engine_adapter import get_adapter
         try:
             adapter = get_adapter(model.type)
-            adapter._proc = self._proc
+            adapter.set_process_manager(self._proc)
             return adapter.start(model)
         except KeyError:
             return {"status": "error", "message": f"Unknown model type: {model.type}"}
@@ -307,7 +307,7 @@ class ModelLifecycle:
         from inferfabric.engine_adapter import get_adapter
         try:
             adapter = get_adapter(model.type)
-            adapter._proc = self._proc
+            adapter.set_process_manager(self._proc)
             adapter.stop(model)
         except KeyError:
             log.warning("Unknown model type %s — cannot stop", model.type)
