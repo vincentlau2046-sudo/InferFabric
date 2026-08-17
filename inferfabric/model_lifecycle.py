@@ -60,21 +60,12 @@ class ModelLifecycle:
           {"status": "healthy"/"started"/"ok", ...} on success,
           {"status": "error"/"timeout", ...} on failure.
         """
-        if model.is_vllm:
-            return self._proc.start_vllm(model.vllm)
-        elif model.is_comfyui:
-            return self._proc.start_comfyui(model.comfyui)
-        elif model.is_tts_server:
-            return self._proc.start_tts_server(model.tts)
-        elif model.is_asr_server:
-            return self._proc.start_asr_server(model.asr)
-        elif model.is_ollama_daemon:
-            return {"status": "ok", "message": "Ollama daemon external — verify with 'ollama serve'"}
-        elif model.is_ollama:
-            return self._start_ollama_model(model)
-        elif model.is_ollama_cpp:
-            return self._proc.start_ollama_cpp(model.ollama_cpp, model_type=model.model_type or "")
-        else:
+        from inferfabric.engine_adapter import get_adapter
+        try:
+            adapter = get_adapter(model.type)
+            adapter._proc = self._proc
+            return adapter.start(model)
+        except KeyError:
             return {"status": "error", "message": f"Unknown model type: {model.type}"}
 
     def _start_ollama_model(self, model: ModelConfig) -> dict:
@@ -181,6 +172,8 @@ class ModelLifecycle:
             asr_port = None
             if model.is_vllm:
                 ports.append(model.vllm.port)
+            elif model.is_sglang:
+                ports.append(model.sglang.port)
             elif model.is_comfyui:
                 ports.append(model.comfyui.port)
             elif model.is_ollama_cpp:
@@ -311,20 +304,13 @@ class ModelLifecycle:
 
     def _stop_model_process(self, model: ModelConfig, name: str) -> None:
         """Dispatch process stop by model type. Shared helper for stop_service and stop_independent."""
-        if model.is_vllm:
-            self._proc.stop_vllm(port=model.vllm.port)
-        elif model.is_comfyui:
-            self._proc.stop_comfyui_with_config(model.comfyui, port=model.comfyui.port)
-        elif model.is_tts_server:
-            self._proc.stop_tts_server(port=model.tts.port)
-        elif model.is_asr_server:
-            self._proc.stop_asr_server(port=model.asr.port)
-        elif model.is_ollama:
-            log.info("Unregistering Ollama model %s", name)
-        elif model.is_ollama_daemon:
-            log.info("Ollama daemon stop: use 'ollama serve' externally")
-        elif model.is_ollama_cpp:
-            self._proc.stop_ollama_cpp(port=model.ollama_cpp.port)
+        from inferfabric.engine_adapter import get_adapter
+        try:
+            adapter = get_adapter(model.type)
+            adapter._proc = self._proc
+            adapter.stop(model)
+        except KeyError:
+            log.warning("Unknown model type %s — cannot stop", model.type)
 
     # ── Switch (internal helpers) ─────────────────────────────────
 
@@ -457,6 +443,8 @@ class ModelLifecycle:
                 if m:
                     if m.is_vllm:
                         ports.append(("vllm", m.vllm.port))
+                    elif m.is_sglang:
+                        ports.append(("sglang", m.sglang.port))
                     elif m.is_comfyui:
                         ports.append(("comfyui", m.comfyui.port))
                         comfyui_cfg = m.comfyui
@@ -467,6 +455,7 @@ class ModelLifecycle:
             self._proc.stop_all(
                 comfyui_cfg=comfyui_cfg,
                 vllm_ports=[p for t, p in ports if t == "vllm"],
+                sglang_ports=[p for t, p in ports if t == "sglang"],
                 comfyui_port=comfyui_cfg.port if comfyui_cfg else None,
                 tts_port=tts_port,
                 asr_port=asr_port,

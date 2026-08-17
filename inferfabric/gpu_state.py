@@ -66,8 +66,6 @@ class GpuStateMachine:
             status = self._health.check_model(m)
             if status in ("✅", "⏳"):
                 actual.append(name)
-            elif m.is_vllm and status == "❌" and self._port_pid(m.vllm.port) is not None:
-                actual.append(name)
         return actual
 
     def _derive_gpu_mode(self, actual_services: list[str]) -> GPUMode:
@@ -206,8 +204,13 @@ class GpuStateMachine:
         return model.name in self.state.get_active_services()
 
     def _check_model_health(self, model: ModelConfig) -> bool:
-        """Check if a specific model's service is healthy."""
-        return self._health.check_model(model) == "✅"
+        """Check if a specific model's service is healthy via adapter."""
+        from inferfabric.engine_adapter import get_adapter
+        try:
+            adapter = get_adapter(model.type)
+            return adapter.check_health(model) == "✅"
+        except KeyError:
+            return self._health.check_model(model) == "✅"
 
     # ── Reconcile ─────────────────────────────────────────────────
 
@@ -261,7 +264,12 @@ class GpuStateMachine:
             if not m:
                 dead_services.append(svc_name)
                 continue
-            health = self._health.check_model(m)
+            from inferfabric.engine_adapter import get_adapter
+            try:
+                adapter = get_adapter(m.type)
+                health = adapter.check_health(m)
+            except KeyError:
+                health = self._health.check_model(m)
             if health == "❌":
                 dead_services.append(svc_name)
 

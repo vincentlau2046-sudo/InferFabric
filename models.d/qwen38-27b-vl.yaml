@@ -1,25 +1,24 @@
-name: qwen36-27b-vl
-description: "Qwen3.6-27B NVFP4 + MTP + Vision (Huihui abliterated)"
+name: qwen38-27b-vl
+description: "Qwen3.8-27B NVFP4 + MTP + Vision (Unsloth)"
 gpu_role: exclusive
 model_type: vl
 quantization: NVFP4
 peak_vram_mb: 28000
 
 vllm:
-  model_dir: Huihui-Qwen3.6-27B-abliterated-NVFP4-MTP
-  served_name: qwen36-27b-vl
-  port: 8003
-  conda_env: qwen36-27b-vllm-vl
+  model_dir: Qwen3.8-27B-NVFP4
+  served_name: qwen38-27b-vl
+  port: 8008
+  conda_env: Qwen3.8-27B-VL
   max_model_len: 131072
-  gpu_memory_utilization: 0.88
-  max_num_seqs: 8
+  gpu_memory_utilization: 0.93
+  max_num_seqs: 4
   kv_cache_dtype: fp8
   speculative_config: '{"method": "mtp", "num_speculative_tokens": 2}'
-  # prometheus metrics: requires vLLM >= 0.25 (add --prometheus-port 8004 when available)
   extra_flags: >-
-    --max-num-batched-tokens 8192
+    --max-num-batched-tokens 4096
     --enable-prefix-caching
-    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 8, 16, 32]}'
+    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 8]}'
     --enable-chunked-prefill
     --async-scheduling
     --enable-auto-tool-choice

@@ -116,12 +116,13 @@ class ModelManager:
     def list_models(self) -> list[dict]:
         """List all available models from models.d/. Skips ollama_daemon entries."""
         def _get_context(m):
-            """Get context window in K units."""
-            if m.vllm:
-                return m.vllm.max_model_len
-            if m.ollama_cpp:
-                return m.ollama_cpp.context_size
-            return None
+            """Get context window via engine adapter."""
+            from inferfabric.engine_adapter import get_adapter
+            try:
+                adapter = get_adapter(m.type)
+                return adapter.get_context_window(m)
+            except KeyError:
+                return None
 
         return [
             {

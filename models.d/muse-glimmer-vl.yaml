@@ -1,0 +1,27 @@
+name: muse-glimmer-vl
+description: "Meta Muse Glimmer 30B NVFP4 VL via SGLang (RadixAttention)"
+gpu_role: exclusive
+model_type: vl
+type: sglang
+quantization: NVFP4+MXFP8
+peak_vram_mb: 20000
+startup_timeout: 480
+
+sglang:
+  model_dir: Muse-Glimmer-NVFP4
+  served_name: muse-glimmer
+  port: 8006
+  conda_env: ""
+  mem_fraction: 0.85
+  docker_image: lmsysorg/sglang:dev-muse-glimmer
+  context_length: 131072
+  max_running_requests: 8
+  cpu_offload_gb: 16
+  enable_lmcache: true
+  language_model_only: true
+  reasoning_parser: muse
+  tool_call_parser: muse
+  extra_flags: ""
+  extra_env:
+    SGLANG_HEALTH_CHECK_TIMEOUT: "600"
+    SGLANG_DISABLE_CUDA_GRAPH: "0"

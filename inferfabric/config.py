@@ -98,6 +98,92 @@ class VLLMConfig:
 
 
 @dataclass
+class SGLangConfig:
+    """SGLang inference server config. RadixAttention + NVFP4 native support.
+
+    Structured fields are emitted as CLI flags in build_cmd().
+    Any flag not covered should go into extra_flags.
+    """
+    model_dir: str
+    served_name: str
+    port: int
+    conda_env: str = ""
+    mem_fraction: float = 0.85
+    docker_image: str = "lmsysorg/sglang:latest"
+
+    # -- structured flags (migrated from extra_flags) --
+    context_length: int | None = None
+    max_running_requests: int = 8
+    cpu_offload_gb: int = 0
+    enable_lmcache: bool = False
+    language_model_only: bool = False
+    reasoning_parser: str = ""
+    tool_call_parser: str = ""
+
+    extra_flags: str = ""
+    startup_timeout: int = 0
+    extra_env: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def health_url(self) -> str:
+        return f"http://localhost:{self.port}/health"
+
+    def build_cmd(self) -> list[str]:
+        """Build SGLang serve command with structured fields + extra_flags."""
+        model_path = MODEL_BASE / self.model_dir
+        flags = [
+            "sglang", "serve", str(model_path),
+            "--served-model-name", self.served_name,
+            "--mem-fraction-static", str(self.mem_fraction),
+            "--port", str(self.port),
+            "--host", "0.0.0.0",
+            "--tp-size", "1",
+        ]
+        if self.max_running_requests:
+            flags.extend(["--max-running-requests", str(self.max_running_requests)])
+        if self.context_length:
+            flags.extend(["--context-length", str(self.context_length)])
+        if self.language_model_only:
+            flags.append("--language-model-only")
+        if self.reasoning_parser:
+            flags.extend(["--reasoning-parser", self.reasoning_parser])
+        if self.tool_call_parser:
+            flags.extend(["--tool-call-parser", self.tool_call_parser])
+        if self.cpu_offload_gb > 0:
+            flags.extend(["--cpu-offload-gb", str(self.cpu_offload_gb)])
+        if self.enable_lmcache:
+            flags.append("--enable-lmcache")
+        if self.extra_flags:
+            import shlex
+            flags.extend(shlex.split(self.extra_flags))
+        return flags
+
+    def build_docker_cmd(self) -> list[str]:
+        """Build docker run command for SGLang serving."""
+        import shlex
+        model_path = MODEL_BASE / self.model_dir
+        container_cmd = self.build_cmd()
+        docker_flags = [
+            "docker", "run", "--rm",
+            "--gpus", "all",
+            "--ipc=host",
+            "--ulimit", "memlock=-1",
+            "--ulimit", "stack=67108864",
+            "-p", f"{self.port}:{self.port}",
+            "-v", f"{model_path}:{model_path}",
+            "-v", f"{MODEL_BASE}:/models",
+            "-v", f"{Path.home() / '.cache/huggingface'}:/root/.cache/huggingface",
+            "--name", f"sglang-{self.served_name}",
+        ]
+        if self.extra_env:
+            for k, v in self.extra_env.items():
+                docker_flags.extend(["-e", f"{k}={v}"])
+        # Replace sglang binary path with full path inside container
+        container_cmd[0] = "/usr/local/bin/sglang"
+        return docker_flags + [self.docker_image] + container_cmd
+
+
+@dataclass
 class ComfyUIConfig:
     """ComfyUI configuration. Supports both native Python and legacy script modes."""
     conda_env: str = "comfyui"
@@ -250,8 +336,9 @@ class ModelConfig:
             return self.modality
         return MODEL_TYPE_TO_MODALITY.get(self.model_type, "text")
 
-    type: str = "vllm"  # 'vllm' | 'comfyui' | 'ollama' | 'ollama_cpp' | 'ollama_daemon' | 'tts_server' | 'asr_server'
+    type: str = "vllm"  # 'vllm' | 'sglang' | 'comfyui' | 'ollama' | 'ollama_cpp' | 'ollama_daemon' | 'tts_server' | 'asr_server'
     vllm: Optional[VLLMConfig] = None
+    sglang: Optional[SGLangConfig] = None
     comfyui: Optional[ComfyUIConfig] = None
     ollama: Optional[OllamaModelConfig] = None
     ollama_cpp: Optional[OllamaCppConfig] = None
@@ -297,6 +384,8 @@ class ModelConfig:
         """Unified port accessor — eliminates per-backend if/else in proxy."""
         if self.vllm:
             return self.vllm.port
+        if self.sglang:
+            return self.sglang.port
         if self.tts:
             return self.tts.port
         if self.asr:
@@ -316,6 +405,8 @@ class ModelConfig:
         """Unified served_name for proxy routing."""
         if self.vllm:
             return self.vllm.served_name
+        if self.sglang:
+            return self.sglang.served_name
         if self.ollama:
             return self.ollama.model_ref
         if self.ollama_cpp:
@@ -343,6 +434,10 @@ class ModelConfig:
         return self.type == "vllm" and self.vllm is not None
 
     @property
+    def is_sglang(self) -> bool:
+        return self.type == "sglang" and self.sglang is not None
+
+    @property
     def is_comfyui(self) -> bool:
         return self.type == "comfyui" and self.comfyui is not None
 
@@ -367,6 +462,8 @@ class ModelConfig:
         """Unified health URL accessor — reads backend-specific health_url or falls back to /health."""
         if self.vllm:
             return self.vllm.health_url or f"http://localhost:{self.vllm.port}/health"
+        if self.sglang:
+            return self.sglang.health_url or f"http://localhost:{self.sglang.port}/health"
         if self.comfyui:
             return self.comfyui.health_url or f"http://localhost:{self.comfyui.port}/health"
         if self.tts:
@@ -451,6 +548,25 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             # Parse startup_timeout from vllm section (overrides global)
             if "startup_timeout" in vllm_raw:
                 vllm_cfg.startup_timeout = int(vllm_raw["startup_timeout"])
+
+        # Parse sglang config if present
+        sglang_cfg = None
+        if raw.get("sglang"):
+            sglang_raw = dict(raw["sglang"])
+            extra_env = sglang_raw.pop("extra_env", {}) or {}
+            if not isinstance(extra_env, dict):
+                log.warning("extra_env is not a dict in %s, ignoring", model_name)
+                extra_env = {}
+            for k in list(extra_env.keys()):
+                if k in _PROTECTED_ENV_KEYS:
+                    raise ConfigError(
+                        f"extra_env key '{k}' is protected and cannot be overridden "
+                        f"in model '{model_name}'"
+                    )
+                extra_env[k] = str(extra_env[k])
+            sglang_cfg = SGLangConfig(**sglang_raw, extra_env=extra_env)
+            if "startup_timeout" in sglang_raw:
+                sglang_cfg.startup_timeout = int(sglang_raw["startup_timeout"])
 
         # Parse comfyui config if present
         comfy_cfg = None
@@ -569,6 +685,7 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             gpu_role=mode_val,
             type=model_type,
             vllm=vllm_cfg,
+            sglang=sglang_cfg,
             comfyui=comfy_cfg,
             ollama=ollama_cfg,
             ollama_cpp=ollama_cpp_cfg,

@@ -49,21 +49,9 @@ def check_model_health(model) -> str:
     Returns:
         "✅" — healthy, "⏳" — starting, "❌" — unhealthy, "?" — unknown type
     """
-    if model.is_vllm:
-        return check_http_status(f"http://localhost:{model.vllm.port}/health")
-    elif model.is_comfyui:
-        url = model.comfyui.health_url or f"http://localhost:{model.comfyui.port}/system_stats"
-        return check_http_status(url)
-    elif model.is_ollama_daemon:
-        return check_http_status(f"http://localhost:{model.ollama_daemon.port}/api/tags")
-    elif model.is_ollama:
-        return check_http_status("http://localhost:11434/api/tags")
-    elif model.is_tts_server:
-        url = model.tts.health_url or f"http://localhost:{model.tts.port}/health"
-        return check_http_status(url)
-    elif model.is_asr_server:
-        url = model.asr.health_url or f"http://localhost:{model.asr.port}/health"
-        return check_http_status(url)
-    elif model.is_ollama_cpp:
-        return check_http_status(f"http://localhost:{model.ollama_cpp.port}/health")
-    return "?"
+    from inferfabric.engine_adapter import get_adapter
+    try:
+        adapter = get_adapter(model.type)
+        return adapter.check_health(model)
+    except KeyError:
+        return "?"

@@ -4,6 +4,7 @@
 presets:
   baidu-qianfan:
     display_name: "百度千帆 Coding Plan"
+    timeout: 600
     icon: "🟦"
     openai_base: "https://qianfan.baidubce.com/v2/coding"
     anthropic_base: "https://qianfan.baidubce.com/anthropic/coding/v1"

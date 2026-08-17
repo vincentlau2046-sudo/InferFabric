@@ -32,6 +32,7 @@ from .config import (
     HEALTH_CHECK_TIMEOUT,
     STOP_SIGTERM_TIMEOUT,
     VLLMConfig,
+    SGLangConfig,
     ComfyUIConfig,
     TTSConfig,
     ASRConfig,
@@ -81,6 +82,19 @@ class ProcessManager:
         self._state.set("comfyui_pid", str(pid) if pid else "")
 
     @property
+    def sglang_pid(self) -> Optional[int]:
+        pid_str = self._state.get("sglang_pid")
+        if pid_str:
+            try:
+                return int(pid_str)
+            except ValueError:
+                pass
+        return None
+
+    def _set_sglang_pid(self, pid: Optional[int]):
+        self._state.set("sglang_pid", str(pid) if pid else "")
+
+    @property
     def tts_pid(self) -> Optional[int]:
         pid_str = self._state.get("tts_pid")
         if pid_str:
@@ -105,6 +119,64 @@ class ProcessManager:
 
     def _set_asr_pid(self, pid: Optional[int]):
         self._state.set("asr_pid", str(pid) if pid else "")
+
+    # ─── SGLang ─────────────────────────────────────────────────
+
+    def start_sglang(self, cfg: SGLangConfig) -> dict:
+        """Start SGLang via Docker container."""
+        log_file = self._log_dir / f"sglang_{cfg.served_name}.log"
+        container_name = f"sglang-{cfg.served_name}"
+
+        cmd = cfg.build_docker_cmd()
+        env = os.environ.copy()
+
+        log.info("Starting SGLang container: %s", " ".join(cmd))
+        with open(log_file, "w") as f:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=f,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                env=env,
+            )
+        pgid = os.getpgid(proc.pid)
+        self._set_sglang_pid(pgid)
+        log.info("SGLang docker PID=%s PGID=%s container=%s", proc.pid, pgid, container_name)
+
+        health_timeout = cfg.startup_timeout or HEALTH_CHECK_TIMEOUT
+        start = time.time()
+        while time.time() - start < health_timeout:
+            time.sleep(2)
+            if proc.poll() is not None:
+                try:
+                    err = log_file.read_text()[-2000:]
+                except Exception:
+                    err = ""
+                return {"status": "error", "message": "SGLang container exited", "log": str(log_file)}
+            if check_http_status(f"http://localhost:{cfg.port}/health", timeout=2) == "✅":
+                return {"status": "healthy", "message": f"SGLang healthy on port {cfg.port}"}
+        self.stop_sglang(port=cfg.port, container_name=container_name)
+        return {"status": "timeout", "message": f"SGLang didn't become healthy within {health_timeout}s"}
+
+    def stop_sglang(self, port: Optional[int] = None, container_name: Optional[str] = None) -> dict:
+        """Stop SGLang container. docker stop → docker rm."""
+        if container_name:
+            subprocess.run(["docker", "stop", "-t", "10", container_name],
+                          timeout=30, check=False, capture_output=True)
+            subprocess.run(["docker", "rm", "-f", container_name],
+                          timeout=10, check=False, capture_output=True)
+            log.info("SGLang container %s stopped", container_name)
+
+        if port:
+            try:
+                wait_gpu_free(port=port)
+            except Exception:
+                pass
+        self._set_sglang_pid(None)
+        return {"status": "ok", "message": "SGLang container stopped"}
+
+    def is_sglang_alive(self, port: int) -> bool:
+        return check_http_status(f"http://localhost:{port}/health", timeout=2) == "✅"
 
     # ─── vLLM ────────────────────────────────────────────────────
 
@@ -207,6 +279,14 @@ class ProcessManager:
                 return {"status": "timeout", "message": f"vLLM didn't become healthy within {health_timeout}s"}
 
     def stop_vllm(self, port: Optional[int] = None) -> dict:
+        """Stop vLLM using process group kill. SIGTERM → wait → SIGKILL entire group.
+
+        When ``port`` is supplied, also does port-based cleanup after the tracked
+        PID path completes (or immediately if the tracked PID is dead).  This
+        provides defence-in-depth: if the tracked PID drifts (e.g. stopped via
+        external signal), port matching catches the leftover process.
+        """
+        pid = self.vllm_pid
         """Stop vLLM using process group kill. SIGTERM → wait → SIGKILL entire group.
 
         When ``port`` is supplied, also does port-based cleanup after the tracked
@@ -1019,6 +1099,7 @@ class ProcessManager:
         comfyui_port: Optional[int] = None,
         tts_port: Optional[int] = None,
         asr_port: Optional[int] = None,
+        sglang_ports: Optional[list[int]] = None,
     ) -> dict:
         """Stop all services: ComfyUI first, then vLLM, then TTS, then ASR.
 
@@ -1044,6 +1125,10 @@ class ProcessManager:
             results["asr"] = self.stop_asr_server(port=asr_port)
         else:
             results["asr"] = self.stop_asr_server()
+        if sglang_ports:
+            for p in sglang_ports:
+                self.stop_sglang(port=p)
+            results["sglang"] = {"status": "ok", "ports": sglang_ports}
         return results
 
     def force_kill_all(self) -> dict:
@@ -1058,6 +1143,8 @@ class ProcessManager:
 
         subprocess.run(["pkill", "-9", "-f", "vllm serve"], timeout=5, check=False)
         subprocess.run(["pkill", "-9", "-f", "VLLM::EngineCore"], timeout=5, check=False)
+        subprocess.run(["pkill", "-9", "-f", "sglang serve"], timeout=5, check=False)
+        subprocess.run(["pkill", "-9", "-f", "sglang.launch_server"], timeout=5, check=False)
         for port in [8000, 8001, 8002]:
             subprocess.run(["pkill", "-9", "-f", f"vllm.*{port}"], timeout=5, check=False)
 

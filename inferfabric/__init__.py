@@ -1,23 +1,7 @@
-"""InferFabric — Single-User LLM Hub (v4.7.2)"""
+"""inferfabric — Unified AI service orchestration layer.
 
-__version__ = "4.7.2"
-
-from .manager import ModelManager, ProfileManager
-from .state import GPUMode, ServiceState, ProfileState, StateDB, validate_transition
-from .gpu_lock import GPULock
-from .process_manager import ProcessManager
-from .config import (
-    VLLMConfig,
-    ComfyUIConfig,
-    ModelConfig,
-    load_models,
-    MODELS_DIR,
-)
-from .health import (
-    gpu_used_mb,
-    gpu_total_mb,
-    wait_http,
-    check_http_status,
-)
-
+v5.0.0: Engine Adapter pattern — all model types routed through
+registry-based adapters. Removed all if/elif dispatch chains.
+"""
+__version__ = "5.0.0"
 # __version__ centralized at top of file

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.request import urlopen
 
-from .proxy.metrics import parse_prometheus_text
+from inferfabric.prometheus import parse_prometheus_text
 
 log = logging.getLogger("inferfabric.token_stats")
 
@@ -34,8 +34,8 @@ class TokenStatsCollector:
     # --- 端口发现 ---
 
     def _get_active_ports(self) -> dict[int, str]:
-        """Return {port: model_name} for active vllm services.
-        Reads from manager.status() — services_info where type=='vllm' and port exists."""
+        """Return {port: model_name} for active metric-capable services.
+        Supports vllm and sglang engines."""
         mapping = {}
         if self.manager_ref is None:
             return mapping
@@ -43,7 +43,7 @@ class TokenStatsCollector:
             mgr = self.manager_ref()
             status = mgr.status()
             for svc_name, info in status.get("services_info", {}).items():
-                if info.get("type") == "vllm" and info.get("port"):
+                if info.get("type") in ("vllm", "sglang") and info.get("port"):
                     mapping[info["port"]] = svc_name
         except Exception as e:
             log.warning("Failed to get active ports: %s", e)
@@ -51,8 +51,32 @@ class TokenStatsCollector:
 
     # --- 指标拉取 ---
 
-    def _fetch_port_metrics(self, port: int) -> dict | None:
-        """Fetch Prometheus metrics from a vLLM port. Return dict or None on failure."""
+    def _fetch_port_metrics(self, port: int, engine_type: str = "vllm") -> dict | None:
+        """Fetch Prometheus metrics using engine adapter.
+
+        Falls back to engine-agnostic raw fetch if adapter is unavailable.
+        """
+        from inferfabric.engine_adapter import get_adapter
+        try:
+            adapter = get_adapter(engine_type)
+            # Build a minimal ModelConfig surrogate so the adapter can read the port
+            from inferfabric.config import ModelConfig
+            dummy = ModelConfig(name="", type=engine_type, gpu_role="exclusive")
+            if engine_type == "sglang":
+                from inferfabric.config import SGLangConfig
+                dummy.sglang = SGLangConfig(model_dir="", served_name="", port=port)
+            elif engine_type == "vllm":
+                from inferfabric.config import VLLMConfig
+                dummy.vllm = VLLMConfig(model_dir="", served_name="", port=port,
+                                        conda_env="", max_model_len=4096,
+                                        gpu_memory_utilization=0.9)
+            result = adapter.fetch_engine_metrics(dummy)
+            if result:
+                return result
+        except Exception as e:
+            log.debug("Adapter metrics fetch failed for %s port %d: %s", engine_type, port, e)
+
+        # Fallback: engine-agnostic raw scrape (works for any Prometheus endpoint)
         try:
             url = f"http://127.0.0.1:{port}/metrics"
             with urlopen(url, timeout=10) as resp:
@@ -61,11 +85,9 @@ class TokenStatsCollector:
             log.warning("Metrics fetch failed for port %d: %s", port, e)
             return None
 
-        gauges, counters, histos = parse_prometheus_text(text)
-
+        _gauges, counters, histos = parse_prometheus_text(text)
         prompt_h = histos.get("vllm:request_prompt_tokens")
         gen_h = histos.get("vllm:request_generation_tokens")
-        # parse_prometheus_text strips the _total suffix, so the key is without _total
         req_total = counters.get("vllm:num_requests_completed")
 
         result = {}
@@ -75,7 +97,6 @@ class TokenStatsCollector:
             result["gen_sum"] = int(gen_h["sum"])
         if req_total is not None:
             result["req_total"] = int(req_total)
-
         return result if result else None
 
     # --- Delta 计算 ---
@@ -213,13 +234,26 @@ class TokenStatsCollector:
         with self._lock:
             return dict(self._state)
 
+    def _get_port_engine(self, port: int) -> str:
+        """Return engine type for a given port by checking manager status."""
+        try:
+            mgr = self.manager_ref()
+            status = mgr.status()
+            for _name, info in status.get("services_info", {}).items():
+                if info.get("port") == port and info.get("type") in ("vllm", "sglang"):
+                    return info["type"]
+        except Exception:
+            pass
+        return "vllm"
+
     # --- 采集循环 ---
 
     def _collect_once(self):
         """Single collection cycle."""
         ports = self._get_active_ports()
         for port, model_name in ports.items():
-            current = self._fetch_port_metrics(port)
+            engine_type = self._get_port_engine(port)
+            current = self._fetch_port_metrics(port, engine_type)
             if current is None:
                 continue
             delta = self._compute_deltas(port, current)
