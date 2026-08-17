@@ -36,7 +36,7 @@ class OllamaAdapter(EngineAdapter):
         return self._proc._start_ollama_model(model)
 
     def stop(self, model: ModelConfig) -> dict:
-        from inferfabric import log
+        import logging; log = logging.getLogger("inferfabric.engine_adapter.ollama")
         log.info("Unregistering Ollama model %s", model.name)
         return {"status": "ok", "message": "ollama model unregistered"}
 
@@ -68,7 +68,7 @@ class OllamaDaemonAdapter(EngineAdapter):
         return {"status": "ok", "message": "Ollama daemon external — verify with 'ollama serve'"}
 
     def stop(self, model: ModelConfig) -> dict:
-        from inferfabric import log
+        import logging; log = logging.getLogger("inferfabric.engine_adapter.ollama")
         log.info("Ollama daemon stop: use 'ollama serve' externally")
         return {"status": "ok", "message": "ollama daemon is external"}
 

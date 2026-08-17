@@ -172,7 +172,6 @@ class ProcessManager:
 
         Falls back to scanning running containers if no name is tracked.
         """
-        import subprocess
         if not container_name:
             container_name = self.sglang_container
         if not container_name:
