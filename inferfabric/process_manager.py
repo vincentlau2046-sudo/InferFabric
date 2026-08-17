@@ -95,6 +95,14 @@ class ProcessManager:
         self._state.set("sglang_pid", str(pid) if pid else "")
 
     @property
+    def sglang_container(self) -> Optional[str]:
+        c = self._state.get("sglang_container")
+        return c or None
+
+    def _set_sglang_container(self, name: Optional[str]):
+        self._state.set("sglang_container", name or "")
+
+    @property
     def tts_pid(self) -> Optional[int]:
         pid_str = self._state.get("tts_pid")
         if pid_str:
@@ -141,6 +149,7 @@ class ProcessManager:
             )
         pgid = os.getpgid(proc.pid)
         self._set_sglang_pid(pgid)
+        self._set_sglang_container(container_name)
         log.info("SGLang docker PID=%s PGID=%s container=%s", proc.pid, pgid, container_name)
 
         health_timeout = cfg.startup_timeout or HEALTH_CHECK_TIMEOUT
@@ -159,7 +168,32 @@ class ProcessManager:
         return {"status": "timeout", "message": f"SGLang didn't become healthy within {health_timeout}s"}
 
     def stop_sglang(self, port: Optional[int] = None, container_name: Optional[str] = None) -> dict:
-        """Stop SGLang container. docker stop → docker rm."""
+        """Stop SGLang container. docker stop → docker rm.
+
+        Falls back to scanning running containers if no name is tracked.
+        """
+        if not container_name:
+            container_name = self.sglang_container
+        if not container_name:
+            # Fallback: scan for sglang-* containers and stop any on this port
+            try:
+                import subprocess
+                r = subprocess.run(
+                    ["docker", "ps", "--filter", "name=sglang-", "--format", "{{.Names}}:{{.Ports}}"],
+                    timeout=10, capture_output=True, text=True, check=False
+                )
+                for line in r.stdout.strip().split("\n"):
+                    if not line:
+                        continue
+                    parts = line.split(":", 1)
+                    if len(parts) == 2:
+                        cname, cports = parts
+                        if str(port) in cports:
+                            container_name = cname
+                            log.info("Discovered SGLang container %s (port %d)", container_name, port)
+                            break
+            except Exception as e:
+                log.debug("Docker scan fallback failed: %s", e)
         if container_name:
             subprocess.run(["docker", "stop", "-t", "10", container_name],
                           timeout=30, check=False, capture_output=True)
@@ -173,6 +207,7 @@ class ProcessManager:
             except Exception:
                 pass
         self._set_sglang_pid(None)
+        self._set_sglang_container(None)
         return {"status": "ok", "message": "SGLang container stopped"}
 
     def is_sglang_alive(self, port: int) -> bool:
