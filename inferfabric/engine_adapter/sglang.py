@@ -47,14 +47,14 @@ class SGLangAdapter(EngineAdapter):
         if self._proc is None:
             raise RuntimeError("ProcessManager not set — call set_process_manager() first")
         cfg = getattr(model, 'sglang')
-        return self._proc.start_sglang(cfg)("Use ProcessManager.start_sglang()")
+        return self._proc.start_sglang(cfg)
 
     def stop(self, model: ModelConfig) -> dict:
         """Stop sglang via ProcessManager delegation."""
         if self._proc is None:
             raise RuntimeError("ProcessManager not set")
         cfg = getattr(model, 'sglang')
-        return self._proc.stop_sglang(port=cfg.port)("Use ProcessManager.stop_sglang()")
+        return self._proc.stop_sglang(port=cfg.port)
 
     def is_alive(self, model: ModelConfig) -> bool:
         return self.check_health(model) == "✅"

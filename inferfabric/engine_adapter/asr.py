@@ -44,14 +44,14 @@ class ASRAdapter(EngineAdapter):
         if self._proc is None:
             raise RuntimeError("ProcessManager not set — call set_process_manager() first")
         cfg = getattr(model, 'asr')
-        return self._proc.start_asr_server(cfg)("Use ProcessManager.start_asr_server()")
+        return self._proc.start_asr_server(cfg)
 
     def stop(self, model: ModelConfig) -> dict:
         """Stop asr via ProcessManager delegation."""
         if self._proc is None:
             raise RuntimeError("ProcessManager not set")
         cfg = getattr(model, 'asr')
-        return self._proc.stop_asr_server(port=cfg.port)("Use ProcessManager.stop_asr_server()")
+        return self._proc.stop_asr_server(port=cfg.port)
 
     def is_alive(self, model: ModelConfig) -> bool:
         return self.check_health(model) == "\u2705"

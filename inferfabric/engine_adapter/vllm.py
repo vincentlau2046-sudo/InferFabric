@@ -49,14 +49,14 @@ class VLLMAdapter(EngineAdapter):
         if self._proc is None:
             raise RuntimeError("ProcessManager not set — call set_process_manager() first")
         cfg = getattr(model, 'vllm')
-        return self._proc.start_vllm(cfg)("Use ProcessManager.start_vllm()")
+        return self._proc.start_vllm(cfg)
 
     def stop(self, model: ModelConfig) -> dict:
         """Stop vllm via ProcessManager delegation."""
         if self._proc is None:
             raise RuntimeError("ProcessManager not set")
         cfg = getattr(model, 'vllm')
-        return self._proc.stop_vllm(port=cfg.port)("Use ProcessManager.stop_vllm()")
+        return self._proc.stop_vllm(port=cfg.port)
 
     def is_alive(self, model: ModelConfig) -> bool:
         return self.check_health(model) == "\u2705"

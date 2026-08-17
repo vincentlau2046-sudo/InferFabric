@@ -44,14 +44,14 @@ class TTSAdapter(EngineAdapter):
         if self._proc is None:
             raise RuntimeError("ProcessManager not set — call set_process_manager() first")
         cfg = getattr(model, 'tts')
-        return self._proc.start_tts_server(cfg)("Use ProcessManager.start_tts_server()")
+        return self._proc.start_tts_server(cfg)
 
     def stop(self, model: ModelConfig) -> dict:
         """Stop tts via ProcessManager delegation."""
         if self._proc is None:
             raise RuntimeError("ProcessManager not set")
         cfg = getattr(model, 'tts')
-        return self._proc.stop_tts_server(port=cfg.port)("Use ProcessManager.stop_tts_server()")
+        return self._proc.stop_tts_server(port=cfg.port)
 
     def is_alive(self, model: ModelConfig) -> bool:
         return self.check_health(model) == "\u2705"

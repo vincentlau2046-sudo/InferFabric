@@ -43,14 +43,14 @@ class OllamaCppAdapter(EngineAdapter):
         if self._proc is None:
             raise RuntimeError("ProcessManager not set — call set_process_manager() first")
         cfg = getattr(model, 'ollama_cpp')
-        return self._proc.start_ollama_cpp(cfg)("Use ProcessManager.start_ollama_cpp()")
+        return self._proc.start_ollama_cpp(cfg)
 
     def stop(self, model: ModelConfig) -> dict:
         """Stop ollama_cpp via ProcessManager delegation."""
         if self._proc is None:
             raise RuntimeError("ProcessManager not set")
         cfg = getattr(model, 'ollama_cpp')
-        return self._proc.stop_ollama_cpp(port=cfg.port)("Use ProcessManager.stop_ollama_cpp()")
+        return self._proc.stop_ollama_cpp(port=cfg.port)
 
     def is_alive(self, model: ModelConfig) -> bool:
         return self.check_health(model) == "\u2705"
