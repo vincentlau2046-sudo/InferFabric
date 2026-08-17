@@ -424,8 +424,8 @@ class ModelLifecycle:
 
         # Capture services BEFORE reconcile — reconcile may clear gpu_mode
         # without clearing active_services, creating a state inconsistency.
-        from_services = list(self.state.get_active_services())
-        if current_mode == GPUMode.IDLE and not from_services:
+        from_services_pre = list(self.state.get_active_services())
+        if current_mode == GPUMode.IDLE and not from_services_pre:
             return {"status": "already_active", "model": "idle"}
 
         log.info("Reconciling state before idle switch")
@@ -436,13 +436,10 @@ class ModelLifecycle:
 
         t0 = time.time()
         # Re-read after reconcile, but keep pre-reconcile list as fallback
-        from_services_post = list(self.state.get_active_services())
-        if not from_services_post and from_services:
+        from_services = list(self.state.get_active_services())
+        if not from_services and from_services_pre:
             log.info("Reconcile cleared active_services; using pre-reconcile list")
-            from_services = from_services
-        else:
-            from_services = from_services_post
-        # Log the CURRENT gpu_mode (may have been flipped by reconcile)
+            from_services = from_services_pre
         log.info("Switch to idle from %s (gpu_mode=%s)", from_services, self.state.gpu_mode)
 
         try:
