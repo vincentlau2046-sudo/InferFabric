@@ -416,12 +416,18 @@ class ModelLifecycle:
         }
 
     def _switch_to_idle(self) -> dict:
-        """Stop all services (including GPU-independent models) and transition to idle."""
+        """Stop all services and transition to idle.  Captures service list
+        before reconcile to avoid the gpu_mode/active_services drift where
+        reconcile sets mode=IDLE but services are still in active_services.
+        """
         current_mode = self.state.gpu_mode
-        if current_mode == GPUMode.IDLE and not self.state.get_active_services():
+
+        # Capture services BEFORE reconcile — reconcile may clear gpu_mode
+        # without clearing active_services, creating a state inconsistency.
+        from_services = list(self.state.get_active_services())
+        if current_mode == GPUMode.IDLE and not from_services:
             return {"status": "already_active", "model": "idle"}
 
-        # P0-2: reconcile first to sync state before stopping
         log.info("Reconciling state before idle switch")
         self._gpu_state.reconcile()
 
@@ -429,8 +435,15 @@ class ModelLifecycle:
             return {"status": "error", "message": "GPU switch in progress (lock held)"}
 
         t0 = time.time()
-        from_services = list(self.state.get_active_services())
-        log.info("Switch to idle from %s (gpu_mode=%s)", from_services, current_mode)
+        # Re-read after reconcile, but keep pre-reconcile list as fallback
+        from_services_post = list(self.state.get_active_services())
+        if not from_services_post and from_services:
+            log.info("Reconcile cleared active_services; using pre-reconcile list")
+            from_services = from_services
+        else:
+            from_services = from_services_post
+        # Log the CURRENT gpu_mode (may have been flipped by reconcile)
+        log.info("Switch to idle from %s (gpu_mode=%s)", from_services, self.state.gpu_mode)
 
         try:
             # ── Stop GPU-bound services with port-based cleanup ──
