@@ -62,7 +62,7 @@ class SGLangAdapter(EngineAdapter):
     def get_metrics_flags(self, model: ModelConfig) -> list[str]:
         return ["--enable-metrics"]
 
-    def fech_engine_metrics(self, model: ModelConfig) -> dict | None:
+    def fetch_engine_metrics(self, model: ModelConfig) -> dict | None:
         from inferfabric.token_stats import parse_prometheus_text
         if not model.sglang:
             return None

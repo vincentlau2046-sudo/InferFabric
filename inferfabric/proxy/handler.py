@@ -1254,6 +1254,14 @@ def _validate_admin_token_safety():
 
 
 def main():
+    # Purge stale .pyc to prevent version-desync (INF-001649)
+    import shutil
+    pkg_dir = Path(__file__).resolve().parent.parent
+    pycache = pkg_dir / "__pycache__"
+    if pycache.is_dir():
+        shutil.rmtree(pycache, ignore_errors=True)
+        logging.getLogger("inferfabric").debug("Purged stale __pycache__: %s", pycache)
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
