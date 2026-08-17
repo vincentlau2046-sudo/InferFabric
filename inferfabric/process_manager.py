@@ -172,12 +172,12 @@ class ProcessManager:
 
         Falls back to scanning running containers if no name is tracked.
         """
+        import subprocess
         if not container_name:
             container_name = self.sglang_container
         if not container_name:
             # Fallback: scan for sglang-* containers and stop any on this port
             try:
-                import subprocess
                 r = subprocess.run(
                     ["docker", "ps", "--filter", "name=sglang-", "--format", "{{.Names}}:{{.Ports}}"],
                     timeout=10, capture_output=True, text=True, check=False
