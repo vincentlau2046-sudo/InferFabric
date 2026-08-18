@@ -460,22 +460,26 @@ class ModelConfig:
     @property
     def health_url(self) -> Optional[str]:
         """Unified health URL accessor — reads backend-specific health_url or falls back to /health."""
+        def _url(cfg, port_fallback: int) -> str:
+            if hasattr(cfg, 'health_url'):
+                return cfg.health_url or f"http://localhost:{port_fallback}/health"
+            return f"http://localhost:{port_fallback}/health"
         if self.vllm:
-            return self.vllm.health_url or f"http://localhost:{self.vllm.port}/health"
+            return _url(self.vllm, self.vllm.port)
         if self.sglang:
-            return self.sglang.health_url or f"http://localhost:{self.sglang.port}/health"
+            return _url(self.sglang, self.sglang.port)
         if self.comfyui:
-            return self.comfyui.health_url or f"http://localhost:{self.comfyui.port}/health"
+            return _url(self.comfyui, self.comfyui.port)
         if self.tts:
-            return self.tts.health_url or f"http://localhost:{self.tts.port}/health"
+            return _url(self.tts, self.tts.port)
         if self.asr:
-            return self.asr.health_url or f"http://localhost:{self.asr.port}/health"
+            return _url(self.asr, self.asr.port)
         if self.ollama_daemon:
-            return self.ollama_daemon.health_url or f"http://localhost:{self.ollama_daemon.port}/health"
+            return _url(self.ollama_daemon, self.ollama_daemon.port)
         if self.ollama:
             return f"http://localhost:11434/api/tags"
         if self.ollama_cpp:
-            return f"http://localhost:{self.ollama_cpp.port}/health"
+            return _url(self.ollama_cpp, self.ollama_cpp.port)
         return f"http://localhost:{self.port}/health"
 
     @property

@@ -92,7 +92,7 @@ class ModelWatchdog:
                     log.warning("Watchdog: restart of %s appears stuck (>120s), retrying", svc_name)
                     self._restarting.discard(svc_name)
 
-            health_url = model.health_url or f"http://localhost:{model.port}/health"
+            health_url = getattr(model, 'health_url', None) or f"http://localhost:{model.port}/health"
             status = check_http_status(health_url)
 
             with self._lock:
