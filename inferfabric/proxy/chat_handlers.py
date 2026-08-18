@@ -356,6 +356,15 @@ def _forward_request(handler, pm, target_port, body, stream):
                 handler._ttft_ms = (time.monotonic() - handler._req_start) * 1000
             try:
                 resp_body = resp.read()
+                # G-1b: 非流式 — 解析 JSON body 提取 usage
+                try:
+                    body_obj = json.loads(resp_body)
+                    usage = body_obj.get("usage", {})
+                    if usage:
+                        handler._usage["prompt_tokens"] = usage.get("prompt_tokens", 0) or 0
+                        handler._usage["completion_tokens"] = usage.get("completion_tokens", 0) or 0
+                except (json.JSONDecodeError, AttributeError):
+                    pass
             finally:
                 resp.close()
             headers_sent = True
