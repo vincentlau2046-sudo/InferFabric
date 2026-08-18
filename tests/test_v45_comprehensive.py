@@ -1135,7 +1135,7 @@ class TestDashboard:
 class TestPackageStructure:
     def test_version_format(self):
         from inferfabric import __version__
-        assert __version__.startswith("5.0")
+        assert __version__.startswith("5.2")
 
     def test_public_exports(self):
         from inferfabric.manager import ModelManager

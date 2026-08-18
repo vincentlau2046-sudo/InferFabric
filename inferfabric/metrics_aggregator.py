@@ -87,6 +87,36 @@ class MetricsAggregator:
         except Exception as e:
             log.warning("MetricsAggregator replay failed: %s", e)
 
+    def refresh_from_db(self, hours: float = 720.0):
+        """v5.2: Refresh memory deque from request_log.db.
+        
+        Solves data loss on restart: can replay up to 30 days.
+        """
+        if not self._db:
+            return
+        since = time.time() - hours * 3600
+        try:
+            rows = self._db.query_request_log(since=since, limit=500000)
+            if rows:
+                with self._lock:
+                    self._samples.clear()
+                    for r in rows:
+                        self._samples.append({
+                            "model": r.get("model", "unknown"),
+                            "status": r.get("status", 200),
+                            "ttft_ms": r.get("ttft_ms"),
+                            "tokens_in": r.get("tokens_in", 0),
+                            "tokens_out": r.get("tokens_out", 0),
+                            "duration_ms": r.get("duration_ms", 0),
+                            "error": r.get("error"),
+                            "timestamp": r.get("timestamp", 0),
+                            "route": r.get("route", "local"),
+                        })
+                log.info("MetricsAggregator refreshed %d rows from DB (%dh window)",
+                         len(rows), hours)
+        except Exception as e:
+            log.warning("MetricsAggregator refresh_from_db failed: %s", e)
+
     def record(self, entry):
         """记录一条请求日志（由 AggregatorThread 调用）
 

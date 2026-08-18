@@ -57,6 +57,9 @@ def _admin(fn):
 
 _GET_ROUTES = {
     "/":                        lambda h, pm: h._serve_dashboard(),
+    "/static/style.css":        lambda h, pm: h._serve_static("css"),
+    "/static/app.js":           lambda h, pm: h._serve_static("js"),
+    "/static/monitor.js":       lambda h, pm: h._serve_static("monitor"),
     "/health":                  lambda h, pm: h._send_json({"status": "ok", "gpu_mode": pm.mgr.gpu_mode}),
     "/status":                  lambda h, pm: h._send_json(pm.mgr.status()),
     "/models":                  lambda h, pm: h._send_json(pm.mgr.list_models()),
@@ -1288,6 +1291,11 @@ def main():
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
+
+    # v5.2: Unified hot-reload via ConfigReloader
+    from inferfabric.config_reloader import ConfigReloader
+    config_reloader = ConfigReloader(mgr, auth=mgr.auth, cloud=mgr.cloud)
+    config_reloader.setup()
 
     def watchdog_loop():
         while not shutdown_event.is_set():
