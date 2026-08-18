@@ -56,4 +56,11 @@ class ASRAdapter(EngineAdapter):
     def is_alive(self, model: ModelConfig) -> bool:
         return self.check_health(model) == "\u2705"
 
+
+    def get_port(self, model: ModelConfig) -> int | None:
+        return model.asr.port if model.asr else None
+
+    def get_pid_state_key(self) -> str | None:
+        return 'asr_pid'
+
 register("asr_server", ASRAdapter)

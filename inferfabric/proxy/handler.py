@@ -45,6 +45,71 @@ from inferfabric.watchdog import ModelWatchdog
 log = logging.getLogger("inferfabric.proxy")
 
 
+# ═══ v5.2 Route Tables ═══════════════════════════════════════
+
+def _admin(fn):
+    """Admin guard: checks _check_admin before executing handler."""
+    def wrapper(handler, pm):
+        if not handler._check_admin():
+            return
+        fn(handler, pm)
+    return wrapper
+
+_GET_ROUTES = {
+    "/":                        lambda h, pm: h._serve_dashboard(),
+    "/health":                  lambda h, pm: h._send_json({"status": "ok", "gpu_mode": pm.mgr.gpu_mode}),
+    "/status":                  lambda h, pm: h._send_json(pm.mgr.status()),
+    "/models":                  lambda h, pm: h._send_json(pm.mgr.list_models()),
+    "/profiles":                lambda h, pm: (log.warning("/profiles is deprecated"), h._send_json(pm.mgr.list_models()))[1],
+    "/local-models":            lambda h, pm: h._send_json(pm.mgr.discover_local_models()),
+    "/v1/models":               lambda h, pm: h._handle_v1_models(pm),
+    "/system":                  lambda h, pm: h._send_json(h._system_info()),
+    "/api/metrics":             lambda h, pm: h._handle_api_metrics(pm),
+    "/api/request_log":         lambda h, pm: h._handle_request_log(pm),
+    "/history":                 lambda h, pm: h._send_json(pm.mgr.state.get_history(limit=30)),
+    "/vllm_metrics":            lambda h, pm: h._handle_vllm_metrics(pm),
+    "/watchdog_status":         lambda h, pm: h._handle_watchdog_status(),
+    "/admin/cloud/providers":   _admin(lambda h, pm: h._handle_cloud_providers(pm)),
+    "/admin/cloud/presets":     _admin(lambda h, pm: h._handle_cloud_presets(pm)),
+}
+
+_POST_ROUTES = {
+    "/v1/chat/completions":     lambda h, pm: h._handle_chat(pm),
+    "/v1/completions":          lambda h, pm: h._handle_chat(pm),
+    "/v1/messages":             lambda h, pm: h._handle_messages(pm),
+    "/switch":                  _admin(lambda h, pm: h._handle_switch(pm)),
+    "/stop":                    _admin(lambda h, pm: h._handle_stop(pm)),
+    "/sleep":                   _admin(lambda h, pm: h._handle_sleep(pm)),
+    "/wake":                    _admin(lambda h, pm: h._handle_wake(pm)),
+    "/api/chat":                lambda h, pm: h._handle_chat(pm),
+    "/api/generate":            lambda h, pm: h._handle_chat(pm),
+    "/reset":                   _admin(lambda h, pm: h._handle_reset(pm)),
+    "/reconcile":               _admin(lambda h, pm: h._handle_reconcile(pm)),
+    "/deploy":                  _admin(lambda h, pm: h._handle_deploy(pm)),
+    "/pull":                    _admin(lambda h, pm: h._handle_pull(pm)),
+    "/admin/cloud/reload":      _admin(lambda h, pm: h._handle_cloud_reload(pm)),
+    "/admin/cloud/discover":    _admin(lambda h, pm: h._handle_cloud_discover(pm)),
+    "/admin/cloud/test":        _admin(lambda h, pm: h._handle_cloud_test(pm)),
+    "/admin/cloud/providers":   _admin(lambda h, pm: h._handle_cloud_providers(pm)),
+    "/v1/embeddings":           lambda h, pm: h._handle_embeddings(pm),
+    "/v1/rerank":               lambda h, pm: h._handle_rerank(pm),
+}
+
+_DELETE_ROUTES = {
+    "/admin/cloud/providers":   _admin(lambda h, pm: h._handle_cloud_providers(pm)),
+}
+
+# Helper for watchdog route
+def _handle_watchdog_status(handler):
+    wd = getattr(handler.server, "watchdog", None)
+    if wd:
+        handler._send_json({"fail_counts": wd.fail_counts, "running": wd.running})
+    else:
+        handler._send_json({"error": "watchdog not initialized"}, 503)
+
+# ═══════════════════════════════════════════════════════════════
+
+
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
@@ -78,45 +143,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         try:
             from urllib.parse import urlparse
             path = urlparse(self.path).path
-            if path == "/":
-                self._serve_dashboard()
-            elif self.path == "/health":
-                self._send_json({"status": "ok", "gpu_mode": pm.mgr.gpu_mode})
-            elif self.path == "/status":
-                self._send_json(pm.mgr.status())
-            elif self.path == "/models":
-                self._send_json(pm.mgr.list_models())
-            elif self.path == "/profiles":
-                log.warning("/profiles endpoint is deprecated, use /models")
-                self._send_json(pm.mgr.list_models())
-            elif self.path == "/local-models":
-                self._send_json(pm.mgr.discover_local_models())
-            elif self.path == "/v1/models":
-                self._handle_v1_models(pm)
-            elif self.path == "/system":
-                self._send_json(self._system_info())
-            elif path == "/api/metrics":
-                self._handle_api_metrics(pm)
-            elif path == "/api/request_log":
-                self._handle_request_log(pm)
-            elif self.path == "/history":
-                self._send_json(pm.mgr.state.get_history(limit=30))
-            elif path == "/vllm_metrics":
-                self._handle_vllm_metrics(pm)
-            elif path == "/watchdog_status":
-                wd = getattr(self.server, "watchdog", None)
-                if wd:
-                    self._send_json({"fail_counts": wd.fail_counts, "running": wd.running})
-                else:
-                    self._send_json({"error": "watchdog not initialized"}, 503)
-            elif path == "/admin/cloud/providers":
-                if not self._check_admin(): return
-                self._handle_cloud_providers(pm)
-            elif path == "/admin/cloud/presets":
-                if not self._check_admin(): return
-                self._handle_cloud_presets(pm)
-            else:
+            if path not in _GET_ROUTES:
                 self._send_json({"error": "not found"}, 404)
+                return
+            _GET_ROUTES[path](self, pm)
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as e:
@@ -127,54 +157,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         try:
             from urllib.parse import urlparse
             path = urlparse(self.path).path
-            if path in ("/v1/chat/completions", "/v1/completions"):
-                self._handle_chat(pm)
-            elif path == "/v1/messages":
-                self._handle_messages(pm)
-            elif path == "/switch":
-                if not self._check_admin(): return
-                self._handle_switch(pm)
-            elif path == "/stop":
-                if not self._check_admin(): return
-                self._handle_stop(pm)
-            elif path == "/sleep":
-                if not self._check_admin(): return
-                self._handle_sleep(pm)
-            elif path == "/wake":
-                if not self._check_admin(): return
-                self._handle_wake(pm)
-            elif path in ("/api/chat", "/api/generate"):
-                self._handle_chat(pm)
-            elif path == "/reset":
-                if not self._check_admin(): return
-                self._handle_reset(pm)
-            elif path == "/reconcile":
-                if not self._check_admin(): return
-                self._handle_reconcile(pm)
-            elif path == "/deploy":
-                if not self._check_admin(): return
-                self._handle_deploy(pm)
-            elif path == "/pull":
-                if not self._check_admin(): return
-                self._handle_pull(pm)
-            elif path == "/admin/cloud/reload":
-                if not self._check_admin(): return
-                self._handle_cloud_reload(pm)
-            elif path == "/admin/cloud/discover":
-                if not self._check_admin(): return
-                self._handle_cloud_discover(pm)
-            elif path == "/admin/cloud/test":
-                if not self._check_admin(): return
-                self._handle_cloud_test(pm)
-            elif path == "/admin/cloud/providers":
-                if not self._check_admin(): return
-                self._handle_cloud_providers(pm)
-            elif path == "/v1/embeddings":
-                self._handle_embeddings(pm)
-            elif path == "/v1/rerank":
-                self._handle_rerank(pm)
-            else:
+            if path not in _POST_ROUTES:
                 self._send_json({"error": "not found"}, 404)
+                return
+            _POST_ROUTES[path](self, pm)
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as e:
@@ -185,11 +171,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         try:
             from urllib.parse import urlparse
             path = urlparse(self.path).path
-            if path == "/admin/cloud/providers":
-                if not self._check_admin(): return
-                self._handle_cloud_providers(pm)
-            else:
+            if path not in _DELETE_ROUTES:
                 self._send_json({"error": "not found"}, 404)
+                return
+            _DELETE_ROUTES[path](self, pm)
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as e:

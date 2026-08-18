@@ -82,4 +82,11 @@ class SGLangAdapter(EngineAdapter):
         if rt is not None: result["req_total"] = int(rt)
         return result if result else None
 
+
+    def get_port(self, model: ModelConfig) -> int | None:
+        return model.sglang.port if model.sglang else None
+
+    def get_pid_state_key(self) -> str | None:
+        return 'sglang_pid'
+
 register("sglang", SGLangAdapter)

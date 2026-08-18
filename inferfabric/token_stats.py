@@ -22,9 +22,10 @@ STATE_FILE = Path.home() / ".inferfabric" / "token-stats.json"
 class TokenStatsCollector:
     """Collects token usage from active vLLM instances, aggregates by day."""
 
-    def __init__(self, manager_ref=None, interval: int = 300):
+    def __init__(self, manager_ref=None, interval: int = 300, db: "IFFDB | None" = None):
         self.manager_ref = manager_ref  # callable returning manager instance
         self.interval = interval
+        self._db = db  # v5.2: IFFDB reference for DB-backed queries
         self._state = {}  # {date_str: {model: {prompt, generation, requests}}}
         self._snapshots = {}  # {port: {prompt_sum, gen_sum, req_total, ts}}
         self._lock = threading.Lock()
@@ -176,6 +177,43 @@ class TokenStatsCollector:
             # the cleaned state. Calling _persist() here would be redundant.
 
     # --- 查询 ---
+
+    def query_db(self, window: str = "weekly") -> list[dict] | None:
+        """Query token stats from request_log.db (v5.2 unified path)."""
+        if not self._db:
+            return None
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        if window == "weekly":
+            since = (now - timedelta(days=7)).timestamp()
+        elif window == "24h":
+            since = (now - timedelta(hours=24)).timestamp()
+        elif window == "1h":
+            since = (now - timedelta(hours=1)).timestamp()
+        else:
+            since = (now - timedelta(days=30)).timestamp()
+        rows = self._db.query_request_log(since=since, limit=100000)
+        if not rows:
+            return None
+        # Aggregate: date → model → {prompt_tokens, generation_tokens}
+        aggregated: dict[str, dict[str, dict]] = {}
+        for r in rows:
+            try:
+                ts = datetime.fromtimestamp(r.get("timestamp", 0), tz=timezone.utc)
+            except (ValueError, OSError):
+                continue
+            date_str = ts.strftime("%Y-%m-%d")
+            model = r.get("model", "unknown")
+            if date_str not in aggregated:
+                aggregated[date_str] = {}
+            if model not in aggregated[date_str]:
+                aggregated[date_str][model] = {
+                    "prompt_tokens": 0, "generation_tokens": 0, "requests": 0,
+                }
+            aggregated[date_str][model]["prompt_tokens"] += r.get("tokens_in", 0)
+            aggregated[date_str][model]["generation_tokens"] += r.get("tokens_out", 0)
+            aggregated[date_str][model]["requests"] += 1
+        return dict(sorted(aggregated.items()))
 
     def query(self, window: str = "weekly") -> list[dict]:
         """Query aggregated data for a time window.

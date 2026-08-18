@@ -80,7 +80,9 @@ class ProxyManager:
             "Rate limit: mode=%s server_rpm=%s model_rpm_default=%s max_concurrent=%d timeout=%ds",
             rate_mode, server_rpm, model_rpm_default, max_concurrent, rate_timeout,
         )
-        # v5.0: TelemetryHub — unified telemetry pipeline
+        # v5.2: HealthMonitor — delegated health checking
+        from inferfabric.health_monitor import HealthMonitor
+        self.health_monitor = HealthMonitor(self.mgr, self.mgr.state)
         from inferfabric.telemetry import TelemetryHub
         self.telemetry = TelemetryHub(IFF_DATA_DIR, self._runtime_config)
         self.logger = self.telemetry.logger
@@ -344,27 +346,7 @@ class ProxyManager:
         return HTTPConnection("127.0.0.1", port, timeout=timeout)
 
     def health_check(self):
-        try:
-            s = self.mgr.status()
-            self.mgr.cleanup_dead_services()
-            log.info("Health check: gpu_mode=%s services=%s",
-                     s.get("gpu_mode"), s.get("active_services"))
-            for svc, health in s.get("services_health", {}).items():
-                if health == "❌" and s.get("gpu_mode") != GPUMode.IDLE:
-                    log.warning("%s unhealthy but GPU not idle — use `iff reconcile`", svc)
-            self._clean_manual_stops()
-        except Exception as e:
-            log.error("Health check exception: %s", e)
+        return self.health_monitor.health_check()
 
     def _clean_manual_stops(self):
-        """Remove expired manual_stop records from StateDB."""
-        try:
-            stops = _json.loads(self.mgr.state.get("manual_stops") or "{}")
-            expired = [k for k, v in stops.items() if time.time() - v > self.mgr.state.MANUAL_STOP_TTL]
-            if expired:
-                for k in expired:
-                    del stops[k]
-                self.mgr.state.set("manual_stops", _json.dumps(stops))
-                log.debug("Cleaned %d expired manual_stop records", len(expired))
-        except Exception as e:
-            log.debug("Manual stop cleanup error: %s", e)
+        self.health_monitor._clean_manual_stops()

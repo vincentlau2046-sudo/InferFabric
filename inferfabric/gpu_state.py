@@ -85,18 +85,21 @@ class GpuStateMachine:
     # ── Orphan / Stale PID Detection ──────────────────────────────
 
     def _detect_orphan_pids(self, actual_services: list[str], actions: list[str]) -> None:
-        """P0-4/P0-5: Clean up orphan or stale PID entries for all service types."""
-        # Generic orphan detection for each PID type
-        pid_checks = [
-            # (pid_property_name, state_key, port_accessor, model_type_filter)
-            ("vllm_pid", "vllm_pid", lambda m: m.vllm.port if m.vllm else None, lambda m: m.is_vllm),
-            ("comfyui_pid", "comfyui_pid", lambda m: m.comfyui.port if m.comfyui else None, lambda m: m.is_comfyui),
-            ("tts_pid", "tts_pid", lambda m: m.tts.port if m.tts else None, lambda m: m.is_tts_server),
-            ("asr_pid", "asr_pid", lambda m: m.asr.port if m.asr else None, lambda m: m.is_asr_server),
-        ]
+        """P0-4/P0-5: Clean up orphan or stale PID entries for all service types.
 
-        for pid_attr, state_key, port_getter, model_filter in pid_checks:
-            pid = getattr(self._proc, pid_attr)
+        v5.2: Uses EngineAdapter.get_port() / get_pid_state_key() instead of
+        hardcoded per-type lambdas. New engine types are auto-discovered.
+        """
+        from inferfabric.engine_adapter import _adapters, get_adapter
+        for adapter_name, adapter_cls in _adapters.items():
+            try:
+                adapter = get_adapter(adapter_name)
+            except Exception:
+                continue
+            pid_key = adapter.get_pid_state_key()
+            if not pid_key:
+                continue
+            pid = getattr(self._proc, pid_key, None)
             if not pid:
                 continue
 
@@ -108,58 +111,60 @@ class GpuStateMachine:
                 is_alive = False
 
             if not is_alive:
-                # Orphan: PID tracked but process dead — check if port still occupied
                 has_live_service = False
                 for svc_name in actual_services:
                     m = self._models.get(svc_name)
-                    if m and model_filter(m):
-                        port = port_getter(m)
+                    if m and m.type == adapter_name:
+                        port = adapter.get_port(m)
                         if port is not None and self._port_pid(port) is not None:
                             has_live_service = True
                             break
                 if not has_live_service:
-                    actions.append(f"Orphan {pid_attr}={pid} dead — clearing")
-                    self.state.set(state_key, "")
+                    actions.append(f"Orphan {pid_key}={pid} dead — clearing")
+                    self.state.set(pid_key, "")
 
-            # Stale: PID alive but no active services — check port ownership
+            # Stale: PID alive but no active services
             if pid and not actual_services:
                 has_live_service = False
                 for name, m in self._models.items():
-                    if model_filter(m):
-                        port = port_getter(m)
+                    if m.type == adapter_name:
+                        port = adapter.get_port(m)
                         if port is not None and self._port_pid(port) is not None:
                             has_live_service = True
                             break
                 if not has_live_service:
-                    actions.append(f"Stale {pid_attr}={pid} with no active services — clearing")
-                    self.state.set(state_key, "")
+                    actions.append(f"Stale {pid_key}={pid} with no active services — clearing")
+                    self.state.set(pid_key, "")
                 else:
-                    actions.append(f"{pid_attr}={pid} still owns port — keeping (health check false negative)")
+                    actions.append(f"{pid_key}={pid} still owns port — keeping (health check false negative)")
 
     def _restore_dead_pids(self, actual_services: list[str], actions: list[str]) -> None:
-        """P0-5: If a service is actually running but PID is not tracked, recover via fuser."""
-        pid_restore_checks = [
-            # (pid_property_name, state_key, port_accessor, model_type_filter)
-            ("vllm_pid", "vllm_pid", lambda m: m.vllm.port if m.vllm else None, lambda m: m.is_vllm),
-            ("comfyui_pid", "comfyui_pid", lambda m: m.comfyui.port if m.comfyui else None, lambda m: m.is_comfyui),
-            ("tts_pid", "tts_pid", lambda m: m.tts.port if m.tts else None, lambda m: m.is_tts_server),
-            ("asr_pid", "asr_pid", lambda m: m.asr.port if m.asr else None, lambda m: m.is_asr_server),
-        ]
+        """P0-5: If a service is actually running but PID is not tracked, recover via fuser.
 
-        for pid_attr, state_key, port_getter, model_filter in pid_restore_checks:
-            pid = getattr(self._proc, pid_attr)
+        v5.2: Uses EngineAdapter.get_port() / get_pid_state_key().
+        """
+        from inferfabric.engine_adapter import _adapters, get_adapter
+        for adapter_name, adapter_cls in _adapters.items():
+            try:
+                adapter = get_adapter(adapter_name)
+            except Exception:
+                continue
+            pid_key = adapter.get_pid_state_key()
+            if not pid_key:
+                continue
+            pid = getattr(self._proc, pid_key, None)
             if pid:
                 continue  # already tracked
 
             for svc_name in actual_services:
                 m = self._models.get(svc_name)
-                if m and model_filter(m):
-                    port = port_getter(m)
+                if m and m.type == adapter_name:
+                    port = adapter.get_port(m)
                     if port is not None:
                         recovered_pid = self._port_pid(port)
                         if recovered_pid is not None:
-                            self.state.set(state_key, str(recovered_pid))
-                            actions.append(f"Recovered {pid_attr}={recovered_pid} for {svc_name} via fuser")
+                            self.state.set(pid_key, str(recovered_pid))
+                            actions.append(f"Recovered {pid_key}={recovered_pid} for {svc_name} via fuser")
                             break
 
     # ── VRAM ──────────────────────────────────────────────────────

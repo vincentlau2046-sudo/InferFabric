@@ -54,3 +54,11 @@ class EngineAdapter(ABC):
     def get_pid(self, model: ModelConfig) -> int | None:
         """Return PID of the engine process, or None if unknown."""
         return None
+
+    def get_port(self, model: ModelConfig) -> int | None:
+        """Return engine port number, or None."""
+        return None
+
+    def get_pid_state_key(self) -> str | None:
+        """Return the state.db key for storing PID, or None."""
+        return None

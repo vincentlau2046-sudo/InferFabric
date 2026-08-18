@@ -56,4 +56,11 @@ class TTSAdapter(EngineAdapter):
     def is_alive(self, model: ModelConfig) -> bool:
         return self.check_health(model) == "\u2705"
 
+
+    def get_port(self, model: ModelConfig) -> int | None:
+        return model.tts.port if model.tts else None
+
+    def get_pid_state_key(self) -> str | None:
+        return 'tts_pid'
+
 register("tts_server", TTSAdapter)

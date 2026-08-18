@@ -191,24 +191,31 @@ class IFFDB:
             svc.remove(name)
             self.set_active_services(svc)
 
+    # ── State: sleep state (v5.2: table-backed) ───────────────
+
     def get_sleep_state(self, model: str) -> str | None:
-        r = self._get_raw("sleep_state")
-        if not r:
-            return None
-        return json.loads(r).get(model)
+        with self.connect(STATE_DB) as conn:
+            row = conn.execute(
+                "SELECT level FROM sleep_state WHERE model=?", (model,)
+            ).fetchone()
+            return row[0] if row else None
 
     def set_sleep_state(self, model: str, level: int | None):
-        r = self._get_raw("sleep_state")
-        states = json.loads(r) if r else {}
-        if level is None:
-            states.pop(model, None)
-        else:
-            states[model] = f"l{level}"
-        self._set_raw("sleep_state", json.dumps(states))
+        with self._write_lock:
+            with self.connect(STATE_DB) as conn:
+                if level is None:
+                    conn.execute("DELETE FROM sleep_state WHERE model=?", (model,))
+                else:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO sleep_state (model, level) VALUES (?, ?)",
+                        (model, f"l{level}"),
+                    )
+                conn.commit()
 
     def get_all_sleep_states(self) -> dict[str, str]:
-        r = self._get_raw("sleep_state")
-        return json.loads(r) if r else {}
+        with self.connect(STATE_DB) as conn:
+            rows = conn.execute("SELECT model, level FROM sleep_state").fetchall()
+            return {r[0]: r[1] for r in rows}
 
     def get_current_profile(self) -> str:
         r = self._get_raw("current_profile")
@@ -268,33 +275,40 @@ class IFFDB:
                 for r in rows
             ]
 
-    # ── State: manual stops ────────────────────────────────────
+    # ── State: manual stops (v5.2: table-backed) ──────────────
 
     MANUAL_STOP_TTL: float = 3600.0
 
     def record_manual_stop(self, name: str):
-        r = self._get_raw("manual_stops")
-        stops = json.loads(r) if r else {}
-        stops[name] = __import__("time").time()
-        self._set_raw("manual_stops", json.dumps(stops))
+        import time
+        with self._write_lock:
+            with self.connect(STATE_DB) as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO manual_stops (model, stop_ts) VALUES (?, ?)",
+                    (name, time.time()),
+                )
+                conn.commit()
 
     def is_manually_stopped(self, name: str) -> bool:
         import time
         now = time.time()
-        r = self._get_raw("manual_stops")
-        stops = json.loads(r) if r else {}
-        ts = stops.get(name)
-        if ts is not None and now - ts > self.MANUAL_STOP_TTL:
-            stops.pop(name, None)
-            self._set_raw("manual_stops", json.dumps(stops))
-            return False
-        return ts is not None
+        with self.connect(STATE_DB) as conn:
+            row = conn.execute(
+                "SELECT stop_ts FROM manual_stops WHERE model=? AND stop_ts > ?",
+                (name, now - self.MANUAL_STOP_TTL),
+            ).fetchone()
+            return row is not None
 
     def clear_manual_stop(self, name: str):
-        r = self._get_raw("manual_stops")
-        stops = json.loads(r) if r else {}
-        stops.pop(name, None)
-        self._set_raw("manual_stops", json.dumps(stops))
+        with self._write_lock:
+            with self.connect(STATE_DB) as conn:
+                conn.execute("DELETE FROM manual_stops WHERE model=?", (name,))
+                conn.commit()
+
+    def get_all_manual_stops(self) -> dict[str, float]:
+        with self.connect(STATE_DB) as conn:
+            rows = conn.execute("SELECT model, stop_ts FROM manual_stops").fetchall()
+            return {r[0]: r[1] for r in rows}
 
     # ── Request Log API ───────────────────────────────────────
 

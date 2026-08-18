@@ -103,4 +103,11 @@ class VLLMAdapter(EngineAdapter):
             return None
         return self._proc.vllm_pid
 
+
+    def get_port(self, model: ModelConfig) -> int | None:
+        return model.vllm.port if model.vllm else None
+
+    def get_pid_state_key(self) -> str | None:
+        return 'vllm_pid'
+
 register("vllm", VLLMAdapter)

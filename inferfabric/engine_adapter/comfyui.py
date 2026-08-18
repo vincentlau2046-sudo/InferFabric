@@ -54,4 +54,11 @@ class ComfyUIAdapter(EngineAdapter):
     def is_alive(self, model: ModelConfig) -> bool:
         return self.check_health(model) == "\u2705"
 
+
+    def get_port(self, model: ModelConfig) -> int | None:
+        return model.comfyui.port if model.comfyui else None
+
+    def get_pid_state_key(self) -> str | None:
+        return 'comfyui_pid'
+
 register("comfyui", ComfyUIAdapter)

@@ -61,4 +61,11 @@ class OllamaCppAdapter(EngineAdapter):
     def fetch_engine_metrics(self, model: ModelConfig) -> dict | None:
         return None  # not supported
 
+
+    def get_port(self, model: ModelConfig) -> int | None:
+        return model.ollama_cpp.port if model.ollama_cpp else None
+
+    def get_pid_state_key(self) -> str | None:
+        return None
+
 register("ollama_cpp", OllamaCppAdapter)

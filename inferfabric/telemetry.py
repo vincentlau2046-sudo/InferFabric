@@ -103,7 +103,7 @@ class TelemetryHub:
         )
 
         # Token collector (manager_ref injected later)
-        self.token_collector = TokenStatsCollector(manager_ref=None, interval=300)
+        self.token_collector = TokenStatsCollector(manager_ref=None, interval=300, db=self._db)
 
     def start_token_collector(self, manager_ref: Callable[[], Any]):
         """Inject manager ref and start token collection."""
