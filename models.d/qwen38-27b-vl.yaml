@@ -1,5 +1,5 @@
 name: qwen38-27b-vl
-description: "Qwen3.8-27B NVFP4 + MTP + Vision (Unsloth)"
+description: "Qwen3.8-27B NVFP4 + Vision (Unsloth)"
 gpu_role: exclusive
 model_type: vl
 quantization: NVFP4
@@ -11,10 +11,9 @@ vllm:
   port: 8008
   conda_env: Qwen3.8-27B-VL
   max_model_len: 131072
-  gpu_memory_utilization: 0.93
-  max_num_seqs: 4
+  gpu_memory_utilization: 0.90
+  max_num_seqs: 8
   kv_cache_dtype: fp8
-  speculative_config: '{"method": "mtp", "num_speculative_tokens": 2}'
   extra_flags: >-
     --max-num-batched-tokens 4096
     --enable-prefix-caching
@@ -32,3 +31,4 @@ vllm:
   extra_env:
     FLASHINFER_DISABLE_VERSION_CHECK: "1"
     VLLM_USE_DEEP_GEMM: "0"
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"

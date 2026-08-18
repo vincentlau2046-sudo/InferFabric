@@ -6,7 +6,6 @@ Extracted from proxy.py for modularity.
 
 import itertools
 import json as _json
-import queue as _queue
 import uuid
 import logging
 import os
@@ -19,13 +18,11 @@ import yaml as _yaml
 
 from inferfabric.manager import ModelManager
 from inferfabric.state import GPUMode
-from inferfabric.config import MODELS_DIR, DEFAULT_REQUEST_LOG_DB, ConfigError
+from inferfabric.config import MODELS_DIR, ConfigError
 from inferfabric.proxy.auth import AuthManager
-from inferfabric.proxy.request_logger import RequestLogger, RequestLog
 from inferfabric.cloud_discovery import CloudDiscovery, CloudModel
 from inferfabric.ratelimit import DualGateLimiter, RateLimiterV2
-from inferfabric.metrics_aggregator import MetricsAggregator, AggregatorThread, CloudModelPrice
-from inferfabric.request_log_db import RequestLogDB
+from inferfabric.metrics_aggregator import CloudModelPrice
 from pathlib import Path as _Path
 
 # IFF data directory (consistent with config.py / token_stats.py)
@@ -83,25 +80,18 @@ class ProxyManager:
             "Rate limit: mode=%s server_rpm=%s model_rpm_default=%s max_concurrent=%d timeout=%ds",
             rate_mode, server_rpm, model_rpm_default, max_concurrent, rate_timeout,
         )
-        # G-2 + v4.6.2: Metrics aggregator (queue-decoupled) + SQLite replay
-        self._reqlog_db = RequestLogDB(DEFAULT_REQUEST_LOG_DB)
-        self._agg_queue = _queue.Queue()
+        # v5.0: TelemetryHub — unified telemetry pipeline
+        from inferfabric.telemetry import TelemetryHub
+        self.telemetry = TelemetryHub(IFF_DATA_DIR, self._runtime_config)
+        self.logger = self.telemetry.logger
+        self.metrics = self.telemetry.metrics
         # D-2: Build served_name → friendly_name mapping for dashboard
         self._metrics_name_map = {}
         for m in self.mgr._models.values():
             sn = m.served_name
             if sn and sn != m.name:
                 self._metrics_name_map[sn] = m.name
-        self.metrics = MetricsAggregator(db=self._reqlog_db, replay_hours=720.0,
-                                          model_name_map=self._metrics_name_map)
-        self._agg_thread = AggregatorThread(self.metrics, self._agg_queue)
-        self._agg_thread.start()
-        # PR-B + v4.6.2: Request logger (feeds aggregator via queue + SQLite)
-        self.logger = RequestLogger(log_dir=IFF_DATA_DIR / "logs", enabled=True,
-                                     on_log_queue=self._agg_queue,
-                                     db=self._reqlog_db,
-                                     jsonl_enabled=self._runtime_config.get("access_log_jsonl", True),
-                                     retention_days=self._runtime_config.get("request_log_retention_days", 90))
+        self.telemetry.update_metrics_name_map(self._metrics_name_map)
         # PR-B: Helper to create request context
         self._req_counter = itertools.count()
 

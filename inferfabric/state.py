@@ -1,13 +1,13 @@
 """
-inferfabric/state.py — State machine + SQLite state management.
+inferfabric/state.py — State machine + SQLite state management (IFFDB-delegated).
 
 v4.0: Added GPUMode (idle/exclusive/shared), validate_transition(),
       StateDB.get/set_active_services().
+v5.0: StateDB delegates to IFFDB. Internal SQLite removed.
+      Keeps same public API for backward compatibility.
 """
 
 import json
-import sqlite3
-import threading
 import time
 import logging
 from pathlib import Path
@@ -86,214 +86,111 @@ class ServiceState:
 ProfileState = ServiceState
 
 
-# ─── State Manager ─────────────────────────────────────────────────
+# ─── State Manager (IFFDB-delegated) ──────────────────────────────
 
 class StateDB:
-    """Thread-safe SQLite — fresh connection per call (WAL mode)."""
+    """Thread-safe state manager — IFFDB-delegated.
 
-    def __init__(self, db_path: Path):
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db_path = db_path
-        self._lock = threading.RLock()
-        self._conn_cache: sqlite3.Connection | None = None
-        self._init()
+    Constructor accepts either:
+      db_path (old):  Path to state.db — IFFDB auto-created from parent dir.
+      iffdb  (new):  IFFDB instance for delegation.
 
-    def _conn(self) -> sqlite3.Connection:
-        """Return the cached SQLite connection (lazy init)."""
-        if self._conn_cache is None:
-            self._conn_cache = sqlite3.connect(str(self._db_path), timeout=10, check_same_thread=False)
-            self._conn_cache.execute("PRAGMA journal_mode=WAL")
-        return self._conn_cache
+    Keeps the same public API (get/set/set_multi/gpu_mode/etc.) as v4.x.
+    """
 
-    def _init(self):
-        with self._lock:
-            c = self._conn()
-            c.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)")
-            c.execute(
-                "CREATE TABLE IF NOT EXISTS history ("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                "timestamp TEXT DEFAULT CURRENT_TIMESTAMP, "
-                "from_profile TEXT, to_profile TEXT, duration REAL, status TEXT)"
-            )
-            # Migration: add status column if missing (from v2 schema)
-            try:
-                c.execute("SELECT status FROM history LIMIT 1")
-            except sqlite3.OperationalError:
-                log.info("Migrating history table: adding status column")
-                c.execute("ALTER TABLE history ADD COLUMN status TEXT DEFAULT 'ok'")
-            # Ensure default state keys exist
-            c.execute("INSERT OR IGNORE INTO state VALUES ('current_profile', 'idle')")
-            c.execute("INSERT OR IGNORE INTO state VALUES ('profile_state', 'idle')")
-            c.execute("INSERT OR IGNORE INTO state VALUES ('gpu_mode', 'idle')")
-            c.execute("INSERT OR IGNORE INTO state VALUES ('active_services', '[]')")
-            c.execute("INSERT OR IGNORE INTO state VALUES ('vllm_pid', '')")
-            c.execute("INSERT OR IGNORE INTO state VALUES ('comfyui_pid', '')")
-            c.execute("INSERT OR IGNORE INTO state VALUES ('sleep_state', '{}')")
-            c.commit()
+    def __init__(self, db_path: Path | None = None, iffdb=None):
+        if iffdb is not None:
+            self._db = iffdb
+        elif db_path is not None:
+            from inferfabric.db import IFFDB
+            self._db = IFFDB(Path(db_path).parent)
+        else:
+            raise ValueError("StateDB requires db_path or iffdb")
+
+    # ─── Generic KV ────────────────────────────────────────────
 
     def get(self, key: str, default: Optional[str] = None) -> Optional[str]:
-        with self._lock:
-            c = self._conn()
-            row = c.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
-            return row[0] if row else default
+        """Get state value. Compat with generic get()."""
+        return self._db.get(key, default)
 
     def set(self, key: str, value: str):
-        with self._lock:
-            c = self._conn()
-            c.execute("INSERT OR REPLACE INTO state VALUES (?, ?)", (key, value))
-            c.commit()
+        """Set state value. Compat with generic set()."""
+        self._db.set(key, value)
 
     def set_multi(self, kv: dict[str, str]):
         """Atomically set multiple state keys."""
-        with self._lock:
-            c = self._conn()
-            for k, v in kv.items():
-                c.execute("INSERT OR REPLACE INTO state VALUES (?, ?)", (k, v))
-            c.commit()
+        for k, v in kv.items():
+            self._db.set(k, v)
 
     # ─── Active Services ────────────────────────────────────────
 
     def get_active_services(self) -> list[str]:
-        """Get list of currently active service names."""
-        raw = self.get("active_services")
-        if not raw:
-            return []
-        try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return []
+        return self._db.get_active_services()
 
     def set_active_services(self, services: list[str]):
-        """Set active services list (atomic)."""
-        with self._lock:
-            self.set("active_services", json.dumps(services))
+        self._db.set_active_services(services)
 
     def add_active_service(self, name: str):
-        """Add a service to the active list (atomic)."""
-        with self._lock:
-            services = self.get_active_services()
-            if name not in services:
-                services.append(name)
-                self.set_active_services(services)
+        self._db.add_active_service(name)
 
     def remove_active_service(self, name: str):
-        """Remove a service from the active list (atomic)."""
-        with self._lock:
-            services = self.get_active_services()
-            if name in services:
-                services.remove(name)
-                self.set_active_services(services)
+        self._db.remove_active_service(name)
 
     # ─── Manual Stop Protection ────────────────────────────────
 
-    MANUAL_STOP_TTL = 600  # 10 min
+    MANUAL_STOP_TTL = 600  # 10 min (IFFDB default is 3600)
 
     def record_manual_stop(self, name: str):
         """Record that user manually stopped a model (blocks auto-switch)."""
-        with self._lock:
-            stops = json.loads(self.get("manual_stops") or "{}")
-            stops[name] = time.time()
-            self.set("manual_stops", json.dumps(stops))
+        stops = json.loads(self._db.get("manual_stops") or "{}")
+        stops[name] = time.time()
+        self._db.set("manual_stops", json.dumps(stops))
 
     def is_manually_stopped(self, name: str) -> bool:
         """Check if model was manually stopped within TTL."""
-        with self._lock:
-            stops = json.loads(self.get("manual_stops") or "{}")
-            ts = stops.get(name)
-            if ts is None:
-                return False
-            if time.time() - ts > self.MANUAL_STOP_TTL:
-                del stops[name]
-                self.set("manual_stops", json.dumps(stops))
-                return False
-            return True
+        now = time.time()
+        stops = json.loads(self._db.get("manual_stops") or "{}")
+        ts = stops.get(name)
+        if ts is None:
+            return False
+        if now - ts > self.MANUAL_STOP_TTL:
+            del stops[name]
+            self._db.set("manual_stops", json.dumps(stops))
+            return False
+        return True
 
     def clear_manual_stop(self, name: str):
         """Clear manual stop record (e.g. when user explicitly switches TO this model)."""
-        with self._lock:
-            stops = json.loads(self.get("manual_stops") or "{}")
-            stops.pop(name, None)
-            self.set("manual_stops", json.dumps(stops))
+        stops = json.loads(self._db.get("manual_stops") or "{}")
+        stops.pop(name, None)
+        self._db.set("manual_stops", json.dumps(stops))
 
     # ─── GPU Mode ───────────────────────────────────────────────
 
     @property
     def gpu_mode(self) -> str:
-        return self.get("gpu_mode") or GPUMode.IDLE
+        return self._db.get_gpu_mode()
 
     @gpu_mode.setter
     def gpu_mode(self, mode: str):
         assert GPUMode.is_valid(mode), f"Invalid GPU mode: {mode}"
-        self.set("gpu_mode", mode)
+        self._db.set_gpu_mode(mode)
 
     # ─── Sleep State ────────────────────────────────────────────
 
     def get_sleep_state(self, model_name: str) -> Optional[str]:
-        """Get sleep state for a model: None=awake/untracked, 'l1', 'l2'."""
-        raw = self.get("sleep_state")
-        if not raw:
-            return None
-        try:
-            states = json.loads(raw)
-            return states.get(model_name)
-        except (json.JSONDecodeError, TypeError):
-            return None
+        return self._db.get_sleep_state(model_name)
 
     def set_sleep_state(self, model_name: str, level: Optional[int]):
-        """Set sleep state for a model. level=None clears sleep state (awake). Thread-safe."""
-        with self._lock:
-            c = self._conn()
-            row = c.execute("SELECT value FROM state WHERE key='sleep_state'").fetchone()
-            raw = row[0] if row else "{}"
-            try:
-                states = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                states = {}
-            if level is None:
-                states.pop(model_name, None)
-            else:
-                states[model_name] = f"l{level}"
-            c.execute(
-                "INSERT OR REPLACE INTO state (key, value) VALUES ('sleep_state', ?)",
-                (json.dumps(states),),
-            )
-            c.commit()
+        self._db.set_sleep_state(model_name, level)
 
     def get_all_sleep_states(self) -> dict[str, str]:
-        """Get all model sleep states."""
-        raw = self.get("sleep_state")
-        if not raw:
-            return {}
-        try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return {}
+        return self._db.get_all_sleep_states()
 
     # ─── History ────────────────────────────────────────────────
 
     def add_history(self, from_profile: str, to_profile: str, duration: float, status: str = "ok"):
-        with self._lock:
-            c = self._conn()
-            c.execute(
-                "INSERT INTO history (from_profile, to_profile, duration, status) VALUES (?, ?, ?, ?)",
-                (from_profile, to_profile, duration, status),
-            )
-            c.execute(
-                "DELETE FROM history WHERE id NOT IN "
-                "(SELECT id FROM history ORDER BY id DESC LIMIT ?)",
-                (100,),
-            )
-            c.commit()
+        self._db.add_switch_history(from_profile, to_profile, duration, status)
 
     def get_history(self, limit: int = 20) -> list[dict]:
-        with self._lock:
-            c = self._conn()
-            rows = c.execute(
-                "SELECT timestamp, from_profile, to_profile, duration, status "
-                "FROM history ORDER BY id DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
-            return [
-                {"timestamp": r[0], "from": r[1], "to": r[2], "duration": r[3], "status": r[4]}
-                for r in rows
-            ]
+        return self._db.get_switch_history(limit)

@@ -571,7 +571,7 @@ class CloudDiscovery:
                 if isinstance(mspec, dict):
                     model_specs[mid] = mspec
             # v4.7.0: Derive key_env_var from raw api_key if it's a ${VAR} reference
-            raw_api_key = pcfg.get("api_key", "")
+            raw_api_key = pcfg.get("api_key") or ""
             key_env_var = pcfg.get("key_env_var", "")
             if not key_env_var and raw_api_key.startswith("${") and raw_api_key.endswith("}"):
                 key_env_var = raw_api_key[2:-1]

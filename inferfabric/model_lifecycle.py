@@ -635,7 +635,10 @@ class ModelLifecycle:
                     "message": f"Model '{existing}' is already sleeping. Wake or stop it first."}
 
         log.info("Sleeping model '%s' (L2)", name)
-        result = self._proc.sleep_vllm(model.vllm.port)
+        from inferfabric.engine_adapter import get_adapter
+        adapter = get_adapter(model.type)
+        adapter.set_process_manager(self._proc)
+        result = adapter.sleep(model)
 
         if result["status"] == "ok":
             self.state.set_sleep_state(name, 2)
@@ -669,11 +672,7 @@ class ModelLifecycle:
 
         sleep_state = self.state.get_sleep_state(name)
         if not sleep_state:
-            # Double-check actual server state
-            if self._proc.is_sleeping(model.vllm.port):
-                self.state.set_sleep_state(name, 2)
-            else:
-                return {"status": "already_awake", "model": name, "message": "Model is not sleeping"}
+            return {"status": "already_awake", "model": name, "message": "Model is not sleeping"}
 
         # Validate GPU mode for wake — use shared transition table
         current_gpu = self.state.gpu_mode
@@ -683,7 +682,10 @@ class ModelLifecycle:
                     "message": f"Cannot wake model '{name}': GPU is {current_gpu}, cannot transition to {target_mode}"}
 
         log.info("Waking model '%s' (L2)", name)
-        result = self._proc.wake_vllm(model.vllm.port)
+        from inferfabric.engine_adapter import get_adapter
+        adapter = get_adapter(model.type)
+        adapter.set_process_manager(self._proc)
+        result = adapter.wake(model)
 
         if result["status"] == "ok" or result["status"] == "killed_for_restart":
             self.state.set_sleep_state(name, None)

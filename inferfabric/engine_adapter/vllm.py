@@ -81,4 +81,26 @@ class VLLMAdapter(EngineAdapter):
         if rt is not None: result["req_total"] = int(rt)
         return result if result else None
 
+    def sleep(self, model: ModelConfig) -> dict:
+        """Suspend vLLM process (L2 sleep)."""
+        if self._proc is None:
+            return {"status": "error", "message": "No process manager set"}
+        if not model.vllm:
+            return {"status": "error", "message": "Missing vllm config"}
+        return self._proc.sleep_vllm(model.vllm.port)
+
+    def wake(self, model: ModelConfig) -> dict:
+        """Resume sleeping vLLM process."""
+        if self._proc is None:
+            return {"status": "error", "message": "No process manager set"}
+        if not model.vllm:
+            return {"status": "error", "message": "Missing vllm config"}
+        return self._proc.wake_vllm(model.vllm.port)
+
+    def get_pid(self, model: ModelConfig) -> int | None:
+        """Return vLLM PID if available."""
+        if self._proc is None:
+            return None
+        return self._proc.vllm_pid
+
 register("vllm", VLLMAdapter)

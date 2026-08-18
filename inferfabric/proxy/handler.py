@@ -572,10 +572,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             qs = parse_qs(urlparse(self.path).query)
             limit = min(int(qs.get("limit", ["50"])[0]), 500)
             since = float(qs.get("since", ["0"])[0])
-            if pm._reqlog_db is None:
-                self._send_json({"logs": [], "count": 0}, 200)
-                return
-            rows = pm._reqlog_db.query_request_log(since=since, limit=limit)
+            rows = pm.telemetry.query_request_log(since=since, limit=limit)
             logs = []
             for r in rows:
                 logs.append({

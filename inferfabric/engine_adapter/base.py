@@ -42,3 +42,15 @@ class EngineAdapter(ABC):
 
     def fetch_engine_metrics(self, model: ModelConfig) -> dict | None:
         return None
+
+    def sleep(self, model: ModelConfig) -> dict:
+        """Suspend a model process (L2 sleep). Default: not supported."""
+        return {"status": "error", "message": "Sleep not supported for this engine type"}
+
+    def wake(self, model: ModelConfig) -> dict:
+        """Resume a sleeping model process. Default: not supported."""
+        return {"status": "error", "message": "Wake not supported for this engine type"}
+
+    def get_pid(self, model: ModelConfig) -> int | None:
+        """Return PID of the engine process, or None if unknown."""
+        return None
