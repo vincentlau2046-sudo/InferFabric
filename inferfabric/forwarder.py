@@ -206,6 +206,12 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
             resp.close()
             send_json(handler, result)
             usage = result.get("usage", {})
+            # Normalize usage keys: Baidu Anthropic returns input_tokens/output_tokens,
+            # OpenAI returns prompt_tokens/completion_tokens. Unify to OpenAI naming.
+            if "input_tokens" in usage and "prompt_tokens" not in usage:
+                usage["prompt_tokens"] = usage.get("input_tokens", 0)
+            if "output_tokens" in usage and "completion_tokens" not in usage:
+                usage["completion_tokens"] = usage.get("output_tokens", 0)
             return CloudResult(
                 status=200,
                 usage=usage,
