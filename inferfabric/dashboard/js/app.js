@@ -39,17 +39,10 @@ async function cloudLoadPresets() {
     if (!_cloudPresets.length) { grid.innerHTML = '<div class="svc-empty">无预设</div>'; return; }
     _cloudPresets.forEach(p => {
       const card = document.createElement('div');
-      card.className = 'preset-card';
+      card.className = 'preset-card-mac';
       card.dataset.presetId = p.id;
-      card.style.cssText = 'cursor:pointer;display:flex;flex-direction:column;align-items:center;padding:10px 14px;border-radius:10px;border:1.5px solid var(--border);background:var(--bg);transition:all .2s;min-width:72px';
-      const iconSpan = document.createElement('span');
-      iconSpan.style.fontSize = '22px';
-      iconSpan.textContent = p.icon;
-      const nameSpan = document.createElement('span');
-      nameSpan.style.cssText = 'font-size:11px;margin-top:4px;color:var(--text2);white-space:nowrap';
-      nameSpan.textContent = p.display_name;
-      card.appendChild(iconSpan);
-      card.appendChild(nameSpan);
+      
+      
       card.addEventListener('click', () => cloudSelectPreset(p.id));
       grid.appendChild(card);
     });
@@ -60,9 +53,9 @@ function cloudSelectPreset(id) {
   _selectedPreset = _cloudPresets.find(p => p.id === id);
   if (!_selectedPreset) return;
   // Highlight selected card
-  document.querySelectorAll('.preset-card').forEach(c => { c.style.borderColor = 'var(--border)'; c.style.background = 'var(--bg)'; });
+  document.querySelectorAll('.preset-card-mac').forEach(function(c){c.classList.remove('selected')});
   const card = document.getElementById('preset-' + id);
-  if (card) { card.style.borderColor = 'var(--primary)'; card.style.background = 'var(--bg-card)'; }
+  if (card) { card.classList.add('selected'); }
   // Show preset form
   document.getElementById('presetForm').style.display = 'block';
   document.getElementById('presetSelected').textContent = _selectedPreset.icon + ' ' + _selectedPreset.display_name;
@@ -76,7 +69,7 @@ function cloudSelectPreset(id) {
 
 function cloudDeselectPreset() {
   _selectedPreset = null;
-  document.querySelectorAll('.preset-card').forEach(c => { c.style.borderColor = 'var(--border)'; c.style.background = 'var(--bg)'; });
+  document.querySelectorAll('.preset-card-mac').forEach(function(c){c.classList.remove('selected')});
   document.getElementById('presetForm').style.display = 'none';
 }
 
