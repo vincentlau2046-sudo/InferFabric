@@ -267,7 +267,7 @@ body {
 .hist-card {
   background:var(--bg-card); border:1px solid var(--border);
   border-radius:var(--radius-lg); box-shadow:var(--shadow);
-  overflow:hidden; transition:all .2s;
+  overflow:hidden; transition:all .2s; margin-bottom:16px;
 }
 .hist-card:hover { box-shadow:var(--shadow-md); }
 .hist-scroll { max-height:220px; overflow-y:auto; padding:16px 20px; }
