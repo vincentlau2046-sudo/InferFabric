@@ -137,6 +137,9 @@ async function cloudLoadProviders() {
   } catch(e) { document.getElementById('cloudProvidersList').textContent = '加载失败: '+e; }
 }
 
+var _cloudModelIds = [];
+window._cloudModelIds = _cloudModelIds;
+
 function cloudLoadModels(data) {
   const models = (data && data.models) || [];
   document.getElementById('cloudModelCount').textContent = models.length + ' 个模型';
@@ -146,6 +149,7 @@ function cloudLoadModels(data) {
   }
   let html = '';
   models.sort((a,b) => (b.discovered_at||0) - (a.discovered_at||0));
+  _cloudModelIds = models.map(function(m) { return { id: m.id, provider: m.provider }; });
   models.forEach(m => {
     const proto = [];
     if (m.openai_available) proto.push('<span class="disc-model-tag" style="background:var(--green-s);color:var(--green)">OpenAI</span>');
@@ -929,14 +933,36 @@ function updateChatModelSelect() {
   const status = window.store ? window.store.get() : {};
   const svcs = status.active_services || [];
   sel.innerHTML = '';
-  if (svcs.length === 0) {
-    sel.innerHTML = '<option value="">— 无活跃模型 —</option>';
-  } else {
-    svcs.forEach(n => {
-      const opt = document.createElement('option');
+  var hasAny = false;
+
+  // Local models
+  if (svcs.length > 0) {
+    var localGroup = document.createElement('optgroup');
+    localGroup.label = '本地模型';
+    svcs.forEach(function(n) {
+      var opt = document.createElement('option');
       opt.value = n; opt.textContent = n;
-      sel.appendChild(opt);
+      localGroup.appendChild(opt);
+      hasAny = true;
     });
+    sel.appendChild(localGroup);
+  }
+
+  // Cloud provider models
+  if (window._cloudModelIds && window._cloudModelIds.length > 0) {
+    var cloudGroup = document.createElement('optgroup');
+    cloudGroup.label = '云端 Provider';
+    window._cloudModelIds.forEach(function(m) {
+      var opt = document.createElement('option');
+      opt.value = m.id; opt.textContent = m.id + ' (' + m.provider + ')';
+      cloudGroup.appendChild(opt);
+      hasAny = true;
+    });
+    sel.appendChild(cloudGroup);
+  }
+
+  if (!hasAny) {
+    sel.innerHTML = '<option value="">— 无可用模型 —</option>';
   }
 }
 
