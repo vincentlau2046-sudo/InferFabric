@@ -930,6 +930,7 @@ function renderChatMsg(role, content) {
 function updateChatModelSelect() {
   var sel = document.getElementById('chatModel');
   if (!sel) return;
+  var currentVal = sel.value;  // save selection
   
   // Fetch all models, filter chat-capable types
   var chatTypes = ['llm', 'vl', 'omni'];
@@ -972,6 +973,8 @@ function updateChatModelSelect() {
     if (!hasAny) {
       sel.innerHTML = '<option value="">— 无可用模型 —</option>';
     }
+  }).then(function() {
+    if (currentVal) { sel.value = currentVal; }
   }).catch(function() {
     sel.innerHTML = '<option value="">— 加载失败 —</option>';
   });
@@ -979,6 +982,5 @@ function updateChatModelSelect() {
 
 // Auto-update model dropdown
 if (window.store) {
-  window.store.on('active_services', updateChatModelSelect);
 }
 setTimeout(updateChatModelSelect, 1000);
