@@ -12,12 +12,12 @@ vllm:
   conda_env: Qwen3.8-27B-VL
   max_model_len: 131072
   gpu_memory_utilization: 0.90
-  max_num_seqs: 8
+  max_num_seqs: 4
   kv_cache_dtype: fp8
   extra_flags: >-
     --max-num-batched-tokens 4096
     --enable-prefix-caching
-    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4, 8]}'
+    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4]}'
     --enable-chunked-prefill
     --async-scheduling
     --enable-auto-tool-choice
@@ -25,8 +25,6 @@ vllm:
     --reasoning-parser qwen3
     --trust-remote-code
     --attention-backend flashinfer
-    --kv-offloading-backend native
-    --kv-offloading-size 16
   startup_timeout: 480
   extra_env:
     FLASHINFER_DISABLE_VERSION_CHECK: "1"
