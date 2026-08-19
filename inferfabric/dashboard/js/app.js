@@ -510,7 +510,7 @@ async function doRelease(n,isExcl) {
       }
     }
   }catch(e){toast(e.message,'err');}
-  finally{sw=false;}
+  finally{swUnlock();}
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
@@ -522,7 +522,7 @@ async function doSleep(n) {
     else if(r.status==='already_sleeping') toast(n+' 已在休眠','info');
     else toast(r.message||'失败','err');
   }catch(e){toast(e.message,'err');}
-  finally{sw=false;}
+  finally{swUnlock();}
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
@@ -534,7 +534,7 @@ async function doWake(n) {
     else if(r.status==='already_awake') toast(n+' 未休眠','info');
     else toast(r.message||'失败','err');
   }catch(e){toast(e.message,'err');}
-  finally{sw=false;}
+  finally{swUnlock();}
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
@@ -547,7 +547,7 @@ async function doSwitch(n) {
     else if(r.status==='already_active') toast('已在 '+n,'info');
     else toast(r.message||'失败','err');
   }catch(e){toast(e.message,'err');}
-  finally{sw=false;}
+  finally{swUnlock();}
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
@@ -559,7 +559,7 @@ async function doStop(n) {
     else if(r.status==='already_stopped') toast(n+' 未运行','info');
     else toast(r.message||'停止失败','err');
   }catch(e){toast(e.message,'err');}
-  finally{sw=false;}
+  finally{swUnlock();}
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
