@@ -41,8 +41,8 @@ async function cloudLoadPresets() {
       const card = document.createElement('div');
       card.className = 'preset-card-mac';
       card.dataset.presetId = p.id;
-      
-      
+      card.id = 'preset-' + p.id;
+      card.innerHTML = '<span class="preset-icon">' + p.icon + '</span><span class="preset-name">' + esc(p.display_name) + '</span>';
       card.addEventListener('click', () => cloudSelectPreset(p.id));
       grid.appendChild(card);
     });
