@@ -928,42 +928,53 @@ function renderChatMsg(role, content) {
 
 // Populate model dropdown from status
 function updateChatModelSelect() {
-  const sel = document.getElementById('chatModel');
+  var sel = document.getElementById('chatModel');
   if (!sel) return;
-  const status = window.store ? window.store.get() : {};
-  const svcs = status.active_services || [];
-  sel.innerHTML = '';
-  var hasAny = false;
+  
+  // Fetch all models, filter chat-capable types
+  var chatTypes = ['llm', 'vl', 'omni'];
+  fetch('/models').then(function(r) { return r.json(); }).then(function(models) {
+    if (!Array.isArray(models)) return;
+    sel.innerHTML = '';
+    var hasAny = false;
 
-  // Local models
-  if (svcs.length > 0) {
-    var localGroup = document.createElement('optgroup');
-    localGroup.label = '本地模型';
-    svcs.forEach(function(n) {
-      var opt = document.createElement('option');
-      opt.value = n; opt.textContent = n;
-      localGroup.appendChild(opt);
-      hasAny = true;
+    // Local chat-capable models (all, not just active — IFF auto-switches)
+    var localChat = models.filter(function(m) {
+      return chatTypes.indexOf(m.model_type) >= 0;
     });
-    sel.appendChild(localGroup);
-  }
+    if (localChat.length > 0) {
+      var localGroup = document.createElement('optgroup');
+      localGroup.label = '本地模型';
+      localChat.forEach(function(m) {
+        var opt = document.createElement('option');
+        opt.value = m.name;
+        opt.textContent = m.name + (m.active ? ' ●' : '');
+        localGroup.appendChild(opt);
+        hasAny = true;
+      });
+      sel.appendChild(localGroup);
+    }
 
-  // Cloud provider models
-  if (window._cloudModelIds && window._cloudModelIds.length > 0) {
-    var cloudGroup = document.createElement('optgroup');
-    cloudGroup.label = '云端 Provider';
-    window._cloudModelIds.forEach(function(m) {
-      var opt = document.createElement('option');
-      opt.value = m.id; opt.textContent = m.id + ' (' + m.provider + ')';
-      cloudGroup.appendChild(opt);
-      hasAny = true;
-    });
-    sel.appendChild(cloudGroup);
-  }
+    // Cloud provider models
+    if (window._cloudModelIds && window._cloudModelIds.length > 0) {
+      var cloudGroup = document.createElement('optgroup');
+      cloudGroup.label = '云端 Provider';
+      window._cloudModelIds.forEach(function(m) {
+        var opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.id + ' (' + m.provider + ')';
+        cloudGroup.appendChild(opt);
+        hasAny = true;
+      });
+      sel.appendChild(cloudGroup);
+    }
 
-  if (!hasAny) {
-    sel.innerHTML = '<option value="">— 无可用模型 —</option>';
-  }
+    if (!hasAny) {
+      sel.innerHTML = '<option value="">— 无可用模型 —</option>';
+    }
+  }).catch(function() {
+    sel.innerHTML = '<option value="">— 加载失败 —</option>';
+  });
 }
 
 // Auto-update model dropdown
