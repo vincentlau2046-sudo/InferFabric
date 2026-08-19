@@ -883,7 +883,7 @@ function sendChat() {
   // Loading indicator
   const loader = document.createElement('div');
   loader.className = 'chat-msg loading';
-  loader.innerHTML = '<div class="chat-msg-role">Assistant</div><div class="chat-msg-content"></div>';
+  loader.innerHTML = '<div class="chat-msg-role">Assistant</div><div class="chat-msg-bubble"></div>';
   messages.appendChild(loader);
   messages.scrollTop = messages.scrollHeight;
   btn.disabled = true;
@@ -928,11 +928,13 @@ function sendChat() {
 }
 
 function renderChatMsg(role, content) {
-  const div = document.createElement('div');
+  var div = document.createElement('div');
   div.className = 'chat-msg ' + role;
-  div.innerHTML = '<div class="chat-msg-role">' + (role==='user'?'You':'Assistant') + '</div><div class="chat-msg-content">' + esc(content) + '</div>';
+  div.innerHTML = '<div class="chat-msg-role">' + (role==='user'?'You':'Assistant') + '</div>' + 
+    '<div class="chat-msg-bubble">' + esc(content) + '</div>';
   document.getElementById('chatMessages').appendChild(div);
-  document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+  var msgs = document.getElementById('chatMessages');
+  msgs.scrollTop = msgs.scrollHeight;
 }
 
 // Populate model dropdown from status
