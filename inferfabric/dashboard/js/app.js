@@ -316,7 +316,6 @@ async function load() {
     loadVllmMetrics(vPort,vName);
     vllmTimer=setInterval(()=>loadVllmMetrics(vPort,vName),10000);
   }else{
-    document.getElementById('perfPanel').style.display='none';
     clearInterval(vllmTimer);
     vllmTimer=null;
   }

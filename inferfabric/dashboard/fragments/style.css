@@ -266,8 +266,9 @@ body {
 @media (max-width:600px) { .perf-cards { grid-template-columns:repeat(2,1fr); } }
 .hist-card {
   background:var(--bg-card); border:1px solid var(--border);
-  border-radius:var(--radius-lg); box-shadow:var(--shadow);
+  border-radius:12px; box-shadow:var(--shadow);
   overflow:hidden; transition:all .2s; margin-bottom:16px;
+  padding:0;
 }
 .hist-card:hover { box-shadow:var(--shadow-md); }
 .hist-scroll { max-height:220px; overflow-y:auto; padding:16px 20px; }
