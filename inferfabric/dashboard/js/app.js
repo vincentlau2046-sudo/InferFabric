@@ -661,7 +661,7 @@ async function doDeploy(name, framework) {
       toast(r.message || '部署失败', 'err');
     }
   } catch(e) { toast(e.message, 'err'); }
-  finally { sw=false; }
+  finally { swUnlock(); }
   await Promise.all([load(), loadModels(), loadLocalModels()]);
 }
 
@@ -684,7 +684,7 @@ async function doPullAndDeploy(name, framework) {
       toast(deployResult.message || '部署失败', 'err');
     }
   } catch(e) { toast(e.message, 'err'); }
-  finally { sw=false; }
+  finally { swUnlock(); }
   await Promise.all([load(), loadModels(), loadLocalModels()]);
 }
 
@@ -733,7 +733,7 @@ async function submitVllmDeploy(event) {
       toast(r.message || '部署失败', 'err');
     }
   } catch(e) { toast(e.message, 'err'); }
-  finally { sw=false; }
+  finally { swUnlock(); }
   await Promise.all([load(), loadModels(), loadLocalModels()]);
   return false;
 }
@@ -757,7 +757,7 @@ async function submitOllamaDeploy(event) {
       toast(r.message || '部署失败', 'err');
     }
   } catch(e) { toast(e.message, 'err'); }
-  finally { sw=false; }
+  finally { swUnlock(); }
   await Promise.all([load(), loadModels(), loadLocalModels()]);
   return false;
 }
