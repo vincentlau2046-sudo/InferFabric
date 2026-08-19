@@ -451,13 +451,13 @@ async function loadModels() {
 
     var ctaBtn = '';
     if (active) {
-        ctaBtn = '<button class="card-cta stop" onclick="event.stopPropagation();doRelease(' + escAttr(m.name) + ',' + (m.mode === 'exclusive') + ')">释放</button>';
-        if (isVllm) ctaBtn += '<button class="card-cta sleep" onclick="event.stopPropagation();doSleep(' + escAttr(m.name) + ')" style="margin-top:4px">休眠</button>';
+        ctaBtn = '<button class="card-cta stop" onclick="event.stopPropagation();doRelease(\'' + escAttr(m.name) + '\',' + (m.mode === 'exclusive') + ')">释放</button>';
+        if (isVllm) ctaBtn += '<button class="card-cta sleep" onclick="event.stopPropagation();doSleep(\'' + escAttr(m.name) + '\')" style="margin-top:4px">休眠</button>';
     } else if (sleeping) {
-        ctaBtn = '<button class="card-cta stop" onclick="event.stopPropagation();doRelease(' + escAttr(m.name) + ',' + (m.mode === 'exclusive') + ')">释放</button>';
-        if (isVllm) ctaBtn += '<button class="card-cta start" onclick="event.stopPropagation();doWake(' + escAttr(m.name) + ')" style="margin-top:4px">唤醒</button>';
+        ctaBtn = '<button class="card-cta stop" onclick="event.stopPropagation();doRelease(\'' + escAttr(m.name) + '\',' + (m.mode === 'exclusive') + ')">释放</button>';
+        if (isVllm) ctaBtn += '<button class="card-cta start" onclick="event.stopPropagation();doWake(\'' + escAttr(m.name) + '\')" style="margin-top:4px">唤醒</button>';
     } else {
-        ctaBtn = '<button class="card-cta start" onclick="event.stopPropagation();doSwitch(' + escAttr(m.name) + ')">启动</button>';
+        ctaBtn = '<button class="card-cta start" onclick="event.stopPropagation();doSwitch(\'' + escAttr(m.name) + '\')">启动</button>';
     }
 
     var badgeLabel = modeBadge === 'excl' ? '独占' : (modeBadge === 'shrd' ? '共享' : '空闲');
