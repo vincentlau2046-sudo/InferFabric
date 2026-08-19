@@ -2,6 +2,22 @@
 
 > **Model as Plugin. One YAML, one model. Local + Cloud, unified.**
 >
+> 单卡 GPU 推理网关 · 模型即插件 · 三态 GPU 状态机 · macOS Dashboard · 9 云端预设
+
+---
+
+## What It Solves
+
+**The Problem**: Running multiple LLM models on a single GPU is painful. Model switching is manual. Cloud API keys are scattered in config files. Each client needs its own backend configuration.
+
+**InferFabric solves this**:
+
+- **Model switching without OOM** — Three-state GPU (idle/exclusive/shared) with safe transitions and health checks
+- **One API, any model** — Every model—local vLLM, local llama.cpp, or cloud OpenAI/Anthropic—is accessed through the same `/v1/chat/completions` endpoint
+- **API keys never in plaintext** — `${ENV_VAR}` auto-conversion, secrets stored in `chmod 600` file
+- **Dashboard, not YAML editing** — macOS sidebar dashboard for model switching, monitoring, chat testing, and cloud provider management
+- **Auto-switch on demand** — Request a model and IFF boots it if needed; no manual intervention
+>
 > macOS Dashboard · Three-state GPU · OpenAI/Anthropic dual-protocol routing · 9 cloud presets
 
 ---
