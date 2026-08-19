@@ -6,23 +6,32 @@
   <!-- Model Panels -->
   <div class="panels">
     <div class="panel">
-      <div class="panel-hdr">
-        <div class="panel-icon excl">🔒</div>
-        <span class="panel-title">独占模型</span>
+      <div class="section-header">
+        <div class="section-icon" style="background:var(--red-s)">
+          <svg width="18" height="18"><use href="#s-cube"/></svg>
+        </div>
+        <span class="section-title">独占模型</span>
+        <span class="section-count" id="exclCount">0</span>
       </div>
       <div id="exclList" class="model-grid"></div>
     </div>
     <div class="panel">
-      <div class="panel-hdr">
-        <div class="panel-icon shrd">🔓</div>
-        <span class="panel-title">共享服务</span>
+      <div class="section-header">
+        <div class="section-icon" style="background:var(--green-s)">
+          <svg width="18" height="18"><use href="#s-cube"/></svg>
+        </div>
+        <span class="section-title">共享服务</span>
+        <span class="section-count" id="shrdCount">0</span>
       </div>
       <div id="shrdList" class="model-grid"></div>
     </div>
     <div class="panel">
-      <div class="panel-hdr">
-        <div class="panel-icon free">⚡</div>
-        <span class="panel-title">空闲</span>
+      <div class="section-header">
+        <div class="section-icon" style="background:var(--orange-s)">
+          <svg width="18" height="18"><use href="#s-bolt"/></svg>
+        </div>
+        <span class="section-title">空闲</span>
+        <span class="section-count" id="freeCount">0</span>
       </div>
       <div id="freeList" class="model-grid"></div>
     </div>

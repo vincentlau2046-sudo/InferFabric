@@ -430,64 +430,57 @@ async function loadModels() {
   const svcInfo=st.services_info||{};
 
   function renderCard(m, modeBadge) {
-    const isVllm=m.type==='vllm';
-    const info=svcInfo[m.name]||{};
-    const port=info.port||'—';
-    const sleeping=!!sleepSt[m.name];
-    const active=m.active&&!sleeping;
-    const cls='model-card'+(active?' active':'');
+    const info = svcInfo[m.name] || {};
+    const port = info.port || '—';
+    const sleeping = !!sleepSt[m.name];
+    const active = m.active && !sleeping;
+    const isVllm = m.type === 'vllm';
 
-    let statusLine='<span style="color:var(--text4);font-size:13px">○ stopped</span>';
-    if(active) statusLine='<span style="color:var(--green);font-size:13px;font-weight:600">✅ running</span>';
-    else if(sleeping) statusLine='<span style="color:var(--purple);font-size:13px;font-weight:600">⏸ sleeping</span>';
+    const fwIcons = { vllm: '🔥', ollama: '🦙', sglang: '📦', comfyui: '🎨', asr_server: '🎤', tts_server: '🔊', ollama_cpp: '📦' };
+    const fwLabels = { vllm: 'vLLM', ollama: 'Ollama', sglang: 'SGLang', comfyui: 'ComfyUI', asr_server: 'ASR', tts_server: 'TTS', ollama_cpp: 'ollama.cpp' };
+    const mtIcon = { llm: '🧠', vl: '👁', omni: '🌐', ocr: '📄', aigc: '✨', embedding: '📊', rerank: '🔄', infra: '⚙️', tts: '🔊', asr: '🎤' };
 
-    let btns='';
-    if(active){
-      btns+='<button class="btn-card stop" onclick="event.stopPropagation();doRelease(\''+escAttr(m.name)+'\','+(m.mode==='exclusive')+')">释放</button>';
-      if(isVllm) btns+='<button class="btn-card start" onclick="event.stopPropagation();doSleep(\''+escAttr(m.name)+'\')">休眠</button>';
-    }else if(sleeping){
-      btns+='<button class="btn-card stop" onclick="event.stopPropagation();doRelease(\''+escAttr(m.name)+'\','+(m.mode==='exclusive')+')">释放</button>';
-      if(isVllm) btns+='<button class="btn-card start" onclick="event.stopPropagation();doWake(\''+escAttr(m.name)+'\')">唤醒</button>';
-    }else{
-      btns+='<button class="btn-card start" onclick="event.stopPropagation();doSwitch(\''+escAttr(m.name)+'\')">启动</button>';
+    const cls = 'model-card' + (active ? ' active' : '');
+    const statusCls = active ? 'running' : (sleeping ? 'sleeping' : 'stopped');
+    const statusIcon = active ? '✅' : (sleeping ? '⏸' : '○');
+    const statusText = active ? 'running' : (sleeping ? 'sleeping' : 'stopped');
+
+    const tags = [];
+    if (m.quantization) tags.push(m.quantization);
+    if (m.context_window && m.context_window >= 1024) tags.push((m.context_window / 1024).toFixed(0) + 'K ctx');
+    else if (m.context_window) tags.push(m.context_window + ' ctx');
+    tags.push(fwLabels[m.type] || m.type);
+    if (m.model_type) tags.push((mtIcon[m.model_type] || '🧠') + ' ' + m.model_type);
+    const tagsHtml = tags.map(function(t) { return '<span class="card-tag">' + t + '</span>'; }).join('');
+
+    var ctaBtn = '';
+    if (active) {
+        ctaBtn = '<button class="card-cta stop" onclick="event.stopPropagation();doRelease(' + escAttr(m.name) + ',' + (m.mode === 'exclusive') + ')">释放</button>';
+        if (isVllm) ctaBtn += '<button class="card-cta sleep" onclick="event.stopPropagation();doSleep(' + escAttr(m.name) + ')" style="margin-top:4px">休眠</button>';
+    } else if (sleeping) {
+        ctaBtn = '<button class="card-cta stop" onclick="event.stopPropagation();doRelease(' + escAttr(m.name) + ',' + (m.mode === 'exclusive') + ')">释放</button>';
+        if (isVllm) ctaBtn += '<button class="card-cta start" onclick="event.stopPropagation();doWake(' + escAttr(m.name) + ')" style="margin-top:4px">唤醒</button>';
+    } else {
+        ctaBtn = '<button class="card-cta start" onclick="event.stopPropagation();doSwitch(' + escAttr(m.name) + ')">启动</button>';
     }
 
-    // Specs row: framework + model type + context window + quantization — always 4 slots for alignment
-    const fwIcons = { vllm:'🔥', ollama:'🦙', ollama_cpp:'📦', comfyui:'🖼️' };
-    const fwLabels = { vllm:'vLLM', ollama:'Ollama', ollama_cpp:'ollama.cpp', comfyui:'ComfyUI' };
-    const framework = fwLabels[m.type] || m.type;
-    const fwIcon = fwIcons[m.type] || '📦';
-    const ctxStr = m.context_window ? (m.context_window >= 1024 ? (m.context_window/1024).toFixed(0)+'K ctx' : m.context_window+' ctx') : '';
-    // Icon/label by model_type (not modality) — ocr vs vl both → text-vision but need different icons
-    const mtIcon = { llm:'🧠', vl:'👁', omni:'🌐', ocr:'📄', aigc:'✨', embedding:'📊', rerank:'🔄', infra:'⚙️', tts:'🔊', asr:'🎤' };
-    const mtLabel = { llm:'LLM', vl:'VL', omni:'Omni', ocr:'OCR', aigc:'AIGC', embedding:'Embed', rerank:'Rerank', infra:'Infra', tts:'TTS', asr:'ASR' };
-    // badge 文案：modeBadge 取值 excl/shrd/free，对应独占/共享/空闲
-    const modeLabel = { excl:'独占', shrd:'共享', free:'空闲' };
-    const modality = m.modality || 'text';
-    const mt = m.model_type || 'llm';
-    // Always render 4 spec slots; missing ones get hidden placeholders for alignment
-    const specSlots = [];
-    specSlots.push('<span class="spec-tag">'+fwIcon+' '+framework+'</span>');
-    if(mtIcon[mt]) specSlots.push('<span class="spec-tag">'+mtIcon[mt]+' '+(mtLabel[mt]||mt)+'</span>');
-    else specSlots.push('<span class="spec-tag" style="visibility:hidden">—</span>');
-    if(ctxStr) specSlots.push('<span class="spec-tag">📐 '+ctxStr+'</span>');
-    else specSlots.push('<span class="spec-tag" style="visibility:hidden">—</span>');
-    if(m.quantization) specSlots.push('<span class="spec-tag">⚡ '+m.quantization+'</span>');
-    else specSlots.push('<span class="spec-tag" style="visibility:hidden">—</span>');
-    const specs = specSlots.join('');
+    var badgeLabel = modeBadge === 'excl' ? '独占' : (modeBadge === 'shrd' ? '共享' : '空闲');
 
-    return '<div class="'+cls+'" id="sw-'+m.name+'">'+
-      '<div class="model-top">'+
-        '<div class="model-dot"></div>'+
-        '<div class="model-info"><div class="model-name">'+esc(m.name)+'</div>'+
-          '<div style="font-size:13px;color:var(--text3);margin-top:3px">'+statusLine+' <span style="margin-left:6px;font-variant-numeric:tabular-nums;'+(active?"color:var(--green)":"color:var(--text4)")+'">:'+port+'</span></div>'+
-        '</div>'+
-        '<span class="model-badge '+modeBadge+'">'+(modeLabel[modeBadge]||modeBadge)+'</span>'+
-      '</div>'+
-      '<div class="model-specs">'+specs+'</div>'+
-      '<div class="model-actions">'+btns+'</div>'+
-    '</div>';
-  }
+    return '<div class="' + cls + '">' +
+        '<div class="card-hdr">' +
+        '<div class="card-icon-box">' + (fwIcons[m.type] || '📦') + '</div>' +
+        '<div class="card-name">' + esc(m.name) + '</div>' +
+        '<span class="card-badge ' + modeBadge + '">' + badgeLabel + '</span>' +
+        '</div>' +
+        '<div class="card-status ' + statusCls + '">' +
+        '<span class="st-icon">' + statusIcon + '</span>' +
+        '<span class="st-text">' + statusText + '</span>' +
+        '<span class="st-port">:' + port + '</span>' +
+        '</div>' +
+        '<div class="card-tags">' + tagsHtml + '</div>' +
+        ctaBtn +
+        '</div>';
+}
 
   document.getElementById('exclList').innerHTML=excl.map(m=>renderCard(m,'excl')).join('');
   document.getElementById('shrdList').innerHTML=shrd.map(m=>renderCard(m,'shrd')).join('');
