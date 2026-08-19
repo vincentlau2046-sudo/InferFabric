@@ -17,21 +17,10 @@ function swLock() {
 function swUnlock() {
   try { localStorage.removeItem('inferfabric_sw_lock'); } catch(e) {}
 }
-function switchTab(tabId) {
-  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
-  const target = document.getElementById(tabId);
-  if (target) target.classList.add('active');
-  const btn = document.querySelector(`.tab-item[data-tab="${tabId}"]`);
-  if (btn) btn.classList.add('active');
-}
-// Cleanup on tab close
 window.addEventListener('beforeunload', swUnlock);
-function toast(m,t) {
-  const e=document.getElementById('toast');
-  e.textContent=m; e.className='toast '+t+' show';
-  clearTimeout(e._t); e._t=setTimeout(()=>e.classList.remove('show'),2800);
-}
+
+// toast → showToast (from bindings.js P0 migration)
+const toast = window.showToast || function(m,t) { console.warn('[legacy-toast]',m,t); };
 
 // ═══ Cloud Management (v4.7.0) ═══
 let _cloudPresets = [];
@@ -288,57 +277,23 @@ function adminHeaders() {
   return h;
 }
 
-// Load cloud data when switching to cloud tab
-const origSwitchTab = switchTab;
-switchTab = function(tabId) {
-  origSwitchTab(tabId);
-  if (tabId === 'tab-cloud') { cloudLoadPresets(); cloudLoadProviders(); }
-};
+// Cloud data load on tab switch — delegated to state.js switchTab
+// Cloud tab handler triggered by state store subscription
+if (window.store) {
+  window.store.on('tab_active', (val) => {
+    if (val === 'tab-cloud') { cloudLoadPresets(); cloudLoadProviders(); }
+  });
+}
 async function j(p,o) { return (await fetch(p,o)).json(); }
 
 async function load() {
-  const [s,sys,hist]=await Promise.all([j('/status'),j('/system').catch(()=>({})),j('/history').catch(()=>[])]);
-  const gm=s.gpu_mode||'idle';
-  const labels={idle:'idle',exclusive:'exclusive',shared:'shared'};
-  const tag=document.getElementById('sTag');
-  tag.className='tag '+gm;
-  document.getElementById('sTxt').textContent=labels[gm]||gm;
+  // P0: Removed DOM element assignments now handled by state.js + bindings.js.
+  // Retained: history table, active services card, vLLM metrics detection.
+  const s=await j('/status').catch(()=>({}));
+  const sys=await j('/system').catch(()=>({}));
+  const hist=await j('/history').catch(()=>[]);
 
-  // GPU
-  const gt=s.gpu_total_mb||32607,gu=s.gpu_used_mb||0,gp=(gu/gt*100);
-  document.getElementById('gP').textContent=gp.toFixed(1);
-  document.getElementById('gU').textContent=gu.toLocaleString();
-  document.getElementById('gT').textContent=gt.toLocaleString();
-  document.getElementById('gB').style.width=gp.toFixed(1)+'%';
-  document.getElementById('gB').style.background=gp<50?'var(--blue)':gp<80?'var(--orange)':'var(--red)';
-
-  // GPU Load
-  const guP=sys.gpu_util_pct||0;
-  document.getElementById('guP').textContent=guP.toFixed(1);
-  document.getElementById('guB').style.width=guP.toFixed(1)+'%';
-  document.getElementById('guB').style.background=guP<30?'var(--green)':guP<70?'var(--orange)':'var(--red)';
-  document.getElementById('guC').textContent=sys.gpu_clock_mhz||'—';
-  document.getElementById('guW').textContent=sys.gpu_power_w||'—';
-
-  // RAM
-  const rt=sys.ram_total_gb||1,ru=sys.ram_used_gb||0,rp=(ru/rt*100);
-  document.getElementById('rP').textContent=rp.toFixed(1);
-  document.getElementById('rU').textContent=ru.toFixed(1);
-  document.getElementById('rT').textContent=rt.toFixed(1);
-  document.getElementById('rB').style.width=rp.toFixed(1)+'%';
-
-  // CPU
-  const cp=sys.cpu_percent||0;
-  document.getElementById('cP').textContent=cp.toFixed(1);
-  document.getElementById('cC').textContent=sys.cpu_cores||'—';
-  document.getElementById('cB').style.width=cp.toFixed(1)+'%';
-  const us=sys.uptime_seconds||0;
-  document.getElementById('cU').textContent=Math.floor(us/3600)+'h '+Math.floor((us%3600)/60)+'m';
-  // Version from API (PR-17)
-  const ver=sys.version;
-  if(ver){const ve=document.getElementById('navVer');if(ve)ve.textContent='v'+ver;}
-
-  // History
+  // History table (switch log) — unique to this view, not in status API
   const hBody=document.getElementById('hBody');
   if(!hist||!hist.length){hBody.innerHTML='<div style="text-align:center;padding:20px;color:var(--text4);font-size:14px">暂无记录</div>';}
   else{hBody.innerHTML=hist.slice(0,12).map(h=>{
@@ -349,9 +304,7 @@ async function load() {
     return '<div class="hrow"><span class="h-time">'+ts+'</span><span class="h-from">'+esc(h.from||'—')+'</span><span class="h-arrow">→</span><span class="h-to">'+esc(h.to)+'</span><span class="h-dur">'+d+'</span><span>'+st+'</span></div>';
   }).join('');}
 
-  document.getElementById('ts').textContent=new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-
-  // vLLM metrics: detect active vLLM service from services_info
+  // vLLM metrics detection
   const svcInfo=s.services_info||{};
   let vPort=null, vName=null;
   for(const n of (s.active_services||[])){
@@ -377,21 +330,20 @@ async function load() {
   if(svcs.length===0){
     svcHtml+='<span class="svc-empty">无活跃服务</span>';
   }else{
+    svcHtml+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
     for(const n of svcs){
       const h=health[n]||"❌";
       const ok=h==='✅';
       const info=sInfo[n]||{};
       const port=info.port||'—';
       const mode=info.mode||'?';
-      const modeTag=mode==='exclusive'?'<span class="model-badge excl" style="padding:2px 8px;font-size:10px">独占</span>':'<span class="model-badge shrd" style="padding:2px 8px;font-size:10px">共享</span>';
-      const sleepMatch=h.match(/sleeping [A-Z0-9]+/);
-      const sleepLabel=sleepMatch?' <span style="color:var(--purple);font-size:11px;font-weight:500">⏸ '+sleepMatch[0]+'</span>':'';
-      svcHtml+='<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--bg)">';
-      svcHtml+='<span style="color:'+(ok?'var(--green)':'var(--red)')+';font-size:16px">'+(ok?'✓':'✗')+'</span>';
-      svcHtml+='<span style="flex:1;font-size:14px;font-weight:600;color:var(--text1)">'+n+'</span>';
-      svcHtml+='<span style="font-size:12px;color:var(--text3);font-variant-numeric:tabular-nums">:'+port+'</span>';
-      svcHtml+=modeTag+sleepLabel+'</div>';
+      svcHtml+='<div style="flex:1;min-width:180px;display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:8px">';
+      svcHtml+='<span style="color:'+(ok?'var(--green)':'var(--red)')+';font-size:14px">'+(ok?'✓':'✗')+'</span>';
+      svcHtml+='<span style="flex:1;font-size:13px;font-weight:600;color:var(--text1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+n+'</span>';
+      svcHtml+='<span style="font-size:11px;color:var(--text3);font-variant-numeric:tabular-nums;flex-shrink:0">:'+port+'</span>';
+      svcHtml+='</div>';
     }
+    svcHtml+='</div>';
   }
   svcCard.innerHTML=svcHtml;
 }
@@ -485,9 +437,9 @@ async function loadModels() {
     const active=m.active&&!sleeping;
     const cls='model-card'+(active?' active':'');
 
-    let statusLine='<span style="color:var(--text4);font-size:12px">○ stopped</span>';
-    if(active) statusLine='<span style="color:var(--green);font-size:12px;font-weight:600">✅ running</span>';
-    else if(sleeping) statusLine='<span style="color:var(--purple);font-size:12px;font-weight:600">⏸ sleeping</span>';
+    let statusLine='<span style="color:var(--text4);font-size:13px">○ stopped</span>';
+    if(active) statusLine='<span style="color:var(--green);font-size:13px;font-weight:600">✅ running</span>';
+    else if(sleeping) statusLine='<span style="color:var(--purple);font-size:13px;font-weight:600">⏸ sleeping</span>';
 
     let btns='';
     if(active){
@@ -528,7 +480,7 @@ async function loadModels() {
       '<div class="model-top">'+
         '<div class="model-dot"></div>'+
         '<div class="model-info"><div class="model-name">'+esc(m.name)+'</div>'+
-          '<div style="font-size:11px;color:var(--text3);margin-top:3px">'+statusLine+' <span style="margin-left:6px;font-variant-numeric:tabular-nums;color:var(--text4)">:'+port+'</span></div>'+
+          '<div style="font-size:13px;color:var(--text3);margin-top:3px">'+statusLine+' <span style="margin-left:6px;font-variant-numeric:tabular-nums;'+(active?"color:var(--green)":"color:var(--text4)")+'">:'+port+'</span></div>'+
         '</div>'+
         '<span class="model-badge '+modeBadge+'">'+(modeLabel[modeBadge]||modeBadge)+'</span>'+
       '</div>'+
@@ -889,27 +841,120 @@ document.addEventListener('click',e=>{
   loadUsage();
 });
 
-// ── GPU Metrics (P1) ──
-async function loadGpuMetrics() {
-  try {
-    const sys=await j('/system').catch(()=>({}));
-    const g=document.getElementById('gpuGrid');
-    const ts=document.getElementById('gpuTs');
-    ts.textContent=new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    const cards=[
-      ['利用率', (sys.gpu_util_pct||0).toFixed(1), '%', sys.gpu_util_pct<30?'优秀':sys.gpu_util_pct<70?'中等':'高负载'],
-      ['核心频率', sys.gpu_clock_mhz||'—', 'MHz', '实时'],
-      ['功耗', (sys.gpu_power_w||0).toFixed(1), 'W', '实时'],
-      ['显存负载', (((sys.gpu_used_mb||0)/(sys.gpu_total_mb||32607))*100||0).toFixed(1), '%', (sys.gpu_used_mb||0).toLocaleString()+' / '+(sys.gpu_total_mb||32607).toLocaleString()+' MB'],
-    ];
-    g.innerHTML=cards.map(c=>
-      '<div class="gpu-card"><span class="gpu-card-label">'+c[0]+'</span>'+
-      '<div><span class="gpu-card-val">'+c[1]+'</span><span class="gpu-card-unit">'+c[2]+'</span></div>'+
-      '<span class="gpu-card-sub">'+c[3]+'</span></div>'
-    ).join('');
-  }catch(e){ /* ignore */ }
+
+// ── Initialization (P0: migrated to store-driven) ──
+function init() {
+  toggleDeployForm();           // Collapse deploy form by default
+  if (window.restoreTab) restoreTab();
+  if (window.startPolling) startPolling();  // state.js: 3s fetch → store → render(bindings)
+  load();                       // One-time: history, active svc, vLLM metrics
+  loadModels();
+  loadLocalModels();
+  loadUsage();
+  cloudLoadPresets();
+  cloudLoadProviders();
+  // Periodic refresh
+  setInterval(load, 5000);
+  setInterval(loadUsage, 30000);
 }
 
-Promise.all([load(),loadModels(),loadLocalModels(),loadUsage(),loadGpuMetrics()]);
-setInterval(()=>{load();loadModels();loadLocalModels();loadGpuMetrics();},5000);
-setInterval(loadUsage,30000);
+// Init
+window.addEventListener('DOMContentLoaded', init);
+
+/* ── S3: Chat 推理 ── */
+let _chatHistory = [];
+
+function sendChat() {
+  const input = document.getElementById('chatInput');
+  const modelSel = document.getElementById('chatModel');
+  const messages = document.getElementById('chatMessages');
+  const stats = document.getElementById('chatStats');
+  const btn = document.getElementById('chatSendBtn');
+  const text = input.value.trim();
+  if (!text) return;
+  const model = modelSel.value;
+  if (!model) { showToast('请先选择活跃模型', 'err'); return; }
+
+  // User message
+  input.value = '';
+  _chatHistory.push({role:'user', content: text});
+  renderChatMsg('user', text);
+
+  // Loading indicator
+  const loader = document.createElement('div');
+  loader.className = 'chat-msg loading';
+  loader.innerHTML = '<div class="chat-msg-role">Assistant</div><div class="chat-msg-content"></div>';
+  messages.appendChild(loader);
+  messages.scrollTop = messages.scrollHeight;
+  btn.disabled = true;
+
+  // Call /v1/chat/completions via proxy
+  const maxTokens = parseInt(document.getElementById('chatMaxTokens').value, 10) || 1024;
+  const temp = parseFloat(document.getElementById('chatTemp').value) || 0.7;
+
+  const payload = {
+    model: model,
+    messages: _chatHistory.slice(-10),
+    max_tokens: maxTokens,
+    temperature: temp,
+    stream: false
+  };
+
+  fetch('/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+    .then(r => r.json())
+    .then(data => {
+      loader.remove();
+      if (data.choices && data.choices[0]) {
+        const reply = data.choices[0].message.content;
+        _chatHistory.push({role:'assistant', content: reply});
+        renderChatMsg('assistant', reply);
+        const usage = data.usage || {};
+        stats.textContent = `Tokens: ${usage.prompt_tokens||'?'} in · ${usage.completion_tokens||'?'} out · ${usage.total_tokens||'?'} total`;
+      } else {
+        renderChatMsg('assistant', '⚠️ ' + (data.error?.message || '无响应'));
+        stats.textContent = '';
+      }
+      btn.disabled = false;
+    })
+    .catch(err => {
+      loader.remove();
+      renderChatMsg('assistant', '⚠️ 请求失败: ' + err.message);
+      btn.disabled = false;
+    });
+}
+
+function renderChatMsg(role, content) {
+  const div = document.createElement('div');
+  div.className = 'chat-msg ' + role;
+  div.innerHTML = '<div class="chat-msg-role">' + (role==='user'?'You':'Assistant') + '</div><div class="chat-msg-content">' + esc(content) + '</div>';
+  document.getElementById('chatMessages').appendChild(div);
+  document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+}
+
+// Populate model dropdown from status
+function updateChatModelSelect() {
+  const sel = document.getElementById('chatModel');
+  if (!sel) return;
+  const status = window.store ? window.store.get() : {};
+  const svcs = status.active_services || [];
+  sel.innerHTML = '';
+  if (svcs.length === 0) {
+    sel.innerHTML = '<option value="">— 无活跃模型 —</option>';
+  } else {
+    svcs.forEach(n => {
+      const opt = document.createElement('option');
+      opt.value = n; opt.textContent = n;
+      sel.appendChild(opt);
+    });
+  }
+}
+
+// Auto-update model dropdown
+if (window.store) {
+  window.store.on('active_services', updateChatModelSelect);
+}
+setTimeout(updateChatModelSelect, 1000);

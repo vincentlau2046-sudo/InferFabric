@@ -34,6 +34,39 @@
     <button class="act-btn warn" onclick="doReset()">强制重置</button>
   </div>
 
+  <!-- S3: 推理 Chat 面板 (底部, 不常用) -->
+  <div class="inference-panel">
+    <div class="panel-hdr collapse" onclick="this.classList.toggle('open');this.nextElementSibling.classList.toggle('open')">
+      <svg width="16" height="16" style="color:var(--primary);flex-shrink:0"><use href="#s-message"/></svg>
+      <span>推理 Chat</span>
+      <span class="collapse-arrow">▸</span>
+    </div>
+    <div class="chat-body">
+      <div class="chat-controls">
+        <div class="chat-select-row">
+          <label class="chat-label">模型</label>
+          <select id="chatModel" class="chat-select" onchange="void 0">
+            <option value="">— 无活跃模型 —</option>
+          </select>
+          <label class="chat-label" style="margin-left:12px">Max Tokens</label>
+          <input type="number" id="chatMaxTokens" class="chat-input-num" value="1024" min="64" max="4096">
+          <label class="chat-label" style="margin-left:12px">Temperature</label>
+          <input type="number" id="chatTemp" class="chat-input-num" value="0.7" min="0" max="2" step="0.1">
+        </div>
+      </div>
+      <div class="chat-messages" id="chatMessages">
+        <div class="chat-empty">选择模型后发送消息开始对话</div>
+      </div>
+      <div class="chat-input-row">
+        <textarea id="chatInput" class="chat-input" rows="3" placeholder="Type your message..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
+        <button class="chat-send" id="chatSendBtn" onclick="sendChat()">
+          <svg width="16" height="16"><path d="M3 3l16 8L3 19V3z" fill="currentColor"/></svg>
+        </button>
+      </div>
+      <div class="chat-stats" id="chatStats"></div>
+    </div>
+  </div>
+
   </div><!-- /tab-inference -->
 
   <!-- ════════ Tab 2: 指标监控 ════════ -->

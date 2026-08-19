@@ -41,7 +41,7 @@ def get_html() -> str:
         except FileNotFoundError:
             log.warning("Dashboard CSS missing: %s", css_path)
         # 替换 JS 占位符
-        for js_name in ("app", "monitor"):
+        for js_name in ("bindings", "state", "app", "monitor"):
             js_path = _DASHBOARD_DIR / "js" / f"{js_name}.js"
             try:
                 js = js_path.read_text(encoding="utf-8")

@@ -7,87 +7,203 @@
 <style>
 <!-- CSS:main -->
 </style>
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- S5: 12 SVG Symbols -->
+    <symbol id="s-gpu" viewBox="0 0 22 22" fill="none">
+      <rect x="2" y="5" width="18" height="12" rx="2.5" stroke="currentColor" stroke-width="1.5"/>
+      <rect x="6" y="8" width="10" height="6" rx="1" fill="currentColor" opacity=".25"/>
+      <path d="M8 5V2.5h6V5M6 17v2.5h10V17" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+      <circle cx="11" cy="11" r="1.2" fill="currentColor"/>
+    </symbol>
+    <symbol id="s-memory" viewBox="0 0 22 22" fill="none">
+      <rect x="3" y="4" width="16" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/>
+      <rect x="6" y="7" width="2.5" height="8" rx=".4" fill="currentColor" opacity=".35"/>
+      <rect x="10" y="7" width="2.5" height="8" rx=".4" fill="currentColor" opacity=".5"/>
+      <rect x="14" y="7" width="2.5" height="8" rx=".4" fill="currentColor" opacity=".25"/>
+    </symbol>
+    <symbol id="s-cpu" viewBox="0 0 22 22" fill="none">
+      <rect x="4.5" y="4.5" width="13" height="13" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+      <path d="M7.5 8.5h7v5h-7z" fill="currentColor" opacity=".25"/>
+      <path d="M11 2v3M11 17v3M2 11h3M17 11h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="s-chart" viewBox="0 0 22 22" fill="none">
+      <rect x="2" y="2" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/>
+      <path d="M6 16V10l3 3 4-5 3 2v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="s-message" viewBox="0 0 22 22" fill="none">
+      <path d="M3 11a8.5 8.5 0 0 1 16 0 8.5 8.5 0 0 1-12.5 7.5L3 19l2-3.5A8.5 8.5 0 0 1 3 11z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="s-cube" viewBox="0 0 22 22" fill="none">
+      <path d="M11 2l7 4.5v9L11 20l-7-4.5v-9L11 2z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M11 11l7-4.5M11 11v9M11 11l-7-4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="s-cloud" viewBox="0 0 22 22" fill="none">
+      <path d="M6 14.5A5 5 0 0 1 9.5 5a6.5 6.5 0 1 1 8 9.5H6a3.5 3.5 0 0 1 0-1z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="s-swap" viewBox="0 0 22 22" fill="none">
+      <path d="M16 16l-4 4-4-4M16 6l-4-4-4 4M12 20V2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="s-gear" viewBox="0 0 22 22" fill="none">
+      <circle cx="11" cy="11" r="3" stroke="currentColor" stroke-width="1.5"/>
+      <path d="M11 2v2.5m0 13V20m9-9h-2.5m-13 0H2m15.5-4.5l-1.8 1.8M6.3 12.7l-1.8 1.8m12.5 0l-1.8-1.8M7.5 9.3L5.7 7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="s-bolt" viewBox="0 0 22 22" fill="none">
+      <path d="M12 2L5 12h5l-1 8 8-11h-5l1-8z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="s-check" viewBox="0 0 22 22" fill="none">
+      <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="1.5"/>
+      <path d="M7 11l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="s-xmark" viewBox="0 0 22 22" fill="none">
+      <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="1.5"/>
+      <path d="M8 8l6 6m0-6l-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </symbol>
+  </defs>
+</svg>
 </head>
 <body>
 
-<div class="nav">
-  <div class="nav-in">
-    <div class="nav-l">
-      <div class="nav-logo">E</div>
-      <span class="nav-title">InferFabric</span>
-      <span class="tag idle" id="sTag"><span class="dot"></span><span id="sTxt">idle</span></span>
+<div id="app">
+  <!-- S1/S6: macOS 顶栏 (40px毛玻璃) -->
+  <header class="mac-topbar">
+    <div class="mac-topbar-inner">
+      <div class="mac-dots">
+        <span class="mddot red"></span>
+        <span class="mddot yellow"></span>
+        <span class="mddot green"></span>
+      </div>
+      <span class="mac-topbar-title">InferFabric Dashboard</span>
+      <div class="mac-topbar-right">
+        <span id="sTag" class="mac-tag tag idle"><span class="dot"></span><span id="sTxt">idle</span></span>
+        <span class="mac-ver" id="navVer"></span>
+        <span class="mac-divider"></span>
+        <span class="mac-clock" id="ts">—</span>
+        <button class="mac-theme-btn" id="themeToggle" onclick="toggleTheme()">☀️</button>
+      </div>
     </div>
-    <div class="nav-r">
-      <span class="nav-ver" id="navVer">v…</span>
-      <span class="nav-ts" id="ts">—</span>
-    </div>
+  </header>
+
+  <div class="mac-body">
+    <!-- S1: macOS 侧边栏 (240px, pill式选中) -->
+    <aside class="mac-sidebar">
+      <div class="sidebar-brand">
+        <div class="sidebar-logo">
+          <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+            <rect width="36" height="36" rx="10" fill="#cc7a60"/>
+            <path d="M18 8c-5.5 0-10 4-10 9s4 9 10 9c2 0 3.8-.5 5.4-1.4l-2.8-3a5 5 0 0 1-2.6.7c-2.8 0-5-2-5-4.7 0-2.5 2-4.6 5-4.6 2.5 0 4.5 1.8 4.9 4.1l4.3-3C24 10 21.2 8 18 8z" fill="#fff" opacity=".95"/>
+            <path d="M20 14l-4 5h3l-1 4 4-5h-3l1-4z" fill="#fff" opacity=".8"/>
+          </svg>
+        </div>
+        <div>
+          <div class="sidebar-brand-name">InferFabric</div>
+          <div class="sidebar-brand-sub">控制面板</div>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="snav-item active" data-tab="tab-inference" onclick="switchTab('tab-inference')">
+          <svg class="snav-icon" width="22" height="22"><use href="#s-message"/></svg>
+          <span class="snav-label">推理</span>
+        </button>
+        <button class="snav-item" data-tab="tab-monitor" onclick="switchTab('tab-monitor')">
+          <svg class="snav-icon" width="22" height="22"><use href="#s-chart"/></svg>
+          <span class="snav-label">监控</span>
+        </button>
+        <button class="snav-item" data-tab="tab-deploy" onclick="switchTab('tab-deploy')">
+          <svg class="snav-icon" width="22" height="22"><use href="#s-cube"/></svg>
+          <span class="snav-label">部署</span>
+        </button>
+        <button class="snav-item" data-tab="tab-cloud" onclick="switchTab('tab-cloud')">
+          <svg class="snav-icon" width="22" height="22"><use href="#s-cloud"/></svg>
+          <span class="snav-label">云端</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <span class="sidebar-status-dot excl"></span>
+        <span class="sidebar-status-txt">运行中</span>
+      </div>
+    </aside>
+
+    <main class="mac-main">
+      <!-- S2: 4 紧凑指标条 (sticky top) -->
+      <div class="mac-metrics">
+        <div class="mm-card" data-mm="gpu">
+          <div class="mm-top">
+            <svg class="mm-icon" width="16" height="16"><use href="#s-gpu"/></svg>
+            <span class="mm-label">GPU 显存</span>
+          </div>
+          <div class="mm-row">
+            <span class="mm-val" id="gP">0</span><span class="mm-unit">%</span>
+          </div>
+          <div class="mm-track"><div class="mm-fill" id="gB" style="width:0%"></div></div>
+          <div class="mm-sub">已用 <b id="gU">0</b> / <span id="gT">32,607</span> MB</div>
+        </div>
+        <div class="mm-card" data-mm="gpu-util">
+          <div class="mm-top">
+            <svg class="mm-icon" width="16" height="16"><use href="#s-bolt"/></svg>
+            <span class="mm-label">GPU 负载</span>
+          </div>
+          <div class="mm-row">
+            <span class="mm-val" id="guP">0</span><span class="mm-unit">%</span>
+          </div>
+          <div class="mm-track"><div class="mm-fill" id="guB" style="width:0%"></div></div>
+          <div class="mm-sub"><span id="guC">—</span> MHz · <span id="guW">—</span> W · <span id="guT">—</span></div>
+        </div>
+        <div class="mm-card" data-mm="ram">
+          <div class="mm-top">
+            <svg class="mm-icon" width="16" height="16"><use href="#s-memory"/></svg>
+            <span class="mm-label">内存</span>
+          </div>
+          <div class="mm-row">
+            <span class="mm-val" id="rP">0</span><span class="mm-unit">%</span>
+          </div>
+          <div class="mm-track"><div class="mm-fill" id="rB" style="width:0%"></div></div>
+          <div class="mm-sub">已用 <b id="rU">0</b> / <span id="rT">—</span> GB</div>
+        </div>
+        <div class="mm-card" data-mm="cpu">
+          <div class="mm-top">
+            <svg class="mm-icon" width="16" height="16"><use href="#s-cpu"/></svg>
+            <span class="mm-label">CPU</span>
+          </div>
+          <div class="mm-row">
+            <span class="mm-val" id="cP">0</span><span class="mm-unit">%</span>
+          </div>
+          <div class="mm-track"><div class="mm-fill" id="cB" style="width:0%"></div></div>
+          <div class="mm-sub"><span id="cC">—</span> 核 · <span id="cU">—</span></div>
+        </div>
+      </div>
+
+      <!-- Tab Content -->
+      <!-- FRAGMENT:inference -->
+      <!-- FRAGMENT:monitor -->
+      <!-- FRAGMENT:deploy -->
+      <!-- FRAGMENT:cloud -->
+    </main>
   </div>
 </div>
 
-<div class="main">
+<!-- S6: Toast (顶部居中 SF 横幅) -->
+<div class="toast-banner" id="toast"></div>
 
-  <!-- Status Cards -->
-  <div class="status-bar">
-    <div class="stat-card">
-      <div class="stat-icon gpu">💾</div>
-      <div class="stat-body">
-        <div class="stat-label">GPU 显存</div>
-        <div class="stat-row">
-          <span class="stat-val" id="gP">0</span><span class="stat-unit">%</span>
-        </div>
-        <div class="stat-bar"><div class="stat-bar-f" id="gB" style="width:0%;background:var(--blue)"></div></div>
-        <div class="stat-sub"><b id="gU">0</b> / <span id="gT">32,607</span> MB</div>
-      </div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-icon" style="background:var(--red-g);box-shadow:0 2px 8px rgba(255,69,58,.2)">🔥</div>
-      <div class="stat-body">
-        <div class="stat-label">GPU 负载</div>
-        <div class="stat-row">
-          <span class="stat-val" id="guP">0</span><span class="stat-unit">%</span>
-        </div>
-        <div class="stat-bar"><div class="stat-bar-f" id="guB" style="width:0%;background:var(--red)"></div></div>
-        <div class="stat-sub"><span id="guC">—</span> MHz · <span id="guW">—</span> W</div>
-      </div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-icon ram">🧠</div>
-      <div class="stat-body">
-        <div class="stat-label">系统内存</div>
-        <div class="stat-row">
-          <span class="stat-val" id="rP">0</span><span class="stat-unit">%</span>
-        </div>
-        <div class="stat-bar"><div class="stat-bar-f" id="rB" style="width:0%;background:var(--purple)"></div></div>
-        <div class="stat-sub"><b id="rU">0</b> / <span id="rT">—</span> GB</div>
-      </div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-icon cpu">⚡</div>
-      <div class="stat-body">
-        <div class="stat-label">CPU 负载</div>
-        <div class="stat-row">
-          <span class="stat-val" id="cP">0</span><span class="stat-unit">%</span>
-        </div>
-        <div class="stat-bar"><div class="stat-bar-f" id="cB" style="width:0%;background:var(--orange)"></div></div>
-        <div class="stat-sub"><span id="cC">—</span> 核心 · 运行 <span id="cU">—</span></div>
-      </div>
-    </div>
+<!-- P5: API Error Banner -->
+<div id="apiErrorBanner" class="api-err-banner" style="display:none">
+  <span>⚠️ API 连接异常</span>
+  <button onclick="window.store?.fetchStatus()">重试</button>
+</div>
+
+<!-- P5: Switch Overlay -->
+<div id="switchOverlay" class="switch-overlay" style="display:none">
+  <div class="switch-overlay-inner">
+    <div class="switch-spinner"></div>
+    <span id="switchOverlayMsg">正在切换模型…</span>
   </div>
+</div>
 
-  <!-- Tab Bar -->
-  <div class="tab-bar">
-    <span class="tab-item active" data-tab="tab-inference" onclick="switchTab('tab-inference')">🔄 模型推理</span>
-    <span class="tab-item" data-tab="tab-monitor" onclick="switchTab('tab-monitor')">📊 指标监控</span>
-    <span class="tab-item" data-tab="tab-deploy" onclick="switchTab('tab-deploy')">📦 模型部署</span>
-    <span class="tab-item" data-tab="tab-cloud" onclick="switchTab('tab-cloud')">☁️ 云端管理</span>
-  </div>
-
-  <!-- ════════ Tab 1: 模型推理 (default active) ════════ -->
-<!-- FRAGMENT:inference -->
-<!-- FRAGMENT:monitor -->
-<!-- FRAGMENT:deploy -->
-<!-- FRAGMENT:cloud -->
 <script>
+<!-- JS:bindings -->
+<!-- JS:state -->
 <!-- JS:app -->
 <!-- JS:monitor -->
 </script>
