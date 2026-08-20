@@ -1,0 +1,708 @@
+# ═══════════════════════════════════════════════════════════════
+# InferFabric API Schemas — shared OpenAPI components
+# Referenced from openapi.yaml via $ref
+# ═══════════════════════════════════════════════════════════════
+
+# ── Chat / Completions ─────────────────────────────────────────
+
+ChatRequest:
+  type: object
+  properties:
+    model:
+      type: string
+      description: Model name (local or cloud)
+    messages:
+      type: array
+      items:
+        $ref: '#/Message'
+    stream:
+      type: boolean
+      default: false
+    max_tokens:
+      type: integer
+      default: 4096
+    temperature:
+      type: number
+      default: 0.7
+    top_p:
+      type: number
+    tools:
+      type: array
+      items:
+        type: object
+    tool_choice:
+      oneOf:
+        - type: string
+        - type: object
+  required: [model, messages]
+
+Message:
+  type: object
+  properties:
+    role:
+      type: string
+      enum: [system, user, assistant, tool]
+    content:
+      oneOf:
+        - type: string
+        - type: array
+    name:
+      type: string
+    tool_calls:
+      type: array
+      items:
+        type: object
+    tool_call_id:
+      type: string
+  required: [role]
+
+ChatResponse:
+  type: object
+  properties:
+    id:
+      type: string
+    object:
+      type: string
+    created:
+      type: integer
+    model:
+      type: string
+    choices:
+      type: array
+      items:
+        type: object
+    usage:
+      type: object
+      properties:
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+
+StreamChunk:
+  type: object
+  properties:
+    id:
+      type: string
+    object:
+      type: string
+    created:
+      type: integer
+    model:
+      type: string
+    choices:
+      type: array
+      items:
+        type: object
+        properties:
+          delta:
+            type: object
+          index:
+            type: integer
+          finish_reason:
+            type: string
+            nullable: true
+
+EmbeddingRequest:
+  type: object
+  properties:
+    model:
+      type: string
+    input:
+      oneOf:
+        - type: string
+        - type: array
+          items:
+            type: string
+  required: [model, input]
+
+EmbeddingResponse:
+  type: object
+  properties:
+    object:
+      type: string
+    data:
+      type: array
+      items:
+        type: object
+        properties:
+          object:
+            type: string
+          embedding:
+            type: array
+            items:
+              type: number
+          index:
+            type: integer
+    model:
+      type: string
+    usage:
+      type: object
+
+RerankRequest:
+  type: object
+  properties:
+    model:
+      type: string
+    query:
+      type: string
+    documents:
+      type: array
+      items:
+        type: string
+  required: [model, query, documents]
+
+RerankResponse:
+  type: object
+  properties:
+    object:
+      type: string
+    results:
+      type: array
+      items:
+        type: object
+
+AnthropicMessageRequest:
+  type: object
+  properties:
+    model:
+      type: string
+    messages:
+      type: array
+      items:
+        $ref: '#/Message'
+    max_tokens:
+      type: integer
+    system:
+      type: string
+    tools:
+      type: array
+      items:
+        type: object
+    temperature:
+      type: number
+    stream:
+      type: boolean
+  required: [model, messages, max_tokens]
+
+# ── Control Plane ─────────────────────────────────────────────
+
+SwitchRequest:
+  type: object
+  properties:
+    model:
+      type: string
+      description: Target model name or "idle"
+    profile:
+      type: string
+      description: Deprecated alias for model
+  required: [model]
+
+SwitchResponse:
+  type: object
+  properties:
+    status:
+      type: string
+    model:
+      type: string
+    gpu_mode:
+      type: string
+    elapsed_sec:
+      type: number
+    results:
+      type: object
+
+StopRequest:
+  type: object
+  properties:
+    model:
+      type: string
+  required: [model]
+
+SleepRequest:
+  type: object
+  properties:
+    model:
+      type: string
+  required: [model]
+
+WakeRequest:
+  type: object
+  properties:
+    model:
+      type: string
+  required: [model]
+
+StopResponse:
+  type: object
+  properties:
+    status:
+      type: string
+
+ResetResponse:
+  type: object
+  properties:
+    status:
+      type: string
+    gpu_mode:
+      type: string
+
+ReconcileResponse:
+  type: object
+  properties:
+    status:
+      type: string
+    actions:
+      type: array
+      items:
+        type: string
+
+DeployRequest:
+  type: object
+  properties:
+    name:
+      type: string
+      description: Model name
+    type:
+      type: string
+      default: vllm
+  required: [name]
+
+DeployResponse:
+  type: object
+  properties:
+    status:
+      type: string
+
+PullRequest:
+  type: object
+  properties:
+    name:
+      type: string
+    framework:
+      type: string
+      default: ""
+  required: [name]
+
+PullResponse:
+  type: object
+  properties:
+    status:
+      type: string
+
+ReloadConfigResponse:
+  type: object
+  properties:
+    status:
+      type: string
+      enum: [reloaded]
+
+# ── Cloud Provider ────────────────────────────────────────────
+
+CloudProvidersResponse:
+  type: object
+  properties:
+    providers:
+      type: array
+      items:
+        type: object
+        properties:
+          name:
+            type: string
+          enabled:
+            type: boolean
+          openai_base:
+            type: string
+          anthropic_base:
+            type: string
+          discovery_enabled:
+            type: boolean
+          discovery_interval:
+            type: integer
+          include_pattern:
+            type: string
+          model_count:
+            type: integer
+          key_env_var:
+            type: string
+          key_env_set:
+            type: boolean
+          preset_id:
+            type: string
+    models:
+      type: array
+      items:
+        type: object
+    total_cloud_models:
+      type: integer
+    last_discovery:
+      type: integer
+
+ProviderAddRequest:
+  type: object
+  properties:
+    name:
+      type: string
+      description: Provider name
+    api_key:
+      type: string
+      description: API key (auto-converted to env var reference)
+    openai_base:
+      type: string
+    anthropic_base:
+      type: string
+    timeout:
+      type: integer
+      default: 60
+    enabled:
+      type: boolean
+      default: true
+    discovery_enabled:
+      type: boolean
+      default: true
+    discovery_endpoint:
+      type: string
+      default: /models
+    discovery_interval:
+      type: integer
+      default: 3600
+    include_pattern:
+      type: string
+    preset:
+      type: string
+      description: Preset ID (12 preset-1, etc.)
+  required: [name]
+
+ProviderDeleteRequest:
+  type: object
+  properties:
+    name:
+      type: string
+  required: [name]
+
+ProviderDeleteResponse:
+  type: object
+  properties:
+    status:
+      type: string
+      enum: [deleted]
+    provider:
+      type: string
+
+CloudDiscoverResponse:
+  type: object
+  properties:
+    status:
+      type: string
+    cloud_models:
+      type: integer
+    models:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+          provider:
+            type: string
+          openai:
+            type: boolean
+          anthropic:
+            type: boolean
+          discovered_at:
+            type: integer
+
+CloudReloadResponse:
+  type: object
+  properties:
+    status:
+      type: string
+      enum: [reloaded]
+    providers:
+      type: integer
+    cloud_models:
+      type: integer
+
+CloudTestRequest:
+  type: object
+  properties:
+    url:
+      type: string
+      description: Provider API URL
+    api_key:
+      type: string
+  required: [url]
+
+CloudTestResponse:
+  type: object
+  properties:
+    status:
+      type: string
+      enum: [ok]
+    model_count:
+      type: integer
+
+PresetsResponse:
+  type: object
+  properties:
+    presets:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+          display_name:
+            type: string
+          icon:
+            type: string
+          openai_base:
+            type: string
+          anthropic_base:
+            type: string
+          env_var:
+            type: string
+          discovery:
+            type: boolean
+          model_count:
+            type: integer
+
+# ── Monitoring / Status ───────────────────────────────────────
+
+HealthResponse:
+  type: object
+  properties:
+    status:
+      type: string
+    gpu_mode:
+      type: string
+
+StatusResponse:
+  type: object
+  properties:
+    gpu_mode:
+      type: string
+    active_services:
+      type: array
+      items:
+        type: string
+    services_health:
+      type: object
+      additionalProperties:
+        type: string
+    services_info:
+      type: object
+      additionalProperties:
+        type: object
+        properties:
+          mode:
+            type: string
+          type:
+            type: string
+          port:
+            type: integer
+    sleep_states:
+      type: object
+      additionalProperties:
+        type: string
+    gpu_used_mb:
+      type: integer
+    gpu_total_mb:
+      type: integer
+    gpu_util_pct:
+      type: number
+    vllm_pid:
+      type: integer
+      nullable: true
+    comfyui_pid:
+      type: integer
+      nullable: true
+    tts_pid:
+      type: integer
+      nullable: true
+    asr_pid:
+      type: integer
+      nullable: true
+    local_services:
+      type: object
+
+ModelListEntry:
+  type: object
+  properties:
+    name:
+      type: string
+    description:
+      type: string
+      description: Human-readable description
+    mode:
+      type: string
+      enum: [exclusive, shared, idle]
+    type:
+      type: string
+      description: Engine type (vllm, sglang, ollama, etc.)
+    active:
+      type: boolean
+    model_type:
+      type: string
+      description: Model category (llm, vl, embedding, rerank, etc.)
+    modality:
+      type: string
+    quantization:
+      type: string
+    context_window:
+      type: integer
+      nullable: true
+
+ModelListResponse:
+  type: array
+  items:
+    $ref: '#/ModelListEntry'
+
+V1ModelsResponse:
+  type: object
+  properties:
+    object:
+      type: string
+      enum: [list]
+    data:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+          object:
+            type: string
+          owned_by:
+            type: string
+          type:
+            type: string
+
+LocalModelsResponse:
+  type: object
+  properties:
+    discovered:
+      type: array
+      items:
+        type: object
+    configured:
+      type: array
+      items:
+        type: string
+
+SystemInfoResponse:
+  type: object
+  properties:
+    cpu_percent:
+      type: number
+    cpu_cores:
+      type: integer
+    ram_total_gb:
+      type: number
+    ram_used_gb:
+      type: number
+    uptime_seconds:
+      type: integer
+    gpu_util_pct:
+      type: number
+    gpu_clock_mhz:
+      type: integer
+    gpu_power_w:
+      type: number
+    version:
+      type: string
+
+MetricsResponse:
+  type: object
+  properties:
+    window:
+      type: string
+    requests:
+      type: integer
+    tokens:
+      type: object
+    models:
+      type: object
+    latency:
+      type: object
+
+RequestLogResponse:
+  type: object
+  properties:
+    logs:
+      type: array
+      items:
+        type: object
+        properties:
+          timestamp:
+            type: number
+          model:
+            type: string
+          status:
+            type: integer
+          tokens_in:
+            type: integer
+          tokens_out:
+            type: integer
+          ttft_ms:
+            type: number
+            nullable: true
+          duration_ms:
+            type: number
+            nullable: true
+          route:
+            type: string
+          key_name:
+            type: string
+          error:
+            type: string
+    count:
+      type: integer
+
+HistoryResponse:
+  type: array
+  items:
+    type: object
+
+VllmMetricsResponse:
+  type: object
+
+WatchdogStatusResponse:
+  type: object
+  properties:
+    fail_counts:
+      type: object
+    running:
+      type: boolean
+
+# ── Common ─────────────────────────────────────────────────────
+
+ErrorResponse:
+  type: object
+  properties:
+    error:
+      type: string
+    status:
+      type: string
+    detail:
+      type: string
+    retry_after:
+      type: integer
+  required: [error]
+
+NotFoundResponse:
+  type: object
+  properties:
+    error:
+      type: string
+
+UnauthorizedResponse:
+  type: object
+  properties:
+    error:
+      type: string
+    status:
+      type: string
+      enum: [unauthorized]

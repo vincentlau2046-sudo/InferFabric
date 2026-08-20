@@ -186,6 +186,13 @@ iff switch idle
 | `POST` | `/admin/cloud/discover` | Discover models |
 | `POST` | `/admin/cloud/test` | Test connection |
 
+### OpenAPI 规范
+
+完整 API 规范（OpenAPI 3.1）：
+
+- JSON: GET `/api/openapi.json`
+- YAML 源文件: `api-spec/openapi.yaml`
+
 ---
 
 ## Port Map

@@ -55,6 +55,12 @@ def _admin(fn):
         fn(handler, pm)
     return wrapper
 
+
+def _serve_api_spec(handler, pm):
+    """GET /api/openapi.json — OpenAPI 规范。"""
+    from inferfabric.api_spec import get_openapi_spec
+    handler._send_json(get_openapi_spec())
+
 _GET_ROUTES = {
     "/":                        lambda h, pm: h._serve_dashboard(),
     "/static/style.css":        lambda h, pm: h._serve_static("css"),
@@ -74,6 +80,7 @@ _GET_ROUTES = {
     "/watchdog_status":         lambda h, pm: h._handle_watchdog_status(),
     "/admin/cloud/providers":   _admin(lambda h, pm: h._handle_cloud_providers(pm)),
     "/admin/cloud/presets":     _admin(lambda h, pm: h._handle_cloud_presets(pm)),
+    "/api/openapi.json":        _serve_api_spec,
 }
 
 _POST_ROUTES = {

@@ -1,0 +1,1014 @@
+openapi: "3.1.0"
+
+info:
+  title: InferFabric API
+  version: "0.0.0"
+  description: |
+    **InferFabric** — LLM Inference Gateway
+    
+    Unified API for local vLLM/SGLang/Ollama models and cloud providers (OpenAI, Anthropic, 百度千帆, DeepSeek, etc.).
+    
+    ## Authentication
+    
+    - **Control-plane routes** (`/switch`, `/stop`, `/deploy`, `/pull`, `/admin/cloud/*`, etc.) require `X-Admin-Token` header when `IFF_ADMIN_TOKEN` is configured. If no token is configured, these routes are open (localhost-only binding is the security boundary).
+    - **Inference routes** (`/v1/chat/completions`, `/v1/messages`, etc.) do not require admin auth; they may require API keys for cloud provider forwarding.
+    - **Cloud provider API keys** are referenced via `${ENV_VAR}` syntax and stored in a `chmod 600` secrets file — never in plaintext config.
+    
+    ## Three-State GPU Model
+    
+    ```
+    idle → exclusive  (one heavy model, full GPU)
+      └→ shared      (many small models, coexist)
+         └→ idle     (return to idle anytime)
+    ```
+    
+    ## Version Injection
+    
+    The `info.version` field is injected at runtime from the installed package version.
+    This file carries `"0.0.0"` as a placeholder.
+
+servers:
+  - url: http://localhost:8999
+    description: Default InferFabric proxy
+
+security: []
+
+tags:
+  - name: Inference
+    description: Core LLM inference endpoints
+  - name: Ollama
+    description: Ollama-compatible native endpoints (transparent pass-through)
+  - name: Control
+    description: Model lifecycle control (requires admin token)
+  - name: Cloud Admin
+    description: Cloud provider management (requires admin token)
+  - name: Monitoring
+    description: Health, status, metrics, and system info
+  - name: Dashboard
+    description: Dashboard static assets
+
+paths:
+  # ═══════════════════════════════════════════════════════════════
+  # 2.1 Core Inference API
+  # ═══════════════════════════════════════════════════════════════
+
+  /v1/chat/completions:
+    post:
+      tags: [Inference]
+      summary: OpenAI-compatible chat completions (streaming)
+      description: |
+        Creates a model response for a chat conversation. Supports streaming via `stream: true`.
+        The `model` field routes to local models or cloud providers transparently.
+      operationId: createChatCompletion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components/schemas.yaml#/ChatRequest
+      responses:
+        "200":
+          description: OK (non-streaming)
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ChatResponse
+        "200-stream":
+          description: OK (streaming SSE)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "503":
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/completions:
+    post:
+      tags: [Inference]
+      summary: Text completions (delegated to chat)
+      description: |
+        OpenAI-compatible text completions endpoint. Internally delegates to `/v1/chat/completions`.
+        Accepts standard completion request format.
+      operationId: createCompletion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model:
+                  type: string
+                prompt:
+                  oneOf:
+                    - type: string
+                    - type: array
+                stream:
+                  type: boolean
+                max_tokens:
+                  type: integer
+                temperature:
+                  type: number
+              required: [model]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ChatResponse
+        "400":
+          $ref: '#/components/responses/BadRequest'
+
+  /v1/messages:
+    post:
+      tags: [Inference]
+      summary: Anthropic Messages API (model-name routing + cloud fallback)
+      description: |
+        Anthropic-compatible Messages API endpoint with fallback chain:
+        
+        1. If `model` field matches an active local model → route to its port
+        2. If model is known but not active → auto-switch (if AUTO_SWITCH enabled)
+        3. Cloud Discovery `resolve_route()` match → cloud provider
+        4. Fallback to first active LLM, then 503
+        
+        **Note**: Baidu-specific fallback removed in v5.5.0.
+        
+        During model switching, requests for non-target models receive 503 with `Retry-After: 30`.
+      operationId: createMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components/schemas.yaml#/AnthropicMessageRequest
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "409":
+          description: Switch already in progress
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ErrorResponse
+        "503":
+          description: No route available or switching
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ErrorResponse
+
+  /v1/embeddings:
+    post:
+      tags: [Inference]
+      summary: OpenAI-compatible embeddings
+      description: |
+        Generate embeddings for text input. Auto-starts the embedding model if not running.
+        Requires a configured embedding model (e.g., `bge-m3` via ollama.cpp).
+      operationId: createEmbedding
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components/schemas.yaml#/EmbeddingRequest
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/EmbeddingResponse
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "404":
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ErrorResponse
+        "503":
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/rerank:
+    post:
+      tags: [Inference]
+      summary: Re-rank documents
+      description: |
+        Re-rank a list of documents against a query. Auto-starts the rerank model if not running.
+        Requires a configured rerank model (e.g., `bge-reranker` via ollama.cpp).
+      operationId: rerank
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components/schemas.yaml#/RerankRequest
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/RerankResponse
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "404":
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ErrorResponse
+        "503":
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  # ═══════════════════════════════════════════════════════════════
+  # 2.2 Ollama Pass-through
+  # ═══════════════════════════════════════════════════════════════
+
+  /api/chat:
+    post:
+      tags: [Ollama]
+      summary: Ollama chat (passthrough)
+      description: |
+        Ollama-compatible chat endpoint. Proxied through to chat completions internally.
+        Same behavior as `/v1/chat/completions`.
+      operationId: ollamaChat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components/schemas.yaml#/ChatRequest
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ChatResponse
+        "503":
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/generate:
+    post:
+      tags: [Ollama]
+      summary: Ollama generate (passthrough)
+      description: |
+        Ollama-compatible generate endpoint. Delegated to chat completions internally.
+      operationId: ollamaGenerate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components/schemas.yaml#/ChatRequest
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ChatResponse
+
+  # ═══════════════════════════════════════════════════════════════
+  # 2.3 Control Plane
+  # ═══════════════════════════════════════════════════════════════
+
+  /switch:
+    post:
+      tags: [Control]
+      summary: Switch to a model
+      description: |
+        Switch the active model. Accepts `model` (or deprecated `profile`) field.
+        Setting model to `"idle"` stops all active services.
+      operationId: switchModel
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components/schemas.yaml#/SwitchRequest
+      responses:
+        "200":
+          description: Switch result
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/SwitchResponse
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /stop:
+    post:
+      tags: [Control]
+      summary: Stop a service
+      description: Stop a specific shared service by model name.
+      operationId: stopModel
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components/schemas.yaml#/StopRequest
+      responses:
+        "200":
+          description: Stop result
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/StopResponse
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /sleep:
+    post:
+      tags: [Control]
+      summary: Sleep a model
+      description: Put a model to sleep (suspends its process).
+      operationId: sleepModel
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components/schemas.yaml#/SleepRequest
+      responses:
+        "200":
+          description: Sleep result
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /wake:
+    post:
+      tags: [Control]
+      summary: Wake a sleeping model
+      description: Resume a model that was put to sleep.
+      operationId: wakeModel
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components/schemas.yaml#/WakeRequest
+      responses:
+        "200":
+          description: Wake result
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /reset:
+    post:
+      tags: [Control]
+      summary: Force reset to idle
+      description: |
+        Force all models to idle state. Stops all active services and resets GPU mode to idle.
+      operationId: resetAll
+      security:
+        - AdminToken: []
+      responses:
+        "200":
+          description: Reset result
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ResetResponse
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /reconcile:
+    post:
+      tags: [Control]
+      summary: Reconcile state
+      description: Fix inconsistencies between `state.db` and actual running services.
+      operationId: reconcile
+      security:
+        - AdminToken: []
+      responses:
+        "200":
+          description: Reconcile result
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ReconcileResponse
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /deploy:
+    post:
+      tags: [Control]
+      summary: Deploy a model
+      description: Auto-deploy a new model by name. If already configured, performs a switch.
+      operationId: deployModel
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components/schemas.yaml#/DeployRequest
+      responses:
+        "200":
+          description: Deploy result
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/DeployResponse
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /pull:
+    post:
+      tags: [Control]
+      summary: Pull a model
+      description: Pull/download a model by name, optionally specifying the framework.
+      operationId: pullModel
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components/schemas.yaml#/PullRequest
+      responses:
+        "200":
+          description: Pull result
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/PullResponse
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /reload-config:
+    post:
+      tags: [Control]
+      summary: Hot-reload configuration
+      description: |
+        Reload `models.d/*.yaml` configuration files and refresh the dashboard cache.
+        Added in v5.2.0 via ConfigReloader.
+      operationId: reloadConfig
+      security:
+        - AdminToken: []
+      responses:
+        "200":
+          description: Config reloaded
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ReloadConfigResponse
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  # ═══════════════════════════════════════════════════════════════
+  # 2.4 Cloud Admin
+  # ═══════════════════════════════════════════════════════════════
+
+  /admin/cloud/providers:
+    get:
+      tags: [Cloud Admin]
+      summary: List cloud providers and models
+      description: Returns all configured cloud providers, their discovered models, and metadata.
+      operationId: listCloudProviders
+      security:
+        - AdminToken: []
+      responses:
+        "200":
+          description: Provider list
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/CloudProvidersResponse
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Cloud Admin]
+      summary: Add a cloud provider
+      description: |
+        Add a new cloud provider. Supports:
+        - **Preset-based**: provide `preset` field with a preset ID (e.g., `"baidu-codingplan"`)
+        - **Manual**: provide `name`, `openai_base`, `anthropic_base`, etc.
+        
+        API keys are automatically persisted to `secrets.env` (chmod 600) as `${ENV_VAR}` references.
+      operationId: addCloudProvider
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components/schemas.yaml#/ProviderAddRequest
+      responses:
+        "200":
+          description: Provider added
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  provider:
+                    type: string
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "500":
+          $ref: '#/components/responses/ServerError'
+    delete:
+      tags: [Cloud Admin]
+      summary: Delete a cloud provider
+      description: Remove a cloud provider and all its discovered models. Persists the change to config.
+      operationId: deleteCloudProvider
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components/schemas.yaml#/ProviderDeleteRequest
+      responses:
+        "200":
+          description: Provider deleted
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ProviderDeleteResponse
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          description: Provider not found
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ErrorResponse
+
+  /admin/cloud/presets:
+    get:
+      tags: [Cloud Admin]
+      summary: List cloud provider presets
+      description: "Returns all pre-configured cloud provider presets (9 presets: 百度千帆, 火山方舟, 阿里百炼, DeepSeek, 智谱AI, Moonshot, OpenAI, Anthropic, Custom Relay)."
+      operationId: listCloudPresets
+      security:
+        - AdminToken: []
+      responses:
+        "200":
+          description: Preset list
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/PresetsResponse
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/cloud/reload:
+    post:
+      tags: [Cloud Admin]
+      summary: Hot-reload cloud provider config
+      description: Reload `cloud_provider.yaml` and re-discover all models. Restarts the polling thread.
+      operationId: reloadCloudConfig
+      security:
+        - AdminToken: []
+      responses:
+        "200":
+          description: Config reloaded
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/CloudReloadResponse
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/cloud/discover:
+    post:
+      tags: [Cloud Admin]
+      summary: Manually trigger cloud discovery
+      description: Trigger immediate model discovery from all enabled cloud providers.
+      operationId: discoverCloudModels
+      security:
+        - AdminToken: []
+      responses:
+        "200":
+          description: Discovery result
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/CloudDiscoverResponse
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/cloud/test:
+    post:
+      tags: [Cloud Admin]
+      summary: Test cloud provider connection
+      description: |
+        Test connectivity to a cloud provider URL. Includes SSRF protection:
+        - Only HTTPS URLs allowed
+        - Hostname must not resolve to private/internal IPs
+        - Hostname must match a registered cloud provider
+        - DNS-rebinding protection via TOCTOU-safe connection
+      operationId: testCloudProvider
+      security:
+        - AdminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ./components/schemas.yaml#/CloudTestRequest
+      responses:
+        "200":
+          description: Connection test OK
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/CloudTestResponse
+        "400":
+          description: SSRF check failed or missing URL
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ErrorResponse
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "502":
+          description: Connection failed
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ErrorResponse
+
+  # ═══════════════════════════════════════════════════════════════
+  # 2.5 Monitoring
+  # ═══════════════════════════════════════════════════════════════
+
+  /health:
+    get:
+      tags: [Monitoring]
+      summary: Health check
+      description: Simple health check. Returns OK status and current GPU mode.
+      operationId: healthCheck
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/HealthResponse
+
+  /status:
+    get:
+      tags: [Monitoring]
+      summary: Full system status
+      description: |
+        Complete status including GPU mode, active services, health states,
+        GPU memory usage, process PIDs, and local service info.
+      operationId: getStatus
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/StatusResponse
+
+  /models:
+    get:
+      tags: [Monitoring]
+      summary: List configured models
+      description: Returns all models from `models.d/`, including metadata, GPU role, and active state.
+      operationId: listModels
+      responses:
+        "200":
+          description: Model list
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ModelListResponse
+
+  /local-models:
+    get:
+      tags: [Monitoring]
+      summary: Local model discovery
+      description: Returns discovered and configured local model names.
+      operationId: listLocalModels
+      responses:
+        "200":
+          description: Local models
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/LocalModelsResponse
+
+  /v1/models:
+    get:
+      tags: [Monitoring]
+      summary: OpenAI-compatible model list
+      description: Returns local + cloud models in OpenAI `/v1/models` format. Merges vLLM-scraped models, configured models, and discovered cloud models.
+      operationId: listV1Models
+      responses:
+        "200":
+          description: Model list
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/V1ModelsResponse
+        "503":
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /system:
+    get:
+      tags: [Monitoring]
+      summary: System resource info
+      description: CPU/GPU utilization, RAM usage, uptime, and version.
+      operationId: getSystemInfo
+      responses:
+        "200":
+          description: System info
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/SystemInfoResponse
+
+  /api/metrics:
+    get:
+      tags: [Monitoring]
+      summary: Aggregated request metrics
+      description: Returns aggregated token and request metrics over a sliding window.
+      operationId: getApiMetrics
+      parameters:
+        - name: window
+          in: query
+          description: Time window for metrics aggregation
+          schema:
+            type: string
+            enum: [1h, 24h, 7d, all]
+            default: "24h"
+      responses:
+        "200":
+          description: Metrics data
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/MetricsResponse
+        "500":
+          $ref: '#/components/responses/ServerError'
+
+  /api/request_log:
+    get:
+      tags: [Monitoring]
+      summary: Recent request log
+      description: Returns recent inference request logs with token usage, latency, and routing info.
+      operationId: getRequestLog
+      parameters:
+        - name: limit
+          in: query
+          description: Max log entries (1–500)
+          schema:
+            type: integer
+            default: 50
+            maximum: 500
+        - name: since
+          in: query
+          description: Unix timestamp — return entries after this time
+          schema:
+            type: number
+            default: 0
+      responses:
+        "200":
+          description: Request logs
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/RequestLogResponse
+        "500":
+          $ref: '#/components/responses/ServerError'
+
+  /vllm_metrics:
+    get:
+      tags: [Monitoring]
+      summary: vLLM Prometheus metrics
+      description: Proxy to vLLM's Prometheus metrics endpoint for a given port.
+      operationId: getVllmMetrics
+      parameters:
+        - name: port
+          in: query
+          description: vLLM service port
+          schema:
+            type: integer
+            default: 8000
+      responses:
+        "200":
+          description: Metrics data
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/VllmMetricsResponse
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "502":
+          description: Upstream unavailable
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ErrorResponse
+
+  /watchdog_status:
+    get:
+      tags: [Monitoring]
+      summary: Health watchdog status
+      description: Returns the runtime health watchdog's failure counts and running state.
+      operationId: getWatchdogStatus
+      responses:
+        "200":
+          description: Watchdog status
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/WatchdogStatusResponse
+        "503":
+          description: Watchdog not initialized
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/ErrorResponse
+
+  /history:
+    get:
+      tags: [Monitoring]
+      summary: State change history
+      description: Returns the last 30 state changes (switch events, etc.).
+      operationId: getHistory
+      responses:
+        "200":
+          description: History entries
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/HistoryResponse
+
+  # ═══════════════════════════════════════════════════════════════
+  # 2.6 Dashboard Static Assets
+  # ═══════════════════════════════════════════════════════════════
+
+  /:
+    get:
+      tags: [Dashboard]
+      summary: Dashboard HTML
+      description: Returns the macOS-inspired sidebar dashboard with injected token stats.
+      operationId: getDashboard
+      responses:
+        "200":
+          description: Dashboard HTML page
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /static/style.css:
+    get:
+      tags: [Dashboard]
+      summary: Dashboard CSS
+      operationId: getStylesheet
+      responses:
+        "200":
+          description: CSS stylesheet
+          content:
+            text/css:
+              schema:
+                type: string
+
+  /static/app.js:
+    get:
+      tags: [Dashboard]
+      summary: Dashboard JavaScript
+      operationId: getAppJs
+      responses:
+        "200":
+          description: JavaScript bundle
+          content:
+            application/javascript:
+              schema:
+                type: string
+
+  /static/monitor.js:
+    get:
+      tags: [Dashboard]
+      summary: Dashboard monitor JavaScript
+      operationId: getMonitorJs
+      responses:
+        "200":
+          description: JavaScript bundle
+          content:
+            application/javascript:
+              schema:
+                type: string
+
+  # ═══════════════════════════════════════════════════════════════
+  # OpenAPI Spec (self-documenting)
+  # ═══════════════════════════════════════════════════════════════
+
+  /api/openapi.json:
+    get:
+      tags: [Monitoring]
+      summary: OpenAPI specification (JSON)
+      description: |
+        Returns the OpenAPI 3.1.0 specification for the InferFabric API.
+        The `info.version` is injected at runtime from the installed package version.
+      operationId: getOpenApiSpec
+      responses:
+        "200":
+          description: OpenAPI specification
+          content:
+            application/json:
+              schema:
+                type: object
+
+components:
+  securitySchemes:
+    AdminToken:
+      type: apiKey
+      in: header
+      name: X-Admin-Token
+      description: Admin token for control-plane routes. Required when `IFF_ADMIN_TOKEN` is set.
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: ./components/schemas.yaml#/ErrorResponse
+
+    Unauthorized:
+      description: Unauthorized (missing or invalid admin token)
+      content:
+        application/json:
+          schema:
+            $ref: ./components/schemas.yaml#/UnauthorizedResponse
+
+    ServiceUnavailable:
+      description: Service unavailable
+      content:
+        application/json:
+          schema:
+            $ref: ./components/schemas.yaml#/ErrorResponse
+
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: ./components/schemas.yaml#/NotFoundResponse
+
+    ServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: ./components/schemas.yaml#/ErrorResponse
