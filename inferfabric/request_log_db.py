@@ -103,7 +103,7 @@ class RequestLogDB:
         if self._conn:
             try:
                 self._conn.close()
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("RequestLog DB close failed: %s", e)
             self._conn = None
         self._iffdb.close()

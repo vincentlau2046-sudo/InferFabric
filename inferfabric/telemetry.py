@@ -133,13 +133,13 @@ class TelemetryHub:
         if self.logger:
             try:
                 self.logger.close()
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Telemetry error: %s", e)
         try:
             self.token_collector.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Telemetry error: %s", e)
         try:
             self._db.close()
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Telemetry error: %s", e)

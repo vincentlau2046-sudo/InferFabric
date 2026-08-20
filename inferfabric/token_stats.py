@@ -280,8 +280,8 @@ class TokenStatsCollector:
             for _name, info in status.get("services_info", {}).items():
                 if info.get("port") == port and info.get("type") in ("vllm", "sglang"):
                     return info["type"]
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Token stats engine detection failed: %s", e)
         return "vllm"
 
     # --- 采集循环 ---

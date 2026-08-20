@@ -52,8 +52,8 @@ def handle_ollama_native(handler, pm, data, target_port, model_obj):
         if conn:
             try:
                 conn.close()
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("Chat handler error: %s", e)
         return
 
     try:
@@ -96,8 +96,8 @@ def handle_ollama_native(handler, pm, data, target_port, model_obj):
                                     "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]
                                 })
                                 handler._safe_write(f"data: {sse_data}\n\n".encode())
-                        except json.JSONDecodeError:
-                            pass
+                        except json.JSONDecodeError as e:
+                            log.warning("JSON decode error: %s", e)
                 sse_done = json.dumps({
                     "id": chat_id,
                     "object": "chat.completion.chunk",

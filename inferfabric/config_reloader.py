@@ -76,7 +76,7 @@ class ConfigReloader:
             from inferfabric.dashboard import invalidate_cache
             invalidate_cache()
         except Exception:
-            pass
+            log.warning("Dashboard cache invalidation failed")
         log.info("ConfigReloader: full reload complete")
 
     def reload_models(self):

@@ -52,8 +52,8 @@ class ConnectionPool:
                 log.debug("Stale connection to %s, reconnecting", self._db_path)
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("DB init failed: %s", e)
                 self._local.conn = None
         conn = sqlite3.connect(str(self._db_path), timeout=10, check_same_thread=True)
         for pragma in self._pragma_setup:
@@ -66,12 +66,12 @@ class ConnectionPool:
         if conn:
             try:
                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("DB connection failed: %s", e)
             try:
                 conn.close()
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("DB operation failed: %s", e)
             self._local.conn = None
 
     @property
@@ -354,16 +354,16 @@ class IFFDB:
                 if deleted > 0:
                     try:
                         conn.execute("PRAGMA auto_vacuum")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.warning("DB query failed: %s", e)
                 return deleted
 
     def wal_checkpoint(self):
         with self.connect(REQUEST_LOG_DB) as conn:
             try:
                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("DB write failed: %s", e)
 
     # ── Legacy backward compat ─────────────────────────────────
 

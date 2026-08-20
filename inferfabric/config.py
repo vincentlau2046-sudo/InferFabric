@@ -739,8 +739,8 @@ def parse_retry_after_ms(headers: dict) -> float | None:
     try:
         secs = float(raw.strip())
         return max(0, min(secs * 1000, 60_000))  # cap at 60s like CCR
-    except ValueError:
-        pass
+    except ValueError as e:
+        log.debug("Config parse warning: %s", e)
     return None
 
 

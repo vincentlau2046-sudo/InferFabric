@@ -336,8 +336,8 @@ def cmd_list_downloaded(args):
                     ollama_models.extend(
                         [l.split()[0] for l in result.stdout.strip().splitlines()[1:] if l.strip()]
                     )
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                pass
+            except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                log.debug("Ollama list failed: %s", e)
             break
 
     print(f"\nOllama models (via 'ollama list'):")
