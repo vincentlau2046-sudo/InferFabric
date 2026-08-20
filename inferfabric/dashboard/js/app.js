@@ -702,6 +702,16 @@ async function doReconcile() {
   await Promise.all([load(),loadModels(),loadLocalModels()]);
 }
 
+async function doReloadConfig() {
+  const r=await j('/reload-config',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  if(r.status==='reloaded') {
+    toast('配置已重载 ✓','ok');
+    await Promise.all([load(),loadModels(),loadLocalModels()]);
+  } else {
+    toast(r.message||'重载失败','err');
+  }
+}
+
 // ── Deploy Form Toggle ──
 function toggleDeployForm() {
   const area = document.getElementById('deployFormArea');

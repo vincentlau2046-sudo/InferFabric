@@ -76,6 +76,8 @@ class ModelManager:
         self._proc = proc if proc is not None else ProcessManager(self.state)
         self._health = health if health is not None else DefaultHealthChecker()
         self._models = load_models(self.models_dir)
+        # 计算属性: gpu_mode 从 active_services 实时推导
+        self.state.set_models_lookup(self.get_model)
 
         # Sub-module instances
         self._gpu_state = GpuStateMachine(

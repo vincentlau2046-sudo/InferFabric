@@ -106,6 +106,7 @@ class StateDB:
             self._db = IFFDB(Path(db_path).parent)
         else:
             raise ValueError("StateDB requires db_path or iffdb")
+        self._models_lookup = None  # 由 ModelManager 在 models 加载后设置
 
     # ─── Generic KV ────────────────────────────────────────────
 
@@ -165,14 +166,44 @@ class StateDB:
         stops.pop(name, None)
         self._db.set("manual_stops", json.dumps(stops))
 
+    # ─── Models Lookup Callback ──────────────────────────────────
+
+    def set_models_lookup(self, lookup_fn):
+        """设置模型查找回调，用于 gpu_mode 推导。ModelManager 在 models 加载后调用。"""
+        self._models_lookup = lookup_fn
+
     # ─── GPU Mode ───────────────────────────────────────────────
 
     @property
     def gpu_mode(self) -> str:
-        return self._db.get_gpu_mode()
+        """从 active_services 实时推导 gpu_mode，不依赖存储值。
+
+        推导规则:
+          - 过滤出 gpu_role != 'none' 的服务
+          - 无 GPU 服务 → idle
+          - 有 exclusive 服务 → exclusive
+          - 其余（只有 shared 服务）→ shared
+        """
+        if self._models_lookup is None:
+            # 回调尚未设置时 fallback 到 DB 存储值
+            return self._db.get_gpu_mode()
+        active = self.get_active_services()
+        # 先查 exclusive（有 exclusive 优先级最高）
+        for svc_name in active:
+            model = self._models_lookup(svc_name)
+            if model and model.is_exclusive:
+                return GPUMode.EXCLUSIVE
+        # 再查 shared（有非 none 服务但不是 exclusive）
+        for svc_name in active:
+            model = self._models_lookup(svc_name)
+            if model and not model.is_gpu_none:
+                return GPUMode.SHARED
+        # 无 GPU 服务 → idle（包括空列表、只有 none 服务）
+        return GPUMode.IDLE
 
     @gpu_mode.setter
     def gpu_mode(self, mode: str):
+        """保留 setter 写 DB（调试可查 + 向后兼容）。"""
         assert GPUMode.is_valid(mode), f"Invalid GPU mode: {mode}"
         self._db.set_gpu_mode(mode)
 

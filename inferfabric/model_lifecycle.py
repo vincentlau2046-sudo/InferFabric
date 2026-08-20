@@ -188,6 +188,7 @@ class ModelLifecycle:
                 comfyui_port=ports[-1] if model.is_comfyui and ports else None,
                 tts_port=tts_port,
                 asr_port=asr_port,
+                active_services=list(self.state.get_active_services()),
             )
             self.state.set_multi({
                 "gpu_mode": GPUMode.IDLE,
@@ -437,9 +438,6 @@ class ModelLifecycle:
         t0 = time.time()
         # Re-read after reconcile, but keep pre-reconcile list as fallback
         from_services = list(self.state.get_active_services())
-        if not from_services and from_services_pre:
-            log.info("Reconcile cleared active_services; using pre-reconcile list")
-            from_services = from_services_pre
         log.info("Switch to idle from %s (gpu_mode=%s)", from_services, self.state.gpu_mode)
 
         try:
@@ -469,6 +467,7 @@ class ModelLifecycle:
                 comfyui_port=comfyui_cfg.port if comfyui_cfg else None,
                 tts_port=tts_port,
                 asr_port=asr_port,
+                active_services=from_services,
             )
 
             gpu_idle = self._proc._wait_gpu_idle(timeout=30)

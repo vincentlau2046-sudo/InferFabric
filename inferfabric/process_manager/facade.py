@@ -203,33 +203,59 @@ class ProcessManager(BaseProcessManager):
         tts_port: Optional[int] = None,
         asr_port: Optional[int] = None,
         sglang_ports: Optional[list[int]] = None,
+        active_services: Optional[list[str]] = None,
     ) -> dict:
         """Stop all services: ComfyUI first, then vLLM, then TTS, then ASR,
-        then SGLang."""
+        then SGLang.
+
+        Each block is guarded: when active_services is provided, services
+        without explicit port/cfg args or a tracked PID are skipped.  This
+        prevents bare stop_vllm() (no port) from triggering _pkill_vllm_fallback()
+        when the caller only intended to clean up after a non-vLLM deployment
+        failure (e.g. ComfyUI).
+
+        Callers that know which services are running should pass
+        active_services=list(self.state.get_active_services()).
+        Callers that want the legacy "stop everything" behaviour pass None
+        (the default — backward compatible).
+
+        SGLang already requires explicit ports; force_kill_all is unchanged.
+        """
         results = {}
+
+        # ComfyUI
         if comfyui_cfg:
             port = comfyui_port or comfyui_cfg.port
             results["comfyui"] = self.stop_comfyui_with_config(comfyui_cfg, port=port)
-        else:
+        elif active_services is None or self.comfyui_pid:
             results["comfyui"] = self.stop_comfyui()
+
+        # vLLM
         if vllm_ports:
             for p in vllm_ports:
                 self.stop_vllm(port=p)
             results["vllm"] = {"status": "ok", "ports": vllm_ports}
-        else:
+        elif active_services is None or self.vllm_pid:
             results["vllm"] = self.stop_vllm()
+
+        # TTS
         if tts_port:
             results["tts"] = self.stop_tts_server(port=tts_port)
-        else:
+        elif active_services is None or self.tts_pid:
             results["tts"] = self.stop_tts_server()
+
+        # ASR
         if asr_port:
             results["asr"] = self.stop_asr_server(port=asr_port)
-        else:
+        elif active_services is None or self.asr_pid:
             results["asr"] = self.stop_asr_server()
+
+        # SGLang (already guarded by explicit ports — keep existing logic)
         if sglang_ports:
             for p in sglang_ports:
                 self.stop_sglang(port=p)
             results["sglang"] = {"status": "ok", "ports": sglang_ports}
+
         return results
 
     def force_kill_all(self) -> dict:

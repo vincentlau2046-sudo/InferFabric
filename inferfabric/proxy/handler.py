@@ -64,7 +64,7 @@ _GET_ROUTES = {
     "/status":                  lambda h, pm: h._send_json(pm.mgr.status()),
     "/models":                  lambda h, pm: h._send_json(pm.mgr.list_models()),
     "/profiles":                lambda h, pm: (log.warning("/profiles is deprecated"), h._send_json(pm.mgr.list_models()))[1],
-    "/local-models":            lambda h, pm: h._send_json(pm.mgr.discover_local_models()),
+    "/local-models":            lambda h, pm: h._send_json({"discovered": [], "configured": list(pm.mgr._models.keys())}),
     "/v1/models":               lambda h, pm: h._handle_v1_models(pm),
     "/system":                  lambda h, pm: h._send_json(h._system_info()),
     "/api/metrics":             lambda h, pm: h._handle_api_metrics(pm),
@@ -90,6 +90,7 @@ _POST_ROUTES = {
     "/reconcile":               _admin(lambda h, pm: h._handle_reconcile(pm)),
     "/deploy":                  _admin(lambda h, pm: h._handle_deploy(pm)),
     "/pull":                    _admin(lambda h, pm: h._handle_pull(pm)),
+    "/reload-config":          _admin(lambda h, pm: h._handle_reload_config(pm)),
     "/admin/cloud/reload":      _admin(lambda h, pm: h._handle_cloud_reload(pm)),
     "/admin/cloud/discover":    _admin(lambda h, pm: h._handle_cloud_discover(pm)),
     "/admin/cloud/test":        _admin(lambda h, pm: h._handle_cloud_test(pm)),
@@ -240,9 +241,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
           1. If profile_state == SWITCHING → 503 + Retry-After
           2. Parse `model` field → find_model_by_served_name()
              a. Model is active → route to its port
-             b. Model is not active → fallback to first active LLM (backward compat)
-          3. Model matches model_affinity (e.g. cloud model) → Baidu
-          4. No match → fallback to first active LLM, then Baidu
+             b. Model is not active → auto-switch or fallback to first active LLM
+          3. Cloud Discovery resolve_route() match → cloud provider
+          4. No match → fallback to first active LLM, then 503
         """
         data = self._read_body()
         if data is None:
@@ -429,8 +430,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                             error=result.error,
                         ))
                         return
-            log.info("/v1/messages → BAIDU fallback [no active LLM, no cloud match]")
-            forwarder.forward_to_baidu(self, data, auth_header, original_model)
+            log.warning("/v1/messages → no route available [no active LLM, no cloud match]")
+            self._send_json({"error": "No active local model and no cloud route"}, 503)
 
     def _forward_local(self, pm, data, auth_header, model_obj, original_model):
         """Forward request to a local model with rate limiting."""
@@ -704,6 +705,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def _handle_reconcile(self, pm):
         result = pm.mgr.reconcile()
         self._send_json(result)
+
+    def _handle_reload_config(self, pm):
+        """POST /reload-config — 热加载 models.d/*.yaml 并刷新 dashboard 缓存。"""
+        if hasattr(pm, 'config_reloader') and pm.config_reloader:
+            pm.config_reloader.reload_all()
+            self._send_json({"status": "reloaded"})
+        else:
+            # Fallback: direct reload if ConfigReloader not available
+            pm.mgr.reload_models()
+            try:
+                from inferfabric.dashboard import invalidate_cache
+                invalidate_cache()
+            except Exception:
+                pass
+            self._send_json({"status": "reloaded"})
 
     def _handle_deploy(self, pm):
         data = self._read_body()
@@ -1239,6 +1255,17 @@ def _validate_admin_token_safety():
 
 
 def main():
+    import traceback
+
+    def _global_excepthook(exc_type, exc_value, exc_tb):
+        logging.critical('Unhandled exception (%s): %s', exc_type.__name__, exc_value)
+        traceback.print_exception(exc_type, exc_value, exc_tb)
+    sys.excepthook = _global_excepthook
+
+    def _thread_excepthook(args):
+        logging.critical('Unhandled thread exception: %s', args.exc_value)
+    threading.excepthook = _thread_excepthook
+
     # Purge stale .pyc to prevent version-desync (INF-001649)
     import shutil
     pkg_dir = Path(__file__).resolve().parent.parent
@@ -1294,7 +1321,8 @@ def main():
 
     # v5.2: Unified hot-reload via ConfigReloader
     from inferfabric.config_reloader import ConfigReloader
-    config_reloader = ConfigReloader(mgr, auth=mgr.auth, cloud=mgr.cloud)
+    config_reloader = ConfigReloader(mgr.mgr, auth=mgr.auth, cloud=mgr.cloud)
+    mgr.config_reloader = config_reloader
     config_reloader.setup()
 
     def watchdog_loop():

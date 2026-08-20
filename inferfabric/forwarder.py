@@ -8,7 +8,6 @@ wfile.write, wfile.flush) to send data to the client.
 
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 from http.client import HTTPConnection
@@ -32,14 +31,6 @@ class CloudResult:
     error: str | None = None
 
 log = logging.getLogger("inferfabric.forwarder")
-
-
-# ── Baidu fallback config ──
-
-BAIDU_MESSAGES_BASE = os.environ.get(
-    "BAIDU_MESSAGES_BASE", "https://qianfan.baidubce.com/anthropic/coding/v1"
-)
-BAIDU_TIMEOUT = 60
 
 
 # ── Local model type filter ──
@@ -118,19 +109,19 @@ def pipe_stream_response(handler, resp):
         resp.close()
 
 
-# ── JSON response with Baidu fallback ──
+# ── JSON response handling ──
 
 
 def handle_json_response(handler, resp, model_obj, original_model, data, auth_header):
-    """Handle non-streaming JSON response with Baidu fallback on non-200."""
+    """Handle non-streaming JSON response; returns error on non-200."""
     resp_status = resp.status
     resp_body = resp.read()
     if resp_status != 200:
-        log.warning("Local %s returned %d (non-streaming) — falling back to Baidu",
+        log.warning("Local %s returned %d (non-streaming)",
                     model_obj.name, resp_status)
         data["model"] = original_model
         resp.close()
-        forward_to_baidu(handler, data, auth_header, original_model)
+        send_json(handler, {"error": f"Local model returned {resp_status}"}, 502)
         return
     try:
         result = json.loads(resp_body)
@@ -242,41 +233,11 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
         )
 
 
-# ── Baidu fallback (v1 compat, PR-D 后删除) ──
-
-
-def forward_to_baidu(handler, data, auth_header, original_model):
-    """Forward Anthropic Messages request to Baidu Coding Plan."""
-    was_stream = data.pop("stream", None)
-    body = json.dumps(data).encode("utf-8")
-    url = f"{BAIDU_MESSAGES_BASE}/messages"
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": auth_header.replace("Bearer ", "").replace("bearer ", "").strip(),
-    }
-
-    try:
-        req = Request(url, data=body, headers=headers, method="POST")
-        resp = urlopen(req, timeout=BAIDU_TIMEOUT)
-        resp_body = resp.read()
-        result = json.loads(resp_body)
-        resp.close()
-        send_json(handler, result)
-    except _HTTPError as e:
-        log.error("Baidu fallback failed: %s %s", e.code, e.reason)
-        error_body = e.read().decode("utf-8", errors="replace")
-        e.close()
-        send_json(handler, {"error": f"Baidu fallback failed: {error_body}"}, 502)
-    except Exception as e:
-        log.error("Baidu fallback error: %s", e)
-        send_json(handler, {"error": f"Baidu unreachable: {e}"}, 503)
-
-
 # ── Local forward with retry chain ──
 
 
 def forward_anthropic_local(handler, pm, data, auth_header, model_obj, original_model):
-    """CCR-style retry chain: local vLLM + exponential backoff → Baidu fallback."""
+    """CCR-style retry chain: local vLLM + exponential backoff → error on exhaustion."""
     was_stream = data.get("stream", False)
     data["model"] = model_obj.served_name or "vllm_qwen27b"
     body = json.dumps(data).encode("utf-8")
@@ -333,6 +294,5 @@ def forward_anthropic_local(handler, pm, data, auth_header, model_obj, original_
                     pass
             break
 
-    log.info("Falling back to Baidu after local failure (last error: %s)", last_error)
-    data["model"] = original_model
-    forward_to_baidu(handler, data, auth_header, original_model)
+    log.error("Local model failed after all retries: %s", last_error)
+    send_json(handler, {"error": f"Local model unreachable: {last_error}"}, 503)

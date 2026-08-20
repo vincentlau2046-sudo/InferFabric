@@ -57,7 +57,7 @@ class HealthMonitor:
     def _tick(self):
         """Single health check tick: cleanup stale manual stops + reconcile state."""
         self._clean_manual_stops()
-        self._reconcile()
+        # self._reconcile()
 
     def _clean_manual_stops(self):
         """Remove manual_stop entries that have exceeded TTL."""

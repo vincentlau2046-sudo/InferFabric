@@ -1,0 +1,32 @@
+name: qwen38-27b-abliterated
+description: "Qwen3.8-27B Abliterated NVFP4 — 去审查版本（基于 Huihui-Qwen3.8-27B-abliterated-NVFP4）"
+gpu_role: exclusive
+model_type: vl
+quantization: NVFP4
+peak_vram_mb: 28000
+
+vllm:
+  model_dir: Huihui-Qwen3.8-27B-abliterated-NVFP4
+  served_name: qwen38-27b-abliterated
+  port: 8002
+  conda_env: Qwen3.8-27B-VL
+  max_model_len: 131072
+  gpu_memory_utilization: 0.90
+  max_num_seqs: 4
+  kv_cache_dtype: fp8
+  extra_flags: >-
+    --max-num-batched-tokens 4096
+    --enable-prefix-caching
+    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4]}'
+    --enable-chunked-prefill
+    --async-scheduling
+    --enable-auto-tool-choice
+    --tool-call-parser qwen3_xml
+    --reasoning-parser qwen3
+    --trust-remote-code
+    --attention-backend flashinfer
+  startup_timeout: 540
+  extra_env:
+    FLASHINFER_DISABLE_VERSION_CHECK: "1"
+    VLLM_USE_DEEP_GEMM: "0"
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"

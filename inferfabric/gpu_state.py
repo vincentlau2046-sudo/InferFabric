@@ -73,7 +73,7 @@ class GpuStateMachine:
         actual_gpu_mode = GPUMode.IDLE
         gpu_services = [s for s in actual_services if not (self._models.get(s) and self._models[s].is_gpu_none)]
         if gpu_services:
-            for svc_name in actual_services:
+            for svc_name in gpu_services:
                 m = self._models.get(svc_name)
                 if m and m.is_exclusive:
                     actual_gpu_mode = GPUMode.EXCLUSIVE
@@ -250,6 +250,17 @@ class GpuStateMachine:
         self._detect_orphan_pids(actual_services, actions)
         self._restore_dead_pids(actual_services, actions)
 
+        # P1-2: gpu_mode=IDLE 但 active_services 还有 GPU 服务 → 自动清理
+        if actual_gpu_mode == GPUMode.IDLE and self.state.get_active_services():
+            gpu_services = [s for s in actual_services
+                            if (m := self._models.get(s)) and not m.is_gpu_none]
+            if gpu_services:
+                actions.append(
+                    f'gpu_mode=IDLE but GPU services remain: {gpu_services} — clearing')
+                remaining = [s for s in self.state.get_active_services()
+                             if self._models.get(s) and self._models[s].is_gpu_none]
+                self.state.set('active_services', json.dumps(remaining))
+
         return {
             "db_gpu_mode": db_gpu_mode,
             "actual_gpu_mode": actual_gpu_mode,
@@ -300,7 +311,7 @@ class GpuStateMachine:
             if m and m.is_comfyui:
                 comfyui_cfg = m.comfyui
                 break
-        self._proc.stop_all(comfyui_cfg=comfyui_cfg)
+        self._proc.stop_all(comfyui_cfg=comfyui_cfg, active_services=self.state.get_active_services())
         # Stop ollama_cpp (gpu_role=none) processes explicitly
         for svc_name in self.state.get_active_services():
             m = self._models.get(svc_name)
