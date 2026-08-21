@@ -11,14 +11,13 @@
 **The Problem**: Running multiple LLM models on a single GPU is painful. Model switching is manual. Cloud API keys are scattered in config files. Each client needs its own backend configuration.
 
 **InferFabric solves this**:
-
 - **Model switching without OOM** — Three-state GPU (idle/exclusive/shared) with safe transitions and health checks
-- **One API, any model** — Every model—local vLLM, local llama.cpp, or cloud OpenAI/Anthropic—is accessed through the same `/v1/chat/completions` endpoint
+- **One API, any model** — Every model—local vLLM, local ollama.cpp, or cloud OpenAI/Anthropic—is accessed through the same `/v1/chat/completions` endpoint
 - **API keys never in plaintext** — `${ENV_VAR}` auto-conversion, secrets stored in `chmod 600` file
 - **Dashboard, not YAML editing** — macOS sidebar dashboard for model switching, monitoring, chat testing, and cloud provider management
 - **Auto-switch on demand** — Request a model and IFF boots it if needed; no manual intervention
->
-> macOS Dashboard · Three-state GPU · OpenAI/Anthropic dual-protocol routing · 9 cloud presets
+
+> macOS Dashboard · Three-state GPU · OpenAI/Anthropic dual-protocol routing · 9 cloud presets · OpenAPI 3.1 spec · SIGHUP hot-reload
 
 ---
 
@@ -26,29 +25,9 @@
 
 InferFabric is a single-GPU LLM inference gateway. It treats every model—local or cloud—as a pluggable unit, managing their lifecycle, routing, and discovery behind a unified OpenAI-compatible API.
 
-```
-┌──────────────────────────────────────────────────────┐
-│  OpenClaw · Claude Code · Codex · AtomCode            │
-│  OpenAI / Anthropic protocol                         │
-└────────────────────┬─────────────────────────────────┘
-                     │  :8999
-┌────────────────────▼─────────────────────────────────┐
-│              InferFabric Proxy                        │
-│  ┌──────────────┐  ┌───────────┐  ┌───────────────┐  │
-│  │ Local Router │  │ Cloud Mgr │  │ macOS Dashboard│  │
-│  │ vLLM/SGLang  │  │ 9 Presets │  │ Sidebar + Chat │  │
-│  │ Ollama/Comfy │  │ Auto-Disc │  │ Live Metrics   │  │
-│  └──────────────┘  └───────────┘  └───────────────┘  │
-└────────────────────┬─────────────────────────────────┘
-        │                            │
-   ┌────▼────┐                ┌──────▼──────┐
-   │  vLLM   │                │ 百度千帆 🟦  │
-   │  SGLang  │                │ DeepSeek 🐋 │
-   │  Ollama  │                │ OpenAI  🟢  │
-   │  ComfyUI │                │ Anthropic🟠 │
-   └─────────┘                └─────────────┘
-     Local Models              Cloud Providers
-```
+### Architecture Overview
+
+![Architecture](docs/diagrams/architecture.svg)
 
 ---
 
@@ -58,13 +37,30 @@ InferFabric is a single-GPU LLM inference gateway. It treats every model—local
 
 ```
 idle ─→ exclusive   (one heavy model, full GPU)
-  │                                    
+  │
   └──→ shared       (many small models, coexist)
-         │                              
+         │
          └──→ idle   (return to idle anytime)
 ```
 
 Local models operate in one of three GPU modes. The gateway enforces safe transitions—you can't accidentally start two exclusive models.
+
+The state machine is computed from actual service processes rather than a persisted flag, so **state never drifts**. HealthMonitor decoupled from state reconciliation eliminates race conditions.
+
+### Value Stream
+
+![Value Stream](docs/diagrams/value-stream.svg)
+
+The value stream spans from YAML model definition to inference response, with five core value-add layers:
+
+| Stage | Value | Mechanism |
+|-------|-------|-----------|
+| **Model Definition** | Zero-code model addition | YAML in `models.d/` → auto-discovered |
+| **Request Routing** | Unified protocol gateway | OpenAI + Anthropic dual-protocol at `:8999` |
+| **GPU State Management** | Safe concurrent model execution | idle → exclusive/shared → idle state machine |
+| **Local Inference** | Zero-latency local execution | vLLM/SGLang/Ollama with GPU affinity allocation |
+| **Cloud Fallback** | Guaranteed model availability | 9 cloud presets with auto-discovery and failover |
+| **Multi-modal** | Extended media pipeline | TTS, ASR, embedding, reranker services |
 
 ### Model as Plugin
 
@@ -113,28 +109,31 @@ API Keys are never stored in plaintext—automatically converted to `${ENV_VAR}`
 
 ---
 
-## Dashboard (v5.4.0)
+## Dashboard (v5.5.x)
 
 A macOS-inspired sidebar dashboard for model management, monitoring, and chat testing:
 
-```
-┌──────┬──────────────────────────────────────────┐
-│  🚀  │  GPU 显存  GPU 负载  系统内存  CPU 负载   │  ← Sticky metrics
-│      │──────────────────────────────────────────│
-│ 推理  │  ┌─ 独占模型 ───── 3 ─────────────────┐  │
-│      │  │ ┌──┐ gemma4  [独占]                 │  │
-│      │  │ │🔥│ ✅ running :8008               │  │
-│ 监控  │  │ └──┘ NVFP4  128K  vLLM  [释放]    │  │
-│      │  └─────────────────────────────────────┘  │
-│ 部署  │                                           │
-│      │  ┌─ Chat ──────────────────────────────┐  │
-│ 云端  │  │ 模型 ▼  Max  Temperature    [Send]  │  │
-│      │  │ 💬 iMessage-style chat bubbles      │  │
-│      │  └─────────────────────────────────────┘  │
-└──────┴──────────────────────────────────────────┘
-```
+### Screenshots
 
-**Features**: Sidebar navigation, live 4-metric bar, model card grid with icon boxes, vLLM performance panels, token usage charts, cloud provider management, dark mode, chat inference panel with local + cloud model support.
+| | |
+|:---:|:---:|
+| **Overview — GPU metrics + model cards** | **Cloud providers management** |
+| ![Dashboard Overview](docs/screenshots/00-dashboard-overview.png) | ![Cloud Providers](docs/screenshots/02-cloud-providers.png) |
+| **Chat inference panel** | **Metrics & monitoring** |
+| ![Chat Panel](docs/screenshots/03-chat-panel.png) | ![Metrics](docs/screenshots/04-metrics.png) |
+| **GPU status & vLLM performance** | |
+| ![GPU Status](docs/screenshots/05-gpu-status.png) | |
+
+**Features**:
+- Sidebar navigation (推理/监控/云端/部署/Chat)
+- Live 4-metric bar: GPU memory · GPU load · System memory · CPU load
+- Model card grid with macOS-icon-box layout, status badges, start/stop controls
+- vLLM performance panels: token throughput, latency distribution, KV cache usage
+- Token usage charts with time-series visualization
+- Cloud provider management: CRUD, auto-discover, connection test
+- Chat inference panel with local + cloud model support, streaming responses
+- Dark mode, typography hierarchy, WCAG AA contrast
+- OpenAPI spec viewer (📖 link in top bar)
 
 ---
 
@@ -176,6 +175,16 @@ iff switch idle
 | `POST` | `/stop` | Stop a shared service |
 | `POST` | `/reset` | Force reset to idle |
 | `POST` | `/reconcile` | Fix state.db vs reality |
+| `GET`  | `/reload-config` | SIGHUP hot-reload |
+
+### Model Management
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/deploy` | Deploy form |
+| `POST` | `/deploy` | Deploy a new model |
+| `GET`  | `/pull` | Pull model form |
+| `POST` | `/pull` | Pull a remote model |
 
 ### Cloud Admin
 
@@ -186,29 +195,31 @@ iff switch idle
 | `POST` | `/admin/cloud/discover` | Discover models |
 | `POST` | `/admin/cloud/test` | Test connection |
 
-### OpenAPI 规范
+### OpenAPI 3.1 Specification
 
-完整 API 规范（OpenAPI 3.1）：
+The full API is documented in OpenAPI 3.1.0 format:
 
-- JSON: GET `/api/openapi.json`
-- YAML 源文件: `api-spec/openapi.yaml`
+- **JSON endpoint**: `GET /api/openapi.json` — auto-generated from YAML with live version injection
+- **Source file**: `api-spec/openapi.yaml` (1014 lines)
+- **Shared schemas**: `api-spec/components/schemas.yaml` (708 lines)
+- **Coverage**: 37 endpoints, all request/response schemas, error models
 
 ---
 
 ## Port Map
 
-| Port | Service | Type |
-|------|---------|------|
-| 8001 | qwen38-27b-vl | vLLM |
-| 8005 | gemma4-31b-vl | vLLM |
-| 8002 | qwen3-vl-4b | vLLM |
-| 8004 | ovis-ocr2 | vLLM |
-| 8188 | comfyui | ComfyUI |
-| 8880 | tts-qwen3 | TTS |
-| 8881 | sensevoice-small | ASR |
-| 11441 | bge-m3 | ollama.cpp |
-| 11442 | bge-reranker | ollama.cpp |
-| 8999 | **Proxy** | HTTP |
+| Port | Service | Type | GPU Role |
+|------|---------|------|----------|
+| 8001 | qwen38-27b-vl | vLLM | exclusive |
+| 8005 | gemma4-31b-vl | vLLM | exclusive |
+| 8002 | qwen3-vl-4b | vLLM / ollama | shared |
+| 8004 | ovis-ocr2 | vLLM | shared |
+| 8188 | comfyui | ComfyUI | shared |
+| 8880 | tts-qwen3 | TTS | shared |
+| 8881 | asr-sensevoice | ASR | shared |
+| 11441 | bge-m3 | ollama.cpp | none |
+| 11442 | bge-reranker | ollama.cpp | none |
+| 8999 | **Proxy** | HTTP | — |
 
 ---
 
@@ -230,12 +241,14 @@ iff reconcile                      # Fix state.db
 | v4.6 | 2026-07 | Cloud discovery, provider management, Dashboard |
 | v4.7 | 2026-08 | Cloud presets, API key security, TTS support |
 | **v5.4.0** | **2026-08** | **macOS Dashboard: sidebar, chat, 12 SVG icons, dark mode** |
+| **v5.5.0** | **2026-08** | GPU state computed property (no drift), HealthMonitor de-reconciled, SIGHUP ConfigReloader, global exception guardrail + 15 `except:pass` fixes, `/reload-config` button, dead code cleanup (forward_to_baidu → unified cloud_provider.yaml), `/local-models` disk-scan guard, UI polish: typography hierarchy + 4px spacing system + WCAG AA contrast, model card macOS icon-box layout, perfPanel stay-visible fix |
+| **v5.5.1** | **2026-08** | OpenAPI 3.1.0 specification (1014 lines, 37 endpoints, shared schemas), `/api/openapi.json` endpoint with live version injection, Dashboard 📖 OpenAPI link in top bar, asr-sensevoice rename, state management refactoring + 10 dead code cleanup items |
 
 ---
 
 ## Hardware
 
-- **GPU**: NVIDIA GeForce RTX 5090D, 32 GB GDDR7
+- **GPU**: NVIDIA GeForce RTX 5090D, 32 GB GDDR7, 512-bit, 1792 GB/s, Blackwell (SM 12.0)
 - **RAM**: 64 GB DDR5
 - **OS**: Ubuntu 25.04, Python 3.12+
 

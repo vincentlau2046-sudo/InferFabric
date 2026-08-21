@@ -1,0 +1,165 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 680" font-family="'SF Mono','Cascadia Code','JetBrains Mono',monospace">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f8f5f2"/><stop offset="100%" stop-color="#f0ece7"/></linearGradient>
+    <linearGradient id="v1" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#d99178"/><stop offset="100%" stop-color="#cc7a60"/></linearGradient>
+    <linearGradient id="v2" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#60a5fa"/><stop offset="100%" stop-color="#2563eb"/></linearGradient>
+    <linearGradient id="v3" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#4ade80"/><stop offset="100%" stop-color="#16a34a"/></linearGradient>
+    <linearGradient id="v4" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#c084fc"/><stop offset="100%" stop-color="#9333ea"/></linearGradient>
+    <linearGradient id="v5" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#fbbf24"/><stop offset="100%" stop-color="#f59e0b"/></linearGradient>
+    <filter id="shadow"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.10"/></filter>
+    <filter id="shadow-sm"><feDropShadow dx="0" dy="1" stdDeviation="2" flood-opacity="0.08"/></filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#a09f9e"/></marker>
+    <marker id="arrow-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M2,0 L12,5 L2,10 Z" fill="#a09f9e"/></marker>
+  </defs>
+  <rect width="1100" height="680" fill="url(#bg)" rx="16"/>
+
+  <text x="550" y="38" text-anchor="middle" font-size="22" font-weight="700" fill="#1f2937">InferFabric — 价值流分布</text>
+  <text x="550" y="58" text-anchor="middle" font-size="12" fill="#6b7280">从模型 YAML 定义到推理响应的全链路价值增值</text>
+
+  <!-- ===== Left side: VALUE CREATION STEPS ===== -->
+  
+  <!-- Stage 1 -->
+  <g filter="url(#shadow)">
+    <rect x="40" y="85" width="280" height="110" rx="12" fill="#fff" stroke="#cc7a60" stroke-width="2"/>
+    <rect x="40" y="85" width="280" height="28" rx="12" fill="url(#v1)"/>
+    <rect x="40" y="101" width="280" height="12" fill="url(#v1)"/>
+    <text x="180" y="104" text-anchor="middle" font-size="12" font-weight="600" fill="#fff">📦 模型定义</text>
+    <text x="55" y="130" font-size="10" fill="#4b5563">每个模型 = 一个 YAML 文件</text>
+    <text x="55" y="148" font-size="10" fill="#4b5563">零代码增量 · 不修改核心</text>
+    <text x="55" y="166" font-size="10" fill="#4b5563">独占/共享 GPU_role 声明式</text>
+    <text x="55" y="184" font-size="10" fill="#4b5563">自动发现 models.d/*.yaml</text>
+  </g>
+
+  <!-- Arrow -->
+  <line x1="320" y1="140" x2="370" y2="140" stroke="#a09f9e" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 2 -->
+  <g filter="url(#shadow)">
+    <rect x="380" y="85" width="280" height="110" rx="12" fill="#fff" stroke="#3b82f6" stroke-width="2"/>
+    <rect x="380" y="85" width="280" height="28" rx="12" fill="url(#v2)"/>
+    <rect x="380" y="101" width="280" height="12" fill="url(#v2)"/>
+    <text x="520" y="104" text-anchor="middle" font-size="12" font-weight="600" fill="#fff">🎯 请求路由</text>
+    <text x="395" y="130" font-size="10" fill="#4b5563">统一 /v1/chat/completions 入口</text>
+    <text x="395" y="148" font-size="10" fill="#4b5563">协议自动识别 (OpenAI/Anthropic)</text>
+    <text x="395" y="166" font-size="10" fill="#4b5563">模型名称 → 目标映射</text>
+    <text x="395" y="184" font-size="10" fill="#4b5563">AUTO_SWITCH 自动启动</text>
+  </g>
+
+  <!-- Arrow -->
+  <line x1="660" y1="140" x2="710" y2="140" stroke="#a09f9e" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Stage 3 -->
+  <g filter="url(#shadow)">
+    <rect x="720" y="85" width="260" height="110" rx="12" fill="#fff" stroke="#16a34a" stroke-width="2"/>
+    <rect x="720" y="85" width="260" height="28" rx="12" fill="url(#v3)"/>
+    <rect x="720" y="101" width="260" height="12" fill="url(#v3)"/>
+    <text x="850" y="104" text-anchor="middle" font-size="12" font-weight="600" fill="#fff">⚡ 推理执行</text>
+    <text x="735" y="130" font-size="10" fill="#4b5563">本地 vLLM: GPU 亲和度分配</text>
+    <text x="735" y="148" font-size="10" fill="#4b5563">云端转发: Provider 代理</text>
+    <text x="735" y="166" font-size="10" fill="#4b5563">流式/非流式统一响应</text>
+    <text x="735" y="184" font-size="10" fill="#4b5563">用量提取 · token 计量</text>
+  </g>
+
+  <!-- ===== Value stream as a continuous pipe (below) ===== -->
+
+  <!-- Main pipe line -->
+  <line x1="80" y1="245" x2="1020" y2="245" stroke="#d1d5db" stroke-width="3"/>
+  <line x1="80" y1="245" x2="500" y2="245" stroke="#cc7a60" stroke-width="3"/>
+  <circle cx="80" cy="245" r="6" fill="#cc7a60"/>
+  <circle cx="500" cy="245" r="6" fill="#cc7a60"/>
+  <circle cx="1020" cy="245" r="6" fill="#9ca3af"/>
+
+  <!-- Sub-lanes -->
+  <text x="100" y="238" font-size="9" fill="#6b7280">零代码</text>
+  <text x="100" y="260" font-size="9" fill="#6b7280">YAML 即模型</text>
+
+  <text x="280" y="238" font-size="9" fill="#6b7280">单入口</text>
+  <text x="280" y="260" font-size="9" fill="#6b7280">双协议路由</text>
+
+  <text x="470" y="238" font-size="9" fill="#6b7280">自动切换</text>
+  <text x="470" y="260" font-size="9" fill="#6b7280">AUTO_SWITCH</text>
+
+  <text x="630" y="238" font-size="9" fill="#6b7280">本地推理</text>
+  <text x="630" y="260" font-size="9" fill="#6b7280">vLLM/SGLang</text>
+
+  <text x="800" y="238" font-size="9" fill="#6b7280">云端回退</text>
+  <text x="800" y="260" font-size="9" fill="#6b7280">9 预设</text>
+
+  <text x="950" y="238" font-size="9" fill="#6b7280">TTS/ASR</text>
+  <text x="950" y="260" font-size="9" fill="#6b7280">多模态</text>
+
+  <!-- ===== Value add metrics ===== -->
+  <g filter="url(#shadow-sm)">
+    <rect x="40" y="290" width="245" height="75" rx="10" fill="#fff" stroke="#e5e7eb" stroke-width="1"/>
+    <text x="162" y="315" text-anchor="middle" font-size="11" font-weight="600" fill="#1f2937">🕐 延迟降低</text>
+    <text x="55" y="338" font-size="10" fill="#6b7280">GPU 预热消除 (AUTO_SWITCH)</text>
+    <text x="55" y="355" font-size="10" fill="#6b7280">本地=0ms 切换, 云端=直连</text>
+  </g>
+
+  <g filter="url(#shadow-sm)">
+    <rect x="305" y="290" width="245" height="75" rx="10" fill="#fff" stroke="#e5e7eb" stroke-width="1"/>
+    <text x="427" y="315" text-anchor="middle" font-size="11" font-weight="600" fill="#1f2937">💾 GPU 利用率</text>
+    <text x="320" y="338" font-size="10" fill="#6b7280">三态复用: idle→shared=共存</text>
+    <text x="320" y="355" font-size="10" fill="#6b7280">独占模型共享空闲容量</text>
+  </g>
+
+  <g filter="url(#shadow-sm)">
+    <rect x="570" y="290" width="245" height="75" rx="10" fill="#fff" stroke="#e5e7eb" stroke-width="1"/>
+    <text x="692" y="315" text-anchor="middle" font-size="11" font-weight="600" fill="#1f2937">🔐 安全治理</text>
+    <text x="585" y="338" font-size="10" fill="#6b7280">${ENV_VAR} 密钥管理</text>
+    <text x="585" y="355" font-size="10" fill="#6b7280">chmod 600 隔离存储</text>
+  </g>
+
+  <g filter="url(#shadow-sm)">
+    <rect x="835" y="290" width="225" height="75" rx="10" fill="#fff" stroke="#e5e7eb" stroke-width="1"/>
+    <text x="947" y="315" text-anchor="middle" font-size="11" font-weight="600" fill="#1f2937">📡 可观测性</text>
+    <text x="850" y="338" font-size="10" fill="#6b7280">实时 GPU/系统指标</text>
+    <text x="850" y="355" font-size="10" fill="#6b7280">Token 计量 · 延迟追踪</text>
+  </g>
+
+  <!-- ===== Bottom section: Use Cases ===== -->
+  <g filter="url(#shadow)">
+    <rect x="40" y="400" width="1020" height="125" rx="14" fill="#fff" stroke="#9333ea" stroke-width="2"/>
+    <rect x="40" y="400" width="1020" height="32" rx="14" fill="url(#v4)"/>
+    <rect x="40" y="418" width="1020" height="14" fill="url(#v4)"/>
+    <text x="550" y="420" text-anchor="middle" font-size="13" font-weight="600" fill="#fff">🏗️ 典型价值流场景</text>
+
+    <!-- Scenario cards -->
+    <rect x="58" y="445" width="320" height="65" rx="8" fill="#f5f3ff" stroke="#ddd6fe" stroke-width="1"/>
+    <text x="75" y="463" font-size="11" font-weight="600" fill="#5b21b6">场景一：模型切换推理</text>
+    <text x="75" y="482" font-size="9" fill="#6b7280">OpenClaw 请求 gemma4 → Proxy 发现运行中 →</text>
+    <text x="75" y="497" font-size="9" fill="#6b7280">路由至 :8005 → 流式推理 → token 返回客户端</text>
+
+    <rect x="395" y="445" width="320" height="65" rx="8" fill="#f5f3ff" stroke="#ddd6fe" stroke-width="1"/>
+    <text x="412" y="463" font-size="11" font-weight="600" fill="#5b21b6">场景二：云端回退</text>
+    <text x="412" y="482" font-size="9" fill="#6b7280">本地无 deepseek-v4-flash →</text>
+    <text x="412" y="497" font-size="9" fill="#6b7280">Proxy 转发百度千帆(OpenAI/Anthropic)</text>
+
+    <rect x="730" y="445" width="315" height="65" rx="8" fill="#f5f3ff" stroke="#ddd6fe" stroke-width="1"/>
+    <text x="747" y="463" font-size="11" font-weight="600" fill="#5b21b6">场景三：多模型共存</text>
+    <text x="747" y="482" font-size="9" fill="#6b7280">bge-m3 (embeddings) + ovis-ocr2</text>
+    <text x="747" y="497" font-size="9" fill="#6b7280">共享 GPU 并行推理</text>
+  </g>
+
+  <!-- ===== Bottom: Value Metrics ===== -->
+  <g filter="url(#shadow-sm)">
+    <rect x="40" y="555" width="1020" height="70" rx="12" fill="#fff" stroke="#f59e0b" stroke-width="2"/>
+    <rect x="40" y="555" width="1020" height="28" rx="12" fill="url(#v5)"/>
+    <rect x="40" y="571" width="1020" height="12" fill="url(#v5)"/>
+    <text x="550" y="574" text-anchor="middle" font-size="12" font-weight="600" fill="#fff">📊 价值度量</text>
+
+    <text x="70" y="604" font-size="10" font-weight="600" fill="#92400e">零代码模型增量</text>
+    <text x="215" y="604" font-size="10" fill="#a16207">1 YAML = 1 模型</text>
+
+    <text x="330" y="604" font-size="10" font-weight="600" fill="#92400e">GPU 复用率</text>
+    <text x="445" y="604" font-size="10" fill="#a16207">3× 共享共存</text>
+
+    <text x="560" y="604" font-size="10" font-weight="600" fill="#92400e">切换延迟</text>
+    <text x="675" y="604" font-size="10" fill="#a16207">~0ms (运行中) / ~30s (冷启动)</text>
+
+    <text x="860" y="604" font-size="10" font-weight="600" fill="#92400e">配置入口</text>
+    <text x="950" y="604" font-size="10" fill="#a16207">1 个 Dashboard</text>
+  </g>
+
+  <text x="550" y="670" text-anchor="middle" font-size="9" fill="#9ca3af">InferFabric v5.5.1 · 从模型定义到推理响应的全链路价值增值</text>
+</svg>
