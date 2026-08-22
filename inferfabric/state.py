@@ -137,34 +137,25 @@ class StateDB:
     def remove_active_service(self, name: str):
         self._db.remove_active_service(name)
 
-    # ─── Manual Stop Protection ────────────────────────────────
+    # ─── Manual Stop Protection (delegated to IFFDB table) ──────
 
-    MANUAL_STOP_TTL = 600  # 10 min (IFFDB default is 3600)
+    MANUAL_STOP_TTL = 600  # 10 min
 
     def record_manual_stop(self, name: str):
         """Record that user manually stopped a model (blocks auto-switch)."""
-        stops = json.loads(self._db.get("manual_stops") or "{}")
-        stops[name] = time.time()
-        self._db.set("manual_stops", json.dumps(stops))
+        self._db.record_manual_stop(name)
 
     def is_manually_stopped(self, name: str) -> bool:
         """Check if model was manually stopped within TTL."""
-        now = time.time()
-        stops = json.loads(self._db.get("manual_stops") or "{}")
-        ts = stops.get(name)
-        if ts is None:
-            return False
-        if now - ts > self.MANUAL_STOP_TTL:
-            del stops[name]
-            self._db.set("manual_stops", json.dumps(stops))
-            return False
-        return True
+        return self._db.is_manually_stopped(name)
 
     def clear_manual_stop(self, name: str):
-        """Clear manual stop record (e.g. when user explicitly switches TO this model)."""
-        stops = json.loads(self._db.get("manual_stops") or "{}")
-        stops.pop(name, None)
-        self._db.set("manual_stops", json.dumps(stops))
+        """Clear manual stop record."""
+        self._db.clear_manual_stop(name)
+
+    def get_all_manual_stops(self) -> dict[str, float]:
+        """Return all manual stop entries for cleanup."""
+        return self._db.get_all_manual_stops()
 
     # ─── Models Lookup Callback ──────────────────────────────────
 

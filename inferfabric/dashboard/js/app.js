@@ -775,7 +775,13 @@ async function submitOllamaDeploy(event) {
 // ── Usage Chart (P1) ──
 let usageWindow='weekly';
 async function loadUsage() {
-  const stats = window.__TOKEN_STATS__ || {};
+  let stats;
+  try {
+    const r = await fetch('/api/token-stats');
+    stats = await r.json();
+  } catch(e) {
+    stats = window.__TOKEN_STATS__ || {};
+  }
   const body = document.getElementById('usageBody');
   const tot = document.getElementById('usageTotal');
   if (!body) return;  // G-3a: usage panel moved to monitor.js

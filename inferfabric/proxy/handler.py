@@ -75,6 +75,7 @@ _GET_ROUTES = {
     "/system":                  lambda h, pm: h._send_json(h._system_info()),
     "/api/metrics":             lambda h, pm: h._handle_api_metrics(pm),
     "/api/request_log":         lambda h, pm: h._handle_request_log(pm),
+    "/api/token-stats":         lambda h, pm: h._handle_token_stats(pm),
     "/history":                 lambda h, pm: h._send_json(pm.mgr.state.get_history(limit=30)),
     "/vllm_metrics":            lambda h, pm: h._handle_vllm_metrics(pm),
     "/watchdog_status":         lambda h, pm: h._handle_watchdog_status(),
@@ -588,6 +589,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             log.error("/api/request_log failed: %s", e)
             self._send_json({"error": "request log unavailable"}, 500)
 
+    def _handle_token_stats(self, pm):
+        """返回 token 用量统计 (v5.x: API endpoint for live polling)"""
+        try:
+            stats = pm.telemetry.token_collector._load_full_state()
+            self._send_json(stats, 200)
+        except Exception as e:
+            log.error("/api/token-stats failed: %s", e)
+            self._send_json({"error": "token stats unavailable"}, 500)
+
     # ─── System Info ─────────────────────────────────────────────
 
     def _system_info(self):
@@ -660,12 +670,23 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if not target:
             self._send_json({"error": "Missing model"}, 400)
             return
+
+        # Gate: respect switching_target (idle is always allowed as escape hatch)
+        switching = pm.mgr.state.get("switching_target") or ""
+        if switching and switching != target and target != "idle":
+            self._send_json(
+                {"status": "error", "message": "GPU switch in progress (%s)" % switching},
+                409,
+            )
+            return
+
         if target == "idle":
             for svc in list(pm.mgr.active_services):
                 pm.mgr.state.record_manual_stop(svc)
         elif target != "idle":
             pm.mgr.state.clear_manual_stop(target)
         result = pm.mgr.switch(target)
+        pm.mgr.state.set("switching_target", "")
         self._send_json(result)
 
     def _handle_stop(self, pm):

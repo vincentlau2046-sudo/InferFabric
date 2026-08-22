@@ -16,3 +16,7 @@ IFFDB.register_migration(3, "state", "manual_stops")
 # v004: sleep_state table (v5.2)
 from inferfabric.migrations import v004_sleep_state
 IFFDB.register_migration(4, "state", "sleep_state")
+
+# v005: reconcile manual_stops KV → table (v5.x)
+from inferfabric.migrations import v005_reconcile_manual_stops
+IFFDB.register_migration(5, "state", "reconcile_manual_stops")

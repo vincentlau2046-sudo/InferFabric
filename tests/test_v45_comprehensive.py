@@ -161,9 +161,17 @@ class TestStateDB:
 
     def test_manual_stop_ttl_expiry(self, db):
         db.record_manual_stop("model-a")
-        stops = json.loads(db.get("manual_stops"))
-        stops["model-a"] = time.time() - 601
-        db.set("manual_stops", json.dumps(stops))
+        assert db.is_manually_stopped("model-a")
+        # Expire the entry: update stop_ts directly in the table
+        # (StateDB now delegates to IFFDB table instead of KV key)
+        now = time.time()
+        from inferfabric.db import STATE_DB as _STDB
+        with db._db._write_lock, db._db.connect(_STDB) as conn:
+            conn.execute(
+                "UPDATE manual_stops SET stop_ts = ? WHERE model = ?",
+                (now - 601, "model-a"),
+            )
+            conn.commit()
         assert not db.is_manually_stopped("model-a")
 
     def test_sleep_state(self, db):

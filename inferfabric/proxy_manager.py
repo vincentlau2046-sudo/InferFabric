@@ -83,6 +83,7 @@ class ProxyManager:
         # v5.2: HealthMonitor — delegated health checking
         from inferfabric.health_monitor import HealthMonitor
         self.health_monitor = HealthMonitor(self.mgr, self.mgr.state)
+        self.health_monitor.start()
         from inferfabric.telemetry import TelemetryHub
         self.telemetry = TelemetryHub(IFF_DATA_DIR, self._runtime_config)
         self.logger = self.telemetry.logger
@@ -309,28 +310,51 @@ class ProxyManager:
         return False
 
     def ensure_service(self, target: str) -> bool:
-        """Ensure a model is running, auto-switch if needed."""
+        """Ensure a model is running, auto-switch if needed.
+
+        Lock redesign (v5.x): _switch_lock only covers switch initiation
+        (seconds), NOT health wait (up to 500s). switching_target acts as
+        a distributed lock to prevent concurrent switches during health wait.
+        """
         if target in self.mgr.active_services:
             return True
         if self.mgr.state.is_manually_stopped(target):
             log.info("Auto-switch to %s blocked: manually stopped by user", target)
             return False
+
+        # -- Gate: switching_target prevents concurrent switches --
+        switching = self.mgr.state.get("switching_target") or ""
+        if switching:
+            if switching == target:
+                log.info("Auto-switch to %s -- already switching, waiting", target)
+                return self._wait_healthy(target)
+            log.warning("Switch to %s blocked -- GPU switching to %s", target, switching)
+            return None  # caller should send 409
+
+        # -- Core: hold _switch_lock only for switch initiation --
         if not self._switch_lock.acquire(timeout=0):
             log.warning("Switch already in progress, rejecting")
-            return None  # caller should send 409
+            return None
         try:
             if time.time() - self._last_switch < self._cooldown:
                 log.warning("Switch cooldown active, skipping")
                 return False
             log.info("Auto-switch → %s", target)
+            self.mgr.state.set("switching_target", target)
             result = self.mgr.switch(target)
             ok = result["status"] == "switched"
             if ok:
                 self._last_switch = time.time()
-                return self._wait_healthy(target)
-            return result["status"] in ("switched", "already_active")
+            else:
+                self.mgr.state.set("switching_target", "")
+                return result["status"] in ("switched", "already_active")
         finally:
             self._switch_lock.release()
+
+        # -- Health wait OUTSIDE lock (up to 500s) --
+        healthy = self._wait_healthy(target)
+        self.mgr.state.set("switching_target", "")
+        return healthy
 
     def get_target_port(self, model_name: str):
         """Get port for a served_model_name."""
