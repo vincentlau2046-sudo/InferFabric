@@ -244,6 +244,12 @@ class ModelManager:
                 return {"status": "error", "message": f"Invalid transition: {current_mode} → {target_mode}"}
 
         # ── Acquire lock, deploy, and record ──────────────────────────
+        # Gate: respect switching_target to prevent concurrent switches
+        switching = self.state.get("switching_target") or ""
+        if switching and switching != target and target != "idle":
+            log.warning("Switch to %s blocked — GPU switching to %s", target, switching)
+            return {"status": "error", "message": f"GPU switch in progress ({switching})"}
+
         # Acquire GPU lock
         if not self._lock.acquire():
             return {"status": "error", "message": "GPU switch in progress (lock held)"}
@@ -300,7 +306,6 @@ class ModelManager:
             self.state.add_history(",".join(from_services), target, time.time() - t0, "error")
             return {"status": "error", "message": str(e)}
         finally:
-            self.state.set("switching_target", "")
             self._lock.release()
 
     # ── Status ────────────────────────────────────────────────────

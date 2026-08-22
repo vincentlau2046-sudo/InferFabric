@@ -277,7 +277,7 @@ class IFFDB:
 
     # ── State: manual stops (v5.2: table-backed) ──────────────
 
-    MANUAL_STOP_TTL: float = 3600.0
+    MANUAL_STOP_TTL: float = 600.0  # 10 min (align with StateDB)
 
     def record_manual_stop(self, name: str):
         import time
