@@ -78,9 +78,6 @@
         <span id="sTag" class="mac-tag tag idle"><span class="dot"></span><span id="sTxt">idle</span></span>
         <span class="mac-ver" id="navVer"></span>
         <span class="mac-divider"></span>
-        <span class="mac-sync-meta" id="syncMeta" title="最近一次快照同步时间 + 控制面版本"></span>
-        <button class="mac-refresh-btn" id="refreshNow" onclick="refreshNow()" title="立即刷新 (绕过 304)">🔄</button>
-        <span class="mac-divider"></span>
         <span class="mac-clock" id="ts">—</span>
         <button class="mac-theme-btn" id="themeToggle" onclick="toggleTheme()">☀️</button>
         <a class="mac-api-btn" href="/api/openapi.json" target="_blank" title="OpenAPI 规范">📖</a>
@@ -125,8 +122,8 @@
       </nav>
 
       <div class="sidebar-footer">
-        <span class="sidebar-status-dot" id="sidebarStatusDot"></span>
-        <span class="sidebar-status-txt" id="sidebarSyncTxt">运行中</span>
+        <span class="sidebar-status-dot excl"></span>
+        <span class="sidebar-status-txt">运行中</span>
       </div>
     </aside>
 
@@ -194,7 +191,7 @@
 <!-- P5: API Error Banner -->
 <div id="apiErrorBanner" class="api-err-banner" style="display:none">
   <span>⚠️ API 连接异常</span>
-  <button onclick="store.forceRefresh()">重试</button>
+  <button onclick="window.store?.fetchStatus()">重试</button>
 </div>
 
 <!-- P5: Switch Overlay -->

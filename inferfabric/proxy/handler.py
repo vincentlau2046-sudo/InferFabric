@@ -76,7 +76,6 @@ _GET_ROUTES = {
     "/api/metrics":             lambda h, pm: h._handle_api_metrics(pm),
     "/api/request_log":         lambda h, pm: h._handle_request_log(pm),
     "/api/token-stats":         lambda h, pm: h._handle_token_stats(pm),
-    "/api/snapshot":            lambda h, pm: h._handle_snapshot(pm),
     "/history":                 lambda h, pm: h._send_json(pm.mgr.state.get_history(limit=30)),
     "/vllm_metrics":            lambda h, pm: h._handle_vllm_metrics(pm),
     "/watchdog_status":         lambda h, pm: h._handle_watchdog_status(),
@@ -598,102 +597,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             log.error("/api/token-stats failed: %s", e)
             self._send_json({"error": "token stats unavailable"}, 500)
-
-    def _handle_snapshot(self, pm):
-        """GET /api/snapshot — single consistent control-plane snapshot.
-
-        Consolidates /status + /system + /models + /history + token stats +
-        recent request logs + 24h metrics into ONE response so the dashboard
-        polls a single endpoint (eliminates cross-panel state gaps).
-
-        Change detection: response carries `etag` (SHA-1 hash of the
-        control-plane content) and `rev` (first 8 chars of the etag). The
-        dashboard sends the previous etag as `If-None-Match` and gets a
-        cheap `304 Not Modified` when the control plane is unchanged.
-        """
-        import hashlib
-        now = time.time()
-        status = pm.mgr.status()
-        system = self._system_info()
-        models = pm.mgr.list_models()
-        try:
-            history = pm.mgr.state.get_history(30)
-        except Exception:
-            history = []
-        try:
-            token_stats = pm.telemetry.token_collector._load_full_state()
-        except Exception:
-            token_stats = {}
-        try:
-            rows = pm.telemetry.query_request_log(since=int(now - 3600), limit=50)
-            request_log = [
-                {
-                    "timestamp": r["timestamp"],
-                    "model": r["model"],
-                    "status": r["status"],
-                    "tokens_in": r["tokens_in"],
-                    "tokens_out": r["tokens_out"],
-                    "ttft_ms": round(r["ttft_ms"], 1) if r["ttft_ms"] else None,
-                    "duration_ms": round(r["duration_ms"], 1) if r["duration_ms"] else None,
-                    "route": r["route"],
-                    "key_name": r.get("key_name", ""),
-                    "error": r.get("error", ""),
-                }
-                for r in rows
-            ]
-        except Exception:
-            request_log = []
-        try:
-            metrics_24h = pm.metrics.get_metrics("24h")
-        except Exception:
-            metrics_24h = {}
-
-        # ETag = hash of the control-plane subset (status + models): stable,
-        # stateless, crash-safe.
-        control = json.dumps(
-            {"status": status, "models": models},
-            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-        )
-        etag_raw = hashlib.sha1(control.encode("utf-8")).hexdigest()[:16]
-        etag = f'"{etag_raw}"'
-
-        payload = {
-            "ts": now,
-            "rev": etag_raw[:8],
-            "etag": etag,
-            "status": status,
-            "system": system,
-            "models": models,
-            "history": history,
-            "token_stats": token_stats or {},
-            "request_log": request_log,
-            "metrics_24h": metrics_24h or {},
-            "local_models": {
-                "discovered": [],
-                "configured": list(pm.mgr._models.keys()),
-            },
-        }
-
-        # If-None-Match → 304 Not Modified
-        inm = self.headers.get("If-None-Match", "")
-        if inm:
-            parts = [p.strip() for p in inm.split(",")]
-            if etag in parts or etag_raw in parts:
-                self.send_response(304)
-                self.send_header("ETag", etag)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                return
-
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("ETag", etag)
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self._safe_write(body)
 
     # ─── System Info ─────────────────────────────────────────────
 

@@ -1,12 +1,8 @@
 /* InferFabric Dashboard — State Store
- * Phase: P0 | Task: T.0-2 (v2: /api/snapshot upgrade)
- * Single-source polling: fetches /api/snapshot (3s), merges into a
- * normalized shape, and triggers bindings.render() on state change.
- *
- * Change detection: the endpoint supports ETag/If-None-Match → 304 when
- * the control plane (status + models) is unchanged. The store therefore
- * keeps its last known state on 304 — this eliminates the "state gap"
- * where stale poll responses used to overwrite fresh data.
+ * Phase: P0 | Task: T.0-2
+ * Pub/sub state management with 3s API polling.
+ * Fetches /api/status + /system, merges into normalized shape,
+ * triggers bindings.render() on state change.
  *
  * Exposed as window.store for app.js integration.
  */
@@ -18,9 +14,6 @@ class StateStore {
     this._timer = null;
     this._tabActive = null;
     this._switchLocked = false;
-    // Snapshot sync metadata
-    this._etag = null;   // last etag received from /api/snapshot
-    this._lastTs = 0;    // last (monotonic) snapshot timestamp
   }
 
   /* ── Core pub/sub ── */
@@ -67,50 +60,24 @@ class StateStore {
     if (subs) subs.forEach(cb => { try { cb(value, old); } catch(e) { console.warn('[state] sub error:', key, e); } });
   }
 
-  /* ── API polling (single source of truth: /api/snapshot) ── */
-  async fetchSnapshot(force = false) {
+  /* ── API polling ── */
+async fetchStatus() {
     try {
-      const headers = { cache: 'no-store' };
-      if (this._etag && !force) headers['If-None-Match'] = this._etag;
-      const res = await fetch('/api/snapshot', { headers });
+      const [statusRes, sysRes] = await Promise.all([
+        fetch('/status'),
+        fetch('/system').catch(() => null)
+      ]);
+      const status = await statusRes.json();
+      const sys = sysRes ? await sysRes.json().catch(() => ({})) : {};
 
-      if (res.status === 304) {
-        // Control plane unchanged — keep last state, update sync meta only.
-        this.set('api_error', null);
-        this.set('sync_meta', {
-          etag: this._etag,
-          rev: (this._etag || '').slice(1, 9) || '',
-          ts: this._lastTs,
-          changed: false,
-          stale: false,
-        });
-        return null;
+      // Check for API errors
+      if (status.error) {
+        this.set('api_error', status.error);
+        return;
       }
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const snap = await res.json();
-
-      // Out-of-order guard: drop stale responses (ts regressed).
-      const stale = !force && snap.ts != null && this._lastTs > 0 && snap.ts <= this._lastTs;
-      this._etag = snap.etag || null;
-      this._lastTs = Math.max(this._lastTs, snap.ts || 0);
       this.set('api_error', null);
 
-      if (stale) {
-        console.warn('[state] out-of-order snapshot dropped (ts', snap.ts, '<= last', this._lastTs);
-        this.set('sync_meta', {
-          etag: this._etag,
-          rev: (this._etag || '').slice(1, 9) || '',
-          ts: this._lastTs,
-          changed: false,
-          stale: true,
-        });
-        return snap;
-      }
-
-      const status = snap.status || {};
-      const sys = snap.system || {};
-
-      // ── Normalize into binding-friendly shape (merged via update → merge)
+      // Normalize into binding-friendly shape
       const gpuUsed = status.gpu_used_mb || 0;
       const gpuTotal = status.gpu_total_mb || 32607;
       const ramTotal = sys.ram_total_gb || 1;
@@ -127,7 +94,7 @@ class StateStore {
           pct:   sys.gpu_util_pct || 0,
           clock: sys.gpu_clock_mhz || '—',
           power: sys.gpu_power_w || '—',
-          temp:  sys.gpu_temp_c || null,
+        temp: sys.gpu_temp_c || null,
         },
         mem: {
           used:  ramUsed,
@@ -147,52 +114,15 @@ class StateStore {
         services_health: status.services_health || {},
         sleep_states:    status.sleep_states || {},
       };
-      this.update(merged);
 
-      // ── Replace semantics for collections/maps: drop stale entries ──
-      this.set('status', status);
-      this.set('active_services', merged.active_services);
-      this.set('services_info', merged.services_info);
-      this.set('services_health', merged.services_health);
-      this.set('sleep_states', merged.sleep_states);
-      this.set('models', snap.models || []);
-      this.set('history', snap.history || []);
-      this.set('token_stats', snap.token_stats || {});
-      this.set('request_log', snap.request_log || []);
-      this.set('metrics_24h', snap.metrics_24h || {});
-      this.set('local_models', snap.local_models || { discovered: [], configured: [] });
-      this.set('sync_meta', {
-        etag: this._etag,
-        rev: (this._etag || '').slice(1, 9) || '',
-        ts: snap.ts || this._lastTs,
-        changed: true,
-        stale: false,
-      });
+      this.update(merged);
 
       // Trigger render via batched macrotask
       this._scheduleRender();
-      return snap;
-    } catch (e) {
-      console.warn('[state] snapshot fetch error:', e);
+    } catch(e) {
+      console.warn('[state] fetch error:', e);
       this.set('api_error', e.message);
-      this.set('sync_meta', {
-        etag: this._etag,
-        rev: (this._etag || '').slice(1, 9) || '',
-        ts: this._lastTs,
-        changed: false,
-        stale: true,
-      });
-      return null;
     }
-  }
-
-  /* Force a fresh snapshot (manual refresh / post-action refresh). */
-  async forceRefresh() {
-    const snap = await this.fetchSnapshot(true);
-    if (snap && typeof window.refreshPanels === 'function') {
-      try { window.refreshPanels(snap); } catch (e) { console.warn('[state] refreshPanels error:', e); }
-    }
-    return snap;
   }
 
   _scheduleRender() {
@@ -207,11 +137,11 @@ class StateStore {
 
   startPolling(intervalMs = 3000) {
     // Immediate fetch
-    this.fetchSnapshot();
+    this.fetchStatus();
     // Clear any existing timer
     if (this._timer) clearInterval(this._timer);
     // Start new timer
-    this._timer = setInterval(() => this.fetchSnapshot(), intervalMs);
+    this._timer = setInterval(() => this.fetchStatus(), intervalMs);
   }
 
   stopPolling() {
@@ -280,22 +210,6 @@ store.on('switch_target', (val) => {
     store.setSwitchLocked(false);
   }
 });
-
-/* ── Sync / Freshness Indicator ── */
-function updateSyncIndicator(meta) {
-  if (!meta) return;
-  const dot = document.getElementById('sidebarStatusDot');
-  const txt = document.getElementById('sidebarSyncTxt');
-  const stale = meta.stale || (!meta.changed && ((Date.now() / 1000) - (meta.ts || 0) > 6);
-  if (dot) {
-    dot.className = 'sidebar-status-dot ' + (stale ? 'err' : 'ok');
-  }
-  if (txt) {
-    txt.textContent = stale ? '已断线' : (meta.rev ? '已同步 · rev ' + meta.rev : '运行中');
-  }
-  // Note: top-bar #syncMeta text is owned by the sync_meta binding in bindings.js
-}
-store.on('sync_meta', updateSyncIndicator);
 
 /* ── Theme Toggle (P4) ── */
 function toggleTheme() {

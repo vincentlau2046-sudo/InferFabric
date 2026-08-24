@@ -70,14 +70,6 @@ const BINDINGS = [
   { key: 'ts_now',  el: 'ts',    type: 'text',
     fmt: () => new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) },
 
-  // ── v5.x: Sync / Freshness (top bar) ──
-  { key: 'sync_meta', el: 'syncMeta', type: 'text',
-    fmt: m => {
-      if (!m) return '';
-      const t = m.ts ? new Date(m.ts * 1000).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'}) : '—';
-      return m.stale ? '已断线' : '已同步 ' + t + ' · rev ' + (m.rev || '—');
-    } },
-
   // ── Toast — switch notifications ──
   { key: 'switch_target', el: 'toast', type: 'toast',
     condition: v => v !== null && v !== '' && v !== undefined,

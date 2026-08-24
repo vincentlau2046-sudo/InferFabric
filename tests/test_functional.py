@@ -196,31 +196,6 @@ def test_vllm_metrics_endpoint():
         print(f"✅ /vllm_metrics: {list(data.keys()) if isinstance(data, dict) else 'ok'}")
 
 
-def test_snapshot_endpoint():
-    """GET /api/snapshot returns a consistent control-plane snapshot with etag;
-    If-None-Match with the returned etag yields 304."""
-    data, status = _get("/api/snapshot")
-    assert status == 200, f"Expected 200, got {status}: {data}"
-    for key in ("ts", "rev", "etag", "status", "system", "models", "history",
-                 "token_stats", "request_log", "metrics_24h", "local_models"):
-        assert key in data, f"Missing key '{key}' in /api/snapshot"
-    assert isinstance(data["status"], dict), "status must be a dict"
-    assert isinstance(data["models"], list), "models must be a list"
-    assert data["etag"], "etag must be present"
-
-    # Conditional request: If-None-Match with the same etag → 304
-    req = urllib.request.Request(
-        f"{PROXY_URL}/api/snapshot",
-        headers={"If-None-Match": data["etag"]},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            print(f"⚠️ /api/snapshot conditional: expected 304, got {resp.status}")
-    except urllib.error.HTTPError as e:
-        assert e.code == 304, f"Expected 304 for matching etag, got {e.code}"
-        print(f"✅ /api/snapshot: 200 with etag; If-None-Match → 304 (no state gap)")
-
-
 # ═══════════════════════════════════════════════════════════════
 # Run
 # ═══════════════════════════════════════════════════════════════
@@ -242,7 +217,6 @@ def run_all():
         test_dashboard_html_served,
         test_reconcile_endpoint,
         test_vllm_metrics_endpoint,
-        test_snapshot_endpoint,
         # test_switch_exclusive_then_idle,  # Uncomment for full cycle test
     ]
 

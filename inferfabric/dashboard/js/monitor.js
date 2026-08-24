@@ -112,17 +112,11 @@ function renderCost(d) {
 let _logInterval = null;
 async function loadRequestLog() {
   try {
-    // v5.x: prefer the /api/snapshot store (same 50-entry/1h window as the
-    // old /api/request_log poll); fall back to a direct fetch when the
-    // snapshot has no request_log yet.
-    let logs = window.store && window.store.get('request_log');
-    if (!logs || !logs.length) {
-      const since = Math.floor(Date.now() / 1000) - 3600; // last 1h
-      const r = await fetch('/api/request_log?limit=50&since=' + since);
-      if (!r.ok) return;
-      const d = await r.json();
-      logs = d.logs || [];
-    }
+    const since = Math.floor(Date.now() / 1000) - 3600; // last 1h
+    const r = await fetch('/api/request_log?limit=50&since=' + since);
+    if (!r.ok) return;
+    const d = await r.json();
+    const logs = d.logs || [];
     const el = document.getElementById('logBody');
     if (!logs.length) {
       el.innerHTML = '<div class="m-empty">暂无请求日志</div>';
