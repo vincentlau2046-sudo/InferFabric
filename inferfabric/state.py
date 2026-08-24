@@ -119,9 +119,8 @@ class StateDB:
         self._db.set(key, value)
 
     def set_multi(self, kv: dict[str, str]):
-        """Atomically set multiple state keys."""
-        for k, v in kv.items():
-            self._db.set(k, v)
+        """Atomically set multiple state keys in a single DB transaction."""
+        self._db.set_multi(kv)
 
     # ─── Active Services ────────────────────────────────────────
 

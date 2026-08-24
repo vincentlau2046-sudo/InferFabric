@@ -49,7 +49,7 @@ class GpuStateMachine:
     def _port_pid(port: int) -> Optional[int]:
         """Return PID owning a TCP port via fuser, or None."""
         result = subprocess.run(
-            ["fuser", "-v", str(port) + "/tcp"],
+            ["fuser", str(port) + "/tcp"],
             capture_output=True, text=True, timeout=5
         )
         if result.returncode == 0:
@@ -71,7 +71,8 @@ class GpuStateMachine:
     def _derive_gpu_mode(self, actual_services: list[str]) -> GPUMode:
         """Determine actual gpu_mode from running services (gpu_none services don't count)."""
         actual_gpu_mode = GPUMode.IDLE
-        gpu_services = [s for s in actual_services if not (self._models.get(s) and self._models[s].is_gpu_none)]
+        gpu_services = [s for s in actual_services
+                        if not ((m := self._models.get(s)) and m.is_gpu_none)]
         if gpu_services:
             for svc_name in gpu_services:
                 m = self._models.get(svc_name)

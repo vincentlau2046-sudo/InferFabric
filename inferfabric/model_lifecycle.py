@@ -143,6 +143,7 @@ class ModelLifecycle:
             self._proc.stop_all(
                 comfyui_cfg=model.comfyui if model.is_comfyui else None,
                 vllm_ports=ports if model.is_vllm else [],
+                sglang_ports=[model.sglang.port] if model.is_sglang else [],
                 comfyui_port=ports[-1] if model.is_comfyui and ports else None,
                 tts_port=tts_port,
                 asr_port=asr_port,
@@ -153,6 +154,8 @@ class ModelLifecycle:
                 "active_services": json.dumps([]),
                 "vllm_pid": "",
                 "comfyui_pid": "",
+                "sglang_pid": "",
+                "sglang_container": "",
                 "tts_pid": "",
                 "asr_pid": "",
             })
@@ -493,8 +496,13 @@ class ModelLifecycle:
         if model.needs_gpu:
             gpu_idle = self._proc._wait_gpu_idle(timeout=20)
             if gpu_idle.get("status") not in ("ok", "force"):
-                log.warning("GPU not freed after stop %s — force kill remaining processes", name)
-                self._proc.force_kill_all()
+                log.warning("GPU not freed after stop %s — force-kill target port only", name)
+                # Targeted cleanup: only this model's port, not force_kill_all
+                port = getattr(model, 'port', None)
+                if port:
+                    self._proc._pkill_by_port(port)
+                else:
+                    self._stop_model_process(model, name)
                 self._proc._wait_gpu_idle(timeout=15)
 
         # Update active services

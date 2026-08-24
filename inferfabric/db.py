@@ -161,6 +161,17 @@ class IFFDB:
                 conn.execute("INSERT OR REPLACE INTO state VALUES (?, ?)", (key, value))
                 conn.commit()
 
+    def set_multi(self, kv: dict[str, str]):
+        """Atomically set multiple state keys in a single transaction."""
+        if not kv:
+            return
+        with self._write_lock:
+            with self.connect(STATE_DB) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                for k, v in kv.items():
+                    conn.execute("INSERT OR REPLACE INTO state VALUES (?, ?)", (k, v))
+                conn.commit()
+
     # ── State: typed API ───────────────────────────────────────
 
     def get_gpu_mode(self) -> str:
