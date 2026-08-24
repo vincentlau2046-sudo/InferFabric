@@ -312,9 +312,10 @@ class ProxyManager:
     def ensure_service(self, target: str) -> bool:
         """Ensure a model is running, auto-switch if needed.
 
-        Lock redesign (v5.x): _switch_lock only covers switch initiation
-        (seconds), NOT health wait (up to 500s). switching_target acts as
-        a distributed lock to prevent concurrent switches during health wait.
+        Uses _switch_lock only for switch initiation (seconds), not health
+        wait (up to 500s).  manager.switch() owns the authoritative
+        switching_target gate; this method only has a same-target fast-path
+        that waits for the already-in-progress switch to complete.
         """
         if target in self.mgr.active_services:
             return True
@@ -322,16 +323,14 @@ class ProxyManager:
             log.info("Auto-switch to %s blocked: manually stopped by user", target)
             return False
 
-        # -- Gate: switching_target prevents concurrent switches --
+        # -- Fast-path: already switching to the same target → wait --
         switching = self.mgr.state.get("switching_target") or ""
-        if switching:
-            if switching == target:
-                log.info("Auto-switch to %s -- already switching, waiting", target)
-                return self._wait_healthy(target)
-            log.warning("Switch to %s blocked -- GPU switching to %s", target, switching)
-            return None  # caller should send 409
+        if switching == target:
+            log.info("Auto-switch to %s -- already switching, waiting", target)
+            return self._wait_healthy(target)
 
         # -- Core: hold _switch_lock only for switch initiation --
+        # (manager.switch() enforces the authoritative switching_target gate)
         if not self._switch_lock.acquire(timeout=0):
             log.warning("Switch already in progress, rejecting")
             return None

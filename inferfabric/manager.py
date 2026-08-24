@@ -88,6 +88,21 @@ class ModelManager:
             self._gpu_state, self._models, self.models_dir,
         )
 
+        # Startup self-check: catch missing cross-layer methods early
+        # (e.g. reload_models, start_ollama — P0 regressions from audit)
+        for method in ("reload_models", "auto_deploy", "switch", "stop_service",
+                       "sleep_model", "wake_model", "reconcile", "force_reset"):
+            if not callable(getattr(self, method, None)):
+                raise RuntimeError(
+                    f"ModelManager missing required method: {method}()"
+                )
+        for method in ("start_ollama", "run_ollama", "start_vllm", "stop_vllm",
+                       "start_sglang", "stop_sglang"):
+            if not callable(getattr(self._proc, method, None)):
+                raise RuntimeError(
+                    f"ProcessManager missing required method: {method}()"
+                )
+
     # ── Properties (thin) ─────────────────────────────────────────
 
     @property
