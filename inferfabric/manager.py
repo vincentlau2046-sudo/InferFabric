@@ -153,6 +153,26 @@ class ModelManager:
                 return m
         return None
 
+    # ── Config Reload ─────────────────────────────────────────────
+
+    def reload_models(self):
+        """Reload models.d/*.yaml and propagate to all dependent sub-modules.
+
+        Thread-safe with respect to concurrent switch(): Python dict assignment
+        is atomic, and the switching_target gate in ensure_service / switch()
+        prevents concurrent reload + deploy races.
+        """
+        self._models = load_models(self.models_dir)
+        self._gpu_state._models = self._models
+        self._lifecycle._models = self._models
+        self.state.set_models_lookup(self.get_model)
+        try:
+            from inferfabric.dashboard import invalidate_cache
+            invalidate_cache()
+        except Exception:
+            pass
+        log.info("Models reloaded: %d from %s", len(self._models), self.models_dir)
+
     # ── Health Check (tri-state) ─────────────────────────────────
 
     def check_vllm_health(self, port: int) -> str:
@@ -457,10 +477,22 @@ class ModelManager:
     def auto_deploy(self, name: str, model_type: str) -> dict:
         """Auto-generate YAML and deploy a discovered model.
 
-        Delegates to model_discovery.auto_deploy() for YAML generation,
-        then reloads config and switches.
+        Delegates YAML generation to model_discovery.auto_deploy(), then
+        reloads self._models so the newly generated config is visible to
+        the subsequent switch() call.
         """
-        return _auto_deploy(name, model_type, self.models_dir, self._models, self.switch)
+        yaml_path = self.models_dir / f"{name}.yaml"
+        if yaml_path.exists():
+            return {"status": "already_configured",
+                    "message": f"YAML already exists for {name}"}
+
+        result = _auto_deploy(name, model_type, self.models_dir,
+                              self._models, self.switch)
+        # _auto_deploy writes YAML + calls switch_fn internally, but
+        # switch_fn uses the stale self._models snapshot → first-time
+        # deploy always fails with "Unknown model".  Reload and retry.
+        self.reload_models()
+        return self.switch(name)
 
     def pull_model(self, name: str, framework: str) -> dict:
         """Pull/download a model before deployment."""

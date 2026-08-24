@@ -7,10 +7,8 @@ deployment flow, shared service add, sleep/wake, independent model management.
 
 import json
 import logging
-import os
 import re
 import signal
-import subprocess
 import time
 from pathlib import Path
 from typing import Optional
@@ -23,7 +21,6 @@ from .config import (
 )
 from .gpu_state import GpuStateMachine
 from .health import (
-    check_http_status,
     gpu_used_mb,
     gpu_total_mb,
 )
@@ -67,45 +64,6 @@ class ModelLifecycle:
             return adapter.start(model)
         except KeyError:
             return {"status": "error", "message": f"Unknown model type: {model.type}"}
-
-    def _start_ollama_model(self, model: ModelConfig) -> dict:
-        """Start a type=ollama model — via the Ollama daemon API.
-
-        Ollama models are served by an external daemon (port 11434), not an
-        independent InferFabric process. This ensures the daemon is running,
-        then triggers `ollama run` to load the model so it's ready for inference.
-        """
-        daemon_healthy = check_http_status("http://localhost:11434/api/tags")
-        if daemon_healthy != "✅":
-            log.info("Ollama daemon not running — auto-starting")
-            try:
-                env = os.environ.copy()
-                # 如果当前模型配置了 num_gpu=0，启动时传入环境变量
-                model_ref = model.ollama.model_ref
-                num_gpu = model.ollama.num_gpu if hasattr(model.ollama, 'num_gpu') else -1
-                if num_gpu >= 0:
-                    env["OLLAMA_NUM_GPU"] = str(num_gpu)
-                subprocess.Popen(
-                    ["ollama", "serve"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                    env=env,
-                )
-            except FileNotFoundError:
-                return {"status": "error", "message": "ollama not found in PATH. Install Ollama first."}
-            # Wait for daemon to become healthy (up to 30s)
-            for _ in range(60):
-                time.sleep(0.5)
-                if check_http_status("http://localhost:11434/api/tags") == "✅":
-                    break
-            else:
-                return {"status": "error", "message": "Ollama daemon failed to start within 30s"}
-
-        model_ref = model.ollama.model_ref
-        keep_alive = model.ollama.keep_alive or "5m"
-        num_gpu = model.ollama.num_gpu if hasattr(model.ollama, 'num_gpu') else -1
-        return self._proc.run_ollama(model_ref, keep_alive, num_gpu)
 
     # ── Deploy ────────────────────────────────────────────────────
 

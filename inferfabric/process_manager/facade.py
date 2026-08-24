@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from inferfabric.config import DEFAULT_LOG_DIR, COMFYUI_DIR
+from inferfabric.health import check_http_status
 from inferfabric.process_manager.base import BaseProcessManager
 from inferfabric.process_manager.vllm import VLLMProcessManager
 from inferfabric.process_manager.sglang import SGLangProcessManager
@@ -176,6 +177,43 @@ class ProcessManager(BaseProcessManager):
 
     def run_ollama(self, model_ref: str, keep_alive: str = "5m", num_gpu: int = -1) -> dict:
         return self._ollama.run_ollama(model_ref, keep_alive, num_gpu)
+
+    def start_ollama(self, model) -> dict:
+        """Start an Ollama model — ensure daemon, then pull/load the model.
+
+        Moved from ModelLifecycle._start_ollama_model so the EngineAdapter can
+        follow the same delegation pattern as every other adapter type.
+        """
+        daemon_healthy = check_http_status("http://localhost:11434/api/tags")
+        if daemon_healthy != "\u2705":
+            log.info("Ollama daemon not running — auto-starting")
+            try:
+                env = os.environ.copy()
+                model_ref = model.ollama.model_ref
+                num_gpu = getattr(model.ollama, "num_gpu", -1)
+                if num_gpu >= 0:
+                    env["OLLAMA_NUM_GPU"] = str(num_gpu)
+                subprocess.Popen(
+                    ["ollama", "serve"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                    env=env,
+                )
+            except FileNotFoundError:
+                return {"status": "error", "message": "ollama not found in PATH. Install Ollama first."}
+            # Wait for daemon to become healthy (up to 30 s)
+            for _ in range(60):
+                time.sleep(0.5)
+                if check_http_status("http://localhost:11434/api/tags") == "\u2705":
+                    break
+            else:
+                return {"status": "error", "message": "Ollama daemon failed to start within 30s"}
+
+        model_ref = model.ollama.model_ref
+        keep_alive = model.ollama.keep_alive or "5m"
+        num_gpu = getattr(model.ollama, "num_gpu", -1)
+        return self.run_ollama(model_ref, keep_alive, num_gpu)
 
     # ─── TTS Server ─────────────────────────────────────────────
 

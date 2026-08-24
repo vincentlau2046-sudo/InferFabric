@@ -33,7 +33,7 @@ class OllamaAdapter(EngineAdapter):
     def start(self, model: ModelConfig) -> dict:
         if self._proc is None:
             raise RuntimeError("ProcessManager not set")
-        return self._proc._start_ollama_model(model)
+        return self._proc.start_ollama(model)
 
     def stop(self, model: ModelConfig) -> dict:
         import logging; log = logging.getLogger("inferfabric.engine_adapter.ollama")

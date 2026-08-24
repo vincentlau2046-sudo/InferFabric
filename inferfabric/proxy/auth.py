@@ -41,8 +41,13 @@ class AuthManager:
         self._primary: _KeyEntry | None = None
         self._guests: list[_KeyEntry] = []
         self._key_map: dict[str, _KeyEntry] = {}
+        self._config_path = config_path
         if config_path:
-            self._load(config_path)
+            primary, guests, key_map = self._load_into(config_path)
+            if primary is not None:
+                self._primary = primary
+                self._guests = guests
+                self._key_map = key_map
 
     @property
     def enabled(self) -> bool:
@@ -76,12 +81,23 @@ class AuthManager:
         entry = self._key_map.get(token)
         return entry.name if entry else "anonymous"
 
-    def reload(self, config_path: Path):
-        """热加载配置（iff reload 触发）。"""
-        self._primary = None
-        self._guests = []
-        self._key_map = {}
-        self._load(config_path)
+    def reload(self, config_path: Path | None = None):
+        """热加载配置（iff reload 触发）。保留旧状态直到加载成功（fail-closed）。"""
+        path = config_path or self._config_path
+        if not path:
+            log.warning("AuthManager.reload() called but no config_path available")
+            return
+
+        # Load into temp before swapping — fail-closed on error
+        primary, guests, key_map = self._load_into(path)
+        if primary is not None:
+            self._primary = primary
+            self._guests = guests
+            self._key_map = key_map
+            log.info("Auth reloaded: primary=%s, guests=%d",
+                     bool(self._primary), len(self._guests))
+        else:
+            log.error("Auth reload FAILED — keeping existing keys")
 
     # ── internal ──
 
@@ -91,29 +107,35 @@ class AuthManager:
             return header[7:].strip()
         return header.strip()
 
-    def _load(self, config_path: Path):
+    @staticmethod
+    def _load_into(config_path: Path) -> tuple[_KeyEntry | None, list[_KeyEntry], dict[str, _KeyEntry]]:
+        """Parse api_keys.yaml and return (primary, guests, key_map).
+
+        Returns (None, [], {}) on any error — caller decides whether to keep
+        the previous state (fail-closed) or go to disabled (initial load).
+        """
         if not config_path.exists():
             log.info("api_keys.yaml not found — auth disabled")
-            return
+            return None, [], {}
         try:
             with open(config_path) as f:
                 cfg = yaml.safe_load(f)
         except Exception as e:
             log.error("Failed to load api_keys.yaml: %s", e)
-            return
+            return None, [], {}
         if not cfg or not isinstance(cfg, dict):
-            log.warning("api_keys.yaml has no valid config (empty or wrong format) — auth DISABLED")
-            return
+            log.warning("api_keys.yaml has no valid config (empty or wrong format)")
+            return None, [], {}
 
         # Primary key
         primary_key = cfg.get("primary")
         if not primary_key or not isinstance(primary_key, str):
-            log.warning("api_keys.yaml missing 'primary' key — auth DISABLED")
-            return
-        self._primary = _KeyEntry(
-            key=primary_key, name="primary", models=None, expires=None,
-        )
-        self._key_map[primary_key] = self._primary
+            log.warning("api_keys.yaml missing 'primary' key")
+            return None, [], {}
+
+        primary = _KeyEntry(key=primary_key, name="primary", models=None, expires=None)
+        key_map: dict[str, _KeyEntry] = {primary_key: primary}
+        guests: list[_KeyEntry] = []
 
         # Guest keys
         for guest in cfg.get("guests") or []:
@@ -124,20 +146,16 @@ class AuthManager:
                 try:
                     expires = datetime.fromisoformat(guest["expires"])
                 except (ValueError, TypeError):
-                    log.warning(
-                        "Invalid expires for guest '%s': %s",
-                        guest.get("name"), guest.get("expires"),
-                    )
+                    log.warning("Invalid expires for guest '%s': %s",
+                                guest.get("name"), guest.get("expires"))
             entry = _KeyEntry(
                 key=guest["key"],
                 name=guest.get("name", "guest"),
                 models=guest.get("models"),
                 expires=expires,
             )
-            self._guests.append(entry)
-            self._key_map[guest["key"]] = entry
+            guests.append(entry)
+            key_map[guest["key"]] = entry
 
-        log.info(
-            "Auth loaded: primary=%s, guests=%d",
-            bool(self._primary), len(self._guests),
-        )
+        log.info("Auth loaded: primary=%s, guests=%d", bool(primary), len(guests))
+        return primary, guests, key_map
