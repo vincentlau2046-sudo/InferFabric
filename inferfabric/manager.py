@@ -243,6 +243,24 @@ class ModelManager:
             else:
                 return {"status": "error", "message": f"Invalid transition: {current_mode} → {target_mode}"}
 
+        # ── GPU Occupancy Guard ─────────────────────────────────────
+        # Prevent DB inconsistency bypass: if DB says idle but GPU
+        # has running gpu_role≠none services (e.g., vLLM survived an
+        # error cleanup), block the switch rather than double-deploying.
+        if current_mode == GPUMode.IDLE and target != "idle":
+            actual = self._gpu_state._scan_actual_services()
+            gpu_services = [s for s in actual
+                            if (m := self._models.get(s)) and not m.is_gpu_none
+                            and s != target]
+            if gpu_services:
+                vram = gpu_used_mb()
+                return {
+                    "status": "error",
+                    "message": f"GPU is occupied ({', '.join(gpu_services)} running, {vram}MB used). "
+                               f"DB state is stale (gpu_mode=idle but GPU busy). "
+                               f"Run 'iff reconcile' or 'iff reset'.",
+                }
+
         # ── Acquire lock, deploy, and record ──────────────────────────
         # Gate: respect switching_target to prevent concurrent switches
         switching = self.state.get("switching_target") or ""
