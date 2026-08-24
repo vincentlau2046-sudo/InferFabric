@@ -363,7 +363,7 @@ class IFFDB:
             if model is not None:
                 sql += " AND model = ?"
                 params.append(model)
-            sql += " ORDER BY timestamp ASC LIMIT ?"
+            sql += " ORDER BY timestamp DESC LIMIT ?"
             params.append(limit)
             rows = conn.execute(sql, params).fetchall()
             return [dict(zip(cols, r)) for r in rows]
