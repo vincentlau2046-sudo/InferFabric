@@ -261,6 +261,12 @@ class GpuStateMachine:
                              if self._models.get(s) and self._models[s].is_gpu_none]
                 self.state.set('active_services', json.dumps(remaining))
 
+        # Clear stale switching_target to unblock future switches
+        switching = self.state.get("switching_target")
+        if switching:
+            actions.append(f"switching_target was '{switching}' — clearing")
+            self.state.set("switching_target", "")
+
         return {
             "db_gpu_mode": db_gpu_mode,
             "actual_gpu_mode": actual_gpu_mode,
@@ -335,6 +341,7 @@ class GpuStateMachine:
             "gpu_mode": GPUMode.IDLE,
             "active_services": json.dumps([]),
             "profile_state": ServiceState.IDLE,
+            "switching_target": "",
             "vllm_pid": "",
             "comfyui_pid": "",
             "tts_pid": "",

@@ -306,6 +306,7 @@ class ModelManager:
             self.state.add_history(",".join(from_services), target, time.time() - t0, "error")
             return {"status": "error", "message": str(e)}
         finally:
+            self.state.set("switching_target", "")
             self._lock.release()
 
     # ── Status ────────────────────────────────────────────────────
