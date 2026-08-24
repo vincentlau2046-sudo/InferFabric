@@ -191,16 +191,28 @@ class IFFDB:
         self._set_raw("active_services", json.dumps(services))
 
     def add_active_service(self, name: str):
-        svc = self.get_active_services()
-        if name not in svc:
-            svc.append(name)
-            self.set_active_services(svc)
+        with self._write_lock:
+            with self.connect(STATE_DB) as conn:
+                svc = self.get_active_services()
+                if name not in svc:
+                    svc.append(name)
+                    conn.execute(
+                        "INSERT OR REPLACE INTO state VALUES (?, ?)",
+                        ("active_services", json.dumps(svc)),
+                    )
+                    conn.commit()
 
     def remove_active_service(self, name: str):
-        svc = self.get_active_services()
-        if name in svc:
-            svc.remove(name)
-            self.set_active_services(svc)
+        with self._write_lock:
+            with self.connect(STATE_DB) as conn:
+                svc = self.get_active_services()
+                if name in svc:
+                    svc.remove(name)
+                    conn.execute(
+                        "INSERT OR REPLACE INTO state VALUES (?, ?)",
+                        ("active_services", json.dumps(svc)),
+                    )
+                    conn.commit()
 
     # ── State: sleep state (v5.2: table-backed) ───────────────
 

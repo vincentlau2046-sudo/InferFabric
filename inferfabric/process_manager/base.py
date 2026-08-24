@@ -54,6 +54,14 @@ class BaseProcessManager:
                     ["pkill", "-" + str(sig), "-f", f"VLLM::EngineCore.*--port {port}"],
                     timeout=5, check=False, capture_output=True
                 )
+                subprocess.run(
+                    ["pkill", "-" + str(sig), "-f", f"sglang.*:{port}"],
+                    timeout=5, check=False, capture_output=True
+                )
+                subprocess.run(
+                    ["pkill", "-" + str(sig), "-f", f"python.*main.py.*{port}"],
+                    timeout=5, check=False, capture_output=True
+                )
                 time.sleep(1)
                 break
             except subprocess.TimeoutExpired:

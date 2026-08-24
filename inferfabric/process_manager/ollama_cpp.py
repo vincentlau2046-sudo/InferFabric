@@ -140,12 +140,12 @@ class OllamaCppProcessManager(BaseProcessManager):
         cmd = ["ollama", "run", model_ref, "--keepalive", keep_alive]
         try:
             result = subprocess.run(
-                cmd, input="\n", capture_output=True, text=True, timeout=60, env=env
+                cmd, input="\n", capture_output=True, text=True, timeout=300, env=env
             )
         except FileNotFoundError:
             return {"status": "error", "message": "ollama CLI not found in PATH"}
         except subprocess.TimeoutExpired:
-            return {"status": "error", "message": f"ollama run timed out after 60s for {model_ref}"}
+            return {"status": "error", "message": f"ollama run timed out after 300s for {model_ref}"}
         if result.returncode == 0:
             return {"status": "ok", "message": f"Loaded {model_ref} into Ollama daemon"}
         return {

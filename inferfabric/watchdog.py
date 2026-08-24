@@ -130,6 +130,11 @@ class ModelWatchdog:
                 if not hasattr(self, "_restart_started"):
                     self._restart_started = {}
                 self._restart_started[name] = time.time()
+            # Skip if a user-triggered switch is already in progress
+            switching = self._manager.state.get("switching_target") or ""
+            if switching and switching != name:
+                log.info("Watchdog: %s restart skipped — %s is switching", name, switching)
+                return
             log.info("Watchdog: reconciling before restart of %s", name)
             self._manager.reconcile()  # Clean up dead service entries
             if name not in self._manager.active_services:

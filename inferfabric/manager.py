@@ -384,6 +384,7 @@ class ModelManager:
             "services_health": services_status,
             "services_info": services_info,
             "sleep_states": sleep_states,
+            "switch_target": self.state.get("switching_target") or None,
             "gpu_used_mb": gpu_used_mb(),
             "gpu_total_mb": gpu_total_mb(),
             "gpu_util_pct": gpu_used_mb() / gpu_total_mb() * 100 if gpu_total_mb() > 0 else 0.0,

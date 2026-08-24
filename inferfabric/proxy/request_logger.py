@@ -72,6 +72,7 @@ class RequestLogger:
         self._batch_size = batch_size
         self._flush_interval = flush_interval
         self._flush_event = threading.Event()
+        self._stop_event = threading.Event()
         self._flush_thread: threading.Thread | None = None
         self._retention_days = retention_days
         self._retention_seconds = retention_days * 86400
@@ -147,12 +148,13 @@ class RequestLogger:
     def close(self):
         """关闭所有资源：flush 线程、DB、JSONL 文件句柄。"""
         if self._flush_thread:
-            self._enabled = False
+            self._stop_event.set()
             self._flush_event.set()
             self._flush_thread.join(timeout=10)
             if self._flush_thread.is_alive():
                 log.error("Flush thread did not terminate in 10s, "
                           "in-memory buffer may be lost")
+        self._enabled = False
         self._do_flush()  # Final flush — flush thread 已退出，安全
         if self._db:
             try:
@@ -172,12 +174,10 @@ class RequestLogger:
 
     def _flush_loop(self):
         """后台 flush 线程。每 flush_interval 秒或收到 event 时 flush。"""
-        while True:
+        while not self._stop_event.is_set():
             self._flush_event.wait(timeout=self._flush_interval)
             self._flush_event.clear()
             self._do_flush()
-            if not self._enabled:
-                break
             # Lost-wakeup guard: flush 后 buffer 又满了则立即再 flush
             with self._buf_lock:
                 if len(self._buffer) >= self._batch_size:

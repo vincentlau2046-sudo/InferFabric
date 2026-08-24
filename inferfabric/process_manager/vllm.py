@@ -154,13 +154,6 @@ class VLLMProcessManager(BaseProcessManager):
         provides defence-in-depth: if the tracked PID drifts (e.g. stopped via
         external signal), port matching catches the leftover process.
         """
-        pid = self.vllm_pid
-        """Stop vLLM using process group kill. SIGTERM → wait → SIGKILL entire group.
-
-        When ``port`` is supplied, also does port-based cleanup after the tracked
-        PID path completes (or immediately if the tracked PID is dead).  This
-        catches orphaned processes that were not spawned by iff.
-        """
         pgid = self.vllm_pid
         if pgid is None and port is None:
             log.warning("No vLLM PID tracked and no port given — falling back to pkill")
@@ -261,8 +254,8 @@ class VLLMProcessManager(BaseProcessManager):
         # Step 2: Port-based cleanup via fuser (last resort)
         vllm_ports = []
         try:
-            from inferfabric.config import load_models
-            for m in load_models().values():
+            from inferfabric.config import load_models, MODELS_DIR
+            for m in load_models(MODELS_DIR).values():
                 if m.vllm:
                     vllm_ports.append(m.vllm.port)
         except Exception:

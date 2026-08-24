@@ -1,5 +1,8 @@
 """prometheus.py — Prometheus /metrics text parser (engine-agnostic)."""
 import math
+import time
+import urllib.request
+from urllib.parse import urlparse, parse_qs
 
 def parse_prometheus_text(text: str):
     """Parse Prometheus /metrics text into gauges, counters, histograms."""
@@ -173,7 +176,7 @@ class VllmMetricsCollector:
                 result["throughput"] = round(prev_ema, 1)
                 result["throughput_cum_n"] = int(gen_counter)
 
-        cls.gen_counters[port] = (cur_ts, gen_counter)
+        cls.gen_counters[port] = (cur_ts, gen_counter) if gen_counter is not None else prev_state
         return result
 
 

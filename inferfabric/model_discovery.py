@@ -8,6 +8,7 @@ All functions are self-contained (no state mutation beyond file I/O),
 making them trivially testable.
 """
 
+import re
 import subprocess
 import logging
 from pathlib import Path
@@ -98,11 +99,12 @@ def discover_local_models(models_dir: Path) -> dict:
                 if len(parts) >= 2 and parts[0] not in ("NAME", ""):
                     model_ref = parts[0]  # e.g. "llama3.2:1b"
                     size_mb = 0
-                    for si in range(2, len(parts)):
-                        if parts[si].upper() in ("GB", "G", "MB", "M", "KB", "K"):
+                    for token in parts[1:]:  # skip model name
+                        m = re.match(r'^([\d.]+)(GB|MB|KB|G|M|K)$', token, re.IGNORECASE)
+                        if m:
                             try:
-                                val = float(parts[si - 1])
-                                unit = parts[si].upper()
+                                val = float(m.group(1))
+                                unit = m.group(2).upper()
                                 if unit.startswith("G"):
                                     size_mb = int(val * 1024)
                                 elif unit.startswith("M"):

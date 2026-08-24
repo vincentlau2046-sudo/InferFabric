@@ -222,11 +222,18 @@ class AggregatorThread(threading.Thread):
         super().__init__(daemon=True)
         self._agg = aggregator
         self._q = queue
+        self._stop = threading.Event()
+
+    def stop(self):
+        """Signal the thread to exit gracefully."""
+        self._stop.set()
 
     def run(self):
-        while True:
+        while not self._stop.is_set():
             try:
-                entry = self._q.get()
+                entry = self._q.get(timeout=1)
                 self._agg.record(entry)
+            except _queue.Empty:
+                continue
             except Exception:
                 log.warning("aggregator record failed", exc_info=True)

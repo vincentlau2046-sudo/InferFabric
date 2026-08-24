@@ -127,7 +127,7 @@ class TokenStatsCollector:
     # --- 聚合 ---
 
     def _today_key(self) -> str:
-        return datetime.now(tz=timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        return datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
 
     def _aggregate(self, model_name: str, delta: dict):
         with self._lock:
@@ -165,7 +165,7 @@ class TokenStatsCollector:
 
     def _cleanup(self):
         """Remove entries older than 30 days."""
-        cutoff = datetime.now(tz=timezone(timedelta(hours=8))) - timedelta(days=30)
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(days=30)
         cutoff_str = cutoff.strftime("%Y-%m-%d")
         with self._lock:
             expired = [d for d in self._state if d < cutoff_str]
@@ -222,7 +222,7 @@ class TokenStatsCollector:
         Returns: [{model, total_tokens, requests}]
         """
         self._load_from_file()  # ensure fresh
-        now = datetime.now(tz=timezone(timedelta(hours=8)))
+        now = datetime.now(tz=timezone.utc)
 
         if window == "daily":
             since = now - timedelta(hours=24)

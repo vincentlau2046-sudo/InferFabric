@@ -181,7 +181,7 @@ class VllmMetricsCollector:
                 result["throughput"] = round(prev_ema, 1)
                 result["throughput_cum_n"] = int(gen_counter)
 
-        cls.gen_counters[port] = (cur_ts, gen_counter)
+        cls.gen_counters[port] = (cur_ts, gen_counter) if gen_counter is not None else prev_state
         return result
 
 

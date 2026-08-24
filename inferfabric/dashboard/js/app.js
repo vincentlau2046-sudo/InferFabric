@@ -8,9 +8,8 @@ function swLock() {
     const key = 'inferfabric_sw_lock';
     const swT=Date.now();
     const stored = localStorage.getItem(key);
-    if (stored && (swT - parseInt(stored, 10)) < 30000) return false;
+    if (stored && (swT - parseInt(stored, 10)) < 10000) return false;
     localStorage.setItem(key, String(swT));
-    sw=true;
     return true;
   } catch(e) { return true; } // localStorage unavailable → allow
 }
@@ -997,6 +996,4 @@ function updateChatModelSelect() {
 }
 
 // Auto-update model dropdown
-if (window.store) {
-}
 setTimeout(updateChatModelSelect, 1000);

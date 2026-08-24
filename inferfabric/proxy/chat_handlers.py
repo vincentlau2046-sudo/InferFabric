@@ -271,7 +271,7 @@ def handle_chat(handler, pm, data):
         )
         return
     try:
-        for attempt in range(2):
+        for attempt in range(3):
             if _forward_request(handler, pm, target_port, body, stream):
                 # PR-B: Log successful request with TTFT + usage
                 ttft = getattr(handler, '_ttft_ms', None)
@@ -284,8 +284,8 @@ def handle_chat(handler, pm, data):
                     duration_ms=(time.monotonic()-handler._req_start)*1000,
                 ))
                 return
-            if attempt == 0:
-                time.sleep(0.5)
+            if attempt < 2:
+                time.sleep(0.5 * (2 ** attempt))  # 0.5s, 1s, 2s
         pm.logger.log(RequestLog(
             req_id=req_id, key_name=key_name, model=model,
             status=502, error="upstream_unavailable", route="local",
