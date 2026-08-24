@@ -84,8 +84,10 @@ class SSELineBuffer:
             # 提取 usage（last wins）
             usage = obj.get("usage")
             if usage and isinstance(usage, dict):
-                pt = usage.get("prompt_tokens") or 0
-                ct = usage.get("completion_tokens") or 0
+                # key 归一化：OpenAI 命名 (prompt/completion_tokens) 优先，
+                # 缺失时回退 Anthropic/百度命名 (input/output_tokens)
+                pt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+                ct = usage.get("completion_tokens") or usage.get("output_tokens") or 0
                 if pt > 0 or ct > 0:
                     self.usage["prompt_tokens"] = pt
                     self.usage["completion_tokens"] = ct

@@ -146,7 +146,11 @@ class RequestLogger:
                 log.warning("Failed to write request log: %s", e)
 
     def close(self):
-        """关闭所有资源：flush 线程、DB、JSONL 文件句柄。"""
+        """关闭所有资源：flush 线程、DB、JSONL 文件句柄。
+
+        无 flush 线程（db=None）时不关 _enabled，使 close() 后的 log() 可重新打开
+        JSONL（恢复 P2 前行为）；有 flush 线程时 close() 后永久禁用。
+        """
         if self._flush_thread:
             self._stop_event.set()
             self._flush_event.set()
@@ -154,7 +158,7 @@ class RequestLogger:
             if self._flush_thread.is_alive():
                 log.error("Flush thread did not terminate in 10s, "
                           "in-memory buffer may be lost")
-        self._enabled = False
+            self._enabled = False
         self._do_flush()  # Final flush — flush thread 已退出，安全
         if self._db:
             try:

@@ -19,6 +19,7 @@ from inferfabric.config import (
     exponential_backoff,
     should_retry_on_status,
 )
+from inferfabric.proxy.sse_buffer import SSELineBuffer
 
 
 @dataclass
@@ -82,8 +83,13 @@ def read_body(handler):
 # ── Stream forwarding ──
 
 
-def pipe_stream_response(handler, resp):
-    """Pipe SSE stream response to client (CCR-style streaming)."""
+def pipe_stream_response(handler, resp, sse_buf=None):
+    """Pipe SSE stream response to client (CCR-style streaming).
+
+    sse_buf (optional): SSELineBuffer 旁路观察器 — 每个 chunk 写入客户端后
+    喂入 buffer 提取 usage；finally 里 flush。不传 sse_buf 时行为与原来完全一致
+    （本地 Anthropic 路径不受影响）。
+    """
     handler.send_response(resp.status)
     for h in ("content-type", "cache-control", "x-request-id"):
         val = resp.getheader(h)
@@ -102,10 +108,15 @@ def pipe_stream_response(handler, resp):
             try:
                 handler.wfile.write(chunk)
                 handler.wfile.flush()
+                # G-1b: 旁路观察 — 零延迟透传不变，喂入 buffer 提取 usage
+                if sse_buf is not None:
+                    sse_buf.feed(chunk)
             except (BrokenPipeError, ConnectionResetError):
                 log.info("Client disconnected during stream forwarding")
                 break
     finally:
+        if sse_buf is not None:
+            sse_buf.flush()
         resp.close()
 
 
@@ -185,10 +196,13 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
         first_byte_time = time.monotonic()
 
         if was_stream:
-            # Usage tracking for streaming deferred to G-1b
-            pipe_stream_response(handler, resp)
+            # G-1b: 流式 usage 提取 — 旁路观察 SSE 事件，复用 first_byte_time 记 TTFT
+            sse_buf = SSELineBuffer()
+            pipe_stream_response(handler, resp, sse_buf)
             return CloudResult(
                 status=200,
+                usage=dict(sse_buf.usage),
+                ttft_ms=(first_byte_time - start) * 1000,
                 duration_ms=(time.monotonic() - start) * 1000,
             )
         else:
