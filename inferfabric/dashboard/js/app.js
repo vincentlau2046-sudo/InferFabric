@@ -283,11 +283,16 @@ if (window.store) {
 async function j(p,o) { return (await fetch(p,o)).json(); }
 
 async function load() {
-  // P0: Removed DOM element assignments now handled by state.js + bindings.js.
-  // Retained: history table, active services card, vLLM metrics detection.
-  const s=await j('/status').catch(()=>({}));
-  const sys=await j('/system').catch(()=>({}));
-  const hist=await j('/history').catch(()=>[]);
+  // v5.x: render from the /api/snapshot store (single source of truth).
+  let s = store.get('status');
+  if (!s) {
+    const snap = await store.forceRefresh();
+    s = (snap && snap.status) || {};
+  }
+  let hist = store.get('history');
+  if (!hist) {
+    hist = await j('/history').catch(() => []);
+  }
 
   // History table (switch log) — unique to this view, not in status API
   const hBody=document.getElementById('hBody');
@@ -417,7 +422,14 @@ async function loadVllmMetrics(port,modelName) {
 }
 
 async function loadModels() {
-  const [models, st] = await Promise.all([j('/models'), j('/status')]);
+  // v5.x: use the snapshot store; force a fresh snapshot if absent.
+  let models = store.get('models');
+  let st = store.get('status');
+  if (!models || !st) {
+    const snap = await store.forceRefresh();
+    models = (snap && snap.models) || [];
+    st = (snap && snap.status) || {};
+  }
   const excl=models.filter(m=>m.mode==='exclusive');
   const shrd=models.filter(m=>m.mode==='shared');
   const free=models.filter(m=>m.mode==='none');
@@ -477,6 +489,10 @@ async function loadModels() {
         '</div>';
 }
 
+  const setCt = function(id, n) { var el = document.getElementById(id); if (el) el.textContent = String(n); };
+  setCt('exclCount', excl.length);
+  setCt('shrdCount', shrd.length);
+  setCt('freeCount', free.length);
   document.getElementById('exclList').innerHTML=excl.map(m=>renderCard(m,'excl')).join('');
   document.getElementById('shrdList').innerHTML=shrd.map(m=>renderCard(m,'shrd')).join('');
   document.getElementById('freeList').innerHTML=free.length>0?free.map(m=>renderCard(m,'free')).join(''):'<div class="fill">⚡ 无模型</div>';
@@ -507,7 +523,7 @@ async function doRelease(n,isExcl) {
     }
   }catch(e){toast(e.message,'err');}
   finally{swUnlock();}
-  await Promise.all([load(),loadModels(),loadLocalModels()]);
+  await store.forceRefresh();
 }
 
 async function doSleep(n) {
@@ -519,7 +535,7 @@ async function doSleep(n) {
     else toast(r.message||'失败','err');
   }catch(e){toast(e.message,'err');}
   finally{swUnlock();}
-  await Promise.all([load(),loadModels(),loadLocalModels()]);
+  await store.forceRefresh();
 }
 
 async function doWake(n) {
@@ -531,7 +547,7 @@ async function doWake(n) {
     else toast(r.message||'失败','err');
   }catch(e){toast(e.message,'err');}
   finally{swUnlock();}
-  await Promise.all([load(),loadModels(),loadLocalModels()]);
+  await store.forceRefresh();
 }
 
 async function doSwitch(n) {
@@ -544,7 +560,7 @@ async function doSwitch(n) {
     else toast(r.message||'失败','err');
   }catch(e){toast(e.message,'err');}
   finally{swUnlock();}
-  await Promise.all([load(),loadModels(),loadLocalModels()]);
+  await store.forceRefresh();
 }
 
 async function doStop(n) {
@@ -556,12 +572,19 @@ async function doStop(n) {
     else toast(r.message||'停止失败','err');
   }catch(e){toast(e.message,'err');}
   finally{swUnlock();}
-  await Promise.all([load(),loadModels(),loadLocalModels()]);
+  await store.forceRefresh();
 }
 
 async function loadLocalModels() {
   try {
-    const [d, st] = await Promise.all([j('/local-models'), j('/status')]);
+    // v5.x: local-models + status from the snapshot store
+    let d = store.get('local_models');
+    let st = store.get('status');
+    if (!d || !st) {
+      const snap = await store.forceRefresh();
+      d = (snap && snap.local_models) || { discovered: [], configured: [] };
+      st = (snap && snap.status) || {};
+    }
     const list = d.discovered || [];
     const el = document.getElementById('localModels');
     const listEl = document.getElementById('localModelsList');
@@ -661,7 +684,7 @@ async function doDeploy(name, framework) {
     }
   } catch(e) { toast(e.message, 'err'); }
   finally { swUnlock(); }
-  await Promise.all([load(), loadModels(), loadLocalModels()]);
+  await store.forceRefresh();
 }
 
 async function doPullAndDeploy(name, framework) {
@@ -684,28 +707,28 @@ async function doPullAndDeploy(name, framework) {
     }
   } catch(e) { toast(e.message, 'err'); }
   finally { swUnlock(); }
-  await Promise.all([load(), loadModels(), loadLocalModels()]);
+  await store.forceRefresh();
 }
 
 async function doReset() {
   if(!confirm('强制重置到 idle？'))return;
   const r=await j('/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   toast(r.status==='reset'?'已重置 ✓':'失败',r.status==='reset'?'ok':'err');
-  await Promise.all([load(),loadModels(),loadLocalModels()]);
+  await store.forceRefresh();
 }
 
 async function doReconcile() {
   const r=await j('/reconcile',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   const a=r.actions||[];
   toast(a.length===0?'状态一致 ✓':'修复: '+a.join('; '),'ok');
-  await Promise.all([load(),loadModels(),loadLocalModels()]);
+  await store.forceRefresh();
 }
 
 async function doReloadConfig() {
   const r=await j('/reload-config',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   if(r.status==='reloaded') {
     toast('配置已重载 ✓','ok');
-    await Promise.all([load(),loadModels(),loadLocalModels()]);
+    await store.forceRefresh();
   } else {
     toast(r.message||'重载失败','err');
   }
@@ -743,7 +766,7 @@ async function submitVllmDeploy(event) {
     }
   } catch(e) { toast(e.message, 'err'); }
   finally { swUnlock(); }
-  await Promise.all([load(), loadModels(), loadLocalModels()]);
+  await store.forceRefresh();
   return false;
 }
 
@@ -767,19 +790,18 @@ async function submitOllamaDeploy(event) {
     }
   } catch(e) { toast(e.message, 'err'); }
   finally { swUnlock(); }
-  await Promise.all([load(), loadModels(), loadLocalModels()]);
+  await store.forceRefresh();
   return false;
 }
 
 // ── Usage Chart (P1) ──
 let usageWindow='weekly';
 async function loadUsage() {
-  let stats;
-  try {
-    const r = await fetch('/api/token-stats');
-    stats = await r.json();
-  } catch(e) {
-    stats = window.__TOKEN_STATS__ || {};
+  // v5.x: token stats come from the /api/snapshot store (no extra fetch)
+  let stats = store.get('token_stats');
+  if (!stats) {
+    const snap = await store.forceRefresh();
+    stats = (snap && snap.token_stats) || window.__TOKEN_STATS__ || {};
   }
   const body = document.getElementById('usageBody');
   const tot = document.getElementById('usageTotal');
@@ -857,13 +879,35 @@ function init() {
   loadUsage();
   cloudLoadPresets();
   cloudLoadProviders();
-  // Periodic refresh
-  setInterval(load, 5000);
-  setInterval(loadUsage, 30000);
+  // v5.x: The 3s /api/snapshot poller is the only periodic refresh —
+  // the old 5s load() / 30s loadUsage() intervals are gone. This
+  // eliminates the parallel-fetch race that caused the "state gap".
 }
 
 // Init
 window.addEventListener('DOMContentLoaded', init);
+
+// ── v5.x: Panel auto-refresh on control-plane change ──
+function refreshPanels() {
+  load();
+  loadModels();
+  loadLocalModels();
+  loadUsage();
+}
+window.refreshPanels = refreshPanels;
+
+// The 3s /api/snapshot poller emits sync_meta; when the control plane
+// changed, re-render model panels so the UI tracks live state.
+store.on('sync_meta', function(meta) {
+  if (meta && meta.changed) refreshPanels();
+});
+
+// Top-bar manual refresh button (forces a fresh snapshot, bypassing 304)
+async function refreshNow() {
+  await store.forceRefresh();
+  window.showToast('已刷新 ✓', 'ok');
+}
+window.refreshNow = refreshNow;
 
 /* ── S3: Chat 推理 ── */
 let _chatHistory = [];
@@ -949,7 +993,7 @@ function updateChatModelSelect() {
   
   // Fetch all models, filter chat-capable types
   var chatTypes = ['llm', 'vl', 'omni'];
-  fetch('/models').then(function(r) { return r.json(); }).then(function(models) {
+  function renderSelect(models) {
     if (!Array.isArray(models)) return;
     sel.innerHTML = '';
     var hasAny = false;
@@ -988,11 +1032,16 @@ function updateChatModelSelect() {
     if (!hasAny) {
       sel.innerHTML = '<option value="">— 无可用模型 —</option>';
     }
-  }).then(function() {
     if (currentVal) { sel.value = currentVal; }
-  }).catch(function() {
-    sel.innerHTML = '<option value="">— 加载失败 —</option>';
-  });
+  }
+  var storeModels = store.get('models');
+  if (storeModels && storeModels.length > 0) {
+    renderSelect(storeModels);
+  } else {
+    fetch('/models').then(function(r) { return r.json(); }).then(renderSelect).catch(function() {
+      sel.innerHTML = '<option value="">— 加载失败 —</option>';
+    });
+  }
 }
 
 // Auto-update model dropdown

@@ -78,6 +78,9 @@
         <span id="sTag" class="mac-tag tag idle"><span class="dot"></span><span id="sTxt">idle</span></span>
         <span class="mac-ver" id="navVer"></span>
         <span class="mac-divider"></span>
+        <span class="mac-sync-meta" id="syncMeta" title="最近同步时间 + rev"></span>
+        <button class="mac-refresh-btn" id="refreshNow" onclick="refreshNow()" title="立即刷新">🔄</button>
+        <span class="mac-divider"></span>
         <span class="mac-clock" id="ts">—</span>
         <button class="mac-theme-btn" id="themeToggle" onclick="toggleTheme()">☀️</button>
         <a class="mac-api-btn" href="/api/openapi.json" target="_blank" title="OpenAPI 规范">📖</a>
@@ -122,8 +125,8 @@
       </nav>
 
       <div class="sidebar-footer">
-        <span class="sidebar-status-dot excl"></span>
-        <span class="sidebar-status-txt">运行中</span>
+        <span class="sidebar-status-dot" id="sidebarStatusDot"></span>
+        <span class="sidebar-status-txt" id="sidebarSyncTxt">运行中</span>
       </div>
     </aside>
 

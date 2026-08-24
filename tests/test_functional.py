@@ -244,6 +244,26 @@ def run_all():
     return failed == 0
 
 
+
+def test_snapshot_endpoint():
+    """GET /api/snapshot returns a consistent control-plane snapshot with etag;
+    If-None-Match with the returned etag yields 304."""
+    data, status = _get("/api/snapshot")
+    assert status == 200, f"Expected 200, got {status}"
+    for key in ("ts", "rev", "etag", "status", "system", "models", "history",
+                 "token_stats", "request_log", "metrics_24h", "local_models"):
+        assert key in data, f"Missing key '{key}'"
+    assert data["etag"], "etag must be present"
+    # Conditional request -> 304
+    import urllib.request, urllib.error
+    req = urllib.request.Request(f"{PROXY_URL}/api/snapshot", headers={"If-None-Match": data["etag"]})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            pass
+    except urllib.error.HTTPError as e:
+        assert e.code == 304, f"Expected 304, got {e.code}"
+    print(f"\U0001f7e2 /api/snapshot: 200 with etag; If-None-Match -> 304 (no state gap)")
+
 if __name__ == "__main__":
     success = run_all()
     sys.exit(0 if success else 1)
@@ -712,6 +732,26 @@ class TestStopServiceGPUVerify(unittest.TestCase):
             mgr._proc.force_kill_all()
             mgr._proc.force_kill_all.assert_called()
 
+
+
+def test_snapshot_endpoint():
+    """GET /api/snapshot returns a consistent control-plane snapshot with etag;
+    If-None-Match with the returned etag yields 304."""
+    data, status = _get("/api/snapshot")
+    assert status == 200, f"Expected 200, got {status}"
+    for key in ("ts", "rev", "etag", "status", "system", "models", "history",
+                 "token_stats", "request_log", "metrics_24h", "local_models"):
+        assert key in data, f"Missing key '{key}'"
+    assert data["etag"], "etag must be present"
+    # Conditional request -> 304
+    import urllib.request, urllib.error
+    req = urllib.request.Request(f"{PROXY_URL}/api/snapshot", headers={"If-None-Match": data["etag"]})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            pass
+    except urllib.error.HTTPError as e:
+        assert e.code == 304, f"Expected 304, got {e.code}"
+    print(f"\U0001f7e2 /api/snapshot: 200 with etag; If-None-Match -> 304 (no state gap)")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
