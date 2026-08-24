@@ -11,7 +11,7 @@ vllm:
   served_name: gemma4-31b-vl
   port: 8005
   conda_env: gemma-4-31b
-  gpu_memory_utilization: 0.92
+  gpu_memory_utilization: 0.93
   max_model_len: 262144
   max_num_seqs: 4
   kv_cache_dtype: fp8
