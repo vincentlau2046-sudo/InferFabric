@@ -706,3 +706,97 @@ UnauthorizedResponse:
     status:
       type: string
       enum: [unauthorized]
+
+# ── Snapshot / Token Stats ────────────────────────────────────
+
+TokenStatsResponse:
+  type: object
+  description: |
+    Token usage state: top-level keys are dates (YYYY-MM-DD),
+    values map model → { prompt_tokens, generation_tokens, requests }.
+  additionalProperties:
+    type: object
+    additionalProperties:
+      type: object
+      properties:
+        prompt_tokens:
+          type: integer
+        generation_tokens:
+          type: integer
+        requests:
+          type: integer
+
+SnapshotRequestLogEntry:
+  type: object
+  properties:
+    timestamp:
+      type: number
+    model:
+      type: string
+    status:
+      type: integer
+    tokens_in:
+      type: integer
+    tokens_out:
+      type: integer
+    ttft_ms:
+      type: number
+      nullable: true
+    duration_ms:
+      type: number
+      nullable: true
+    route:
+      type: string
+    key_name:
+      type: string
+    error:
+      type: string
+
+SnapshotResponse:
+  type: object
+  description: |
+    A single consistent snapshot of the control plane and monitoring data.
+    The dashboard uses this as its single polling source; the `etag` and
+    `rev` fields enable If-None-Match change detection (304 on no change).
+  required: [ts, rev, etag, status, system, models]
+  properties:
+    ts:
+      type: number
+      description: Server timestamp of the snapshot (epoch seconds)
+    rev:
+      type: string
+      description: Short control-plane revision (first 8 chars of etag)
+    etag:
+      type: string
+      description: Content hash of the control plane (status + models)
+    status:
+      $ref: '#/StatusResponse'
+    system:
+      $ref: '#/SystemInfoResponse'
+    models:
+      type: array
+      items:
+        $ref: '#/ModelListEntry'
+    history:
+      type: array
+      items:
+        type: object
+    token_stats:
+      type: object
+      additionalProperties: true
+    request_log:
+      type: array
+      items:
+        $ref: '#/SnapshotRequestLogEntry'
+    metrics_24h:
+      type: object
+      description: Aggregated metrics for the last 24h (same shape as /api/metrics)
+    local_models:
+      type: object
+      properties:
+        discovered:
+          type: array
+        configured:
+          type: array
+          items:
+            type: string

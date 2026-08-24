@@ -829,6 +829,67 @@ paths:
         "500":
           $ref: '#/components/responses/ServerError'
 
+  /api/token-stats:
+    get:
+      tags: [Monitoring]
+      summary: Token usage statistics
+      description: Returns the full token-stats state (date -> model -> usage) that the dashboard injects into the HTML shell.
+      operationId: getTokenStats
+      responses:
+        "200":
+          description: Token stats (date -> model -> usage)
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/TokenStatsResponse
+        "500":
+          $ref: '#/components/responses/ServerError'
+  /api/snapshot:
+    get:
+      tags: [Monitoring]
+      summary: Consistent control-plane snapshot
+      description: |
+        Single consistent snapshot consolidating /status, /system, /models,
+        /history, token stats, recent request log, and 24h metrics into one
+        response. The dashboard polls this single endpoint (3s interval),
+        eliminating the cross-panel state gap caused by polling several
+        endpoints independently.
+        **Change detection / conditional requests:** the response carries
+        `etag` (content hash of the control plane) and `rev` (short revision
+        string). Clients may send the previous `etag` via `If-None-Match`;
+        the server replies `304 Not Modified` when the control plane is
+        unchanged, so the UI can keep its last-known state without re-render.
+      operationId: getSnapshot
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          description: ETag of the previously received snapshot (enables 304)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Full snapshot
+          headers:
+            ETag:
+              description: Content hash of the control plane (status + models)
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: ./components/schemas.yaml#/SnapshotResponse
+        "304":
+          description: Not modified - control plane unchanged, client keeps last state
+          headers:
+            ETag:
+              schema:
+                type: string
+        "500":
+          $ref: '#/components/responses/ServerError'
   /vllm_metrics:
     get:
       tags: [Monitoring]
