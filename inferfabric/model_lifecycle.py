@@ -7,8 +7,6 @@ deployment flow, shared service add, sleep/wake, independent model management.
 
 import json
 import logging
-import re
-import signal
 import time
 from pathlib import Path
 from typing import Optional
