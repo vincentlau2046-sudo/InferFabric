@@ -70,6 +70,8 @@ class VLLMConfig:
     gpu_memory_utilization: float
     max_num_seqs: int = 4
     kv_cache_dtype: str = "auto"
+    kv_offloading_size: Optional[float] = None
+    kv_offloading_backend: str = "native"
     speculative_config: Optional[str] = None
     extra_flags: str = ""
     sleep_mode: Optional[SleepModeConfig] = None
@@ -89,6 +91,11 @@ class VLLMConfig:
             "--port", str(self.port),
             "--host", "0.0.0.0",
         ]
+        if self.kv_offloading_size is not None:
+            flags.extend([
+                "--kv-offloading-size", str(self.kv_offloading_size),
+                "--kv-offloading-backend", self.kv_offloading_backend,
+            ])
         if self.speculative_config:
             flags.extend(["--speculative-config", self.speculative_config])
         if self.extra_flags:

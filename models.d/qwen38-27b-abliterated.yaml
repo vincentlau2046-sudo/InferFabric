@@ -10,10 +10,12 @@ vllm:
   served_name: qwen38-27b-abliterated
   port: 8002
   conda_env: Qwen3.8-27B-VL
-  max_model_len: 204800
+  max_model_len: 262144
   gpu_memory_utilization: 0.92
   max_num_seqs: 4
   kv_cache_dtype: fp8
+  kv_offloading_size: 16
+  kv_offloading_backend: native
   extra_flags: >-
     --max-num-batched-tokens 4096
     --enable-prefix-caching
@@ -29,4 +31,3 @@ vllm:
   extra_env:
     FLASHINFER_DISABLE_VERSION_CHECK: "1"
     VLLM_USE_DEEP_GEMM: "0"
-    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
