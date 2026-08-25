@@ -3,7 +3,7 @@ description: "Qwen3.8-27B Abliterated NVFP4 — 去审查版本（基于 Huihui-
 gpu_role: exclusive
 model_type: vl
 quantization: NVFP4
-peak_vram_mb: 29400
+peak_vram_mb: 30300
 
 vllm:
   model_dir: Huihui-Qwen3.8-27B-abliterated-NVFP4
@@ -11,7 +11,8 @@ vllm:
   port: 8002
   conda_env: Qwen3.8-27B-VL
   max_model_len: 262144
-  gpu_memory_utilization: 0.92
+  gpu_memory_utilization: 0.93
+  speculative_config: '{"method": "mtp", "num_speculative_tokens": 3}'
   max_num_seqs: 4
   kv_cache_dtype: fp8
   kv_offloading_size: 16
