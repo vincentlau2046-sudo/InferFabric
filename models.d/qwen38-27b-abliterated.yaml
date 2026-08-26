@@ -15,10 +15,9 @@ vllm:
   speculative_config: '{"method": "mtp", "num_speculative_tokens": 1}'
   max_num_seqs: 4
   kv_cache_dtype: fp8
-  kv_offloading_size: 16
-  kv_offloading_backend: native
   extra_flags: >-
     --max-num-batched-tokens 4096
+    --enable-prefix-caching
     --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4]}'
     --enable-chunked-prefill
     --async-scheduling
