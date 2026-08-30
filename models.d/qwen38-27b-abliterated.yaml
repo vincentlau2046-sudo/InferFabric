@@ -11,22 +11,22 @@ vllm:
   port: 8002
   conda_env: Qwen3.8-27B-VL
   max_model_len: 262144
-  gpu_memory_utilization: 0.93
+  gpu_memory_utilization: 0.92
   max_num_seqs: 4
   kv_cache_dtype: fp8
   kv_offloading_size: 16
   kv_offloading_backend: native
   extra_flags: >-
-    --max-num-batched-tokens 4096
+    --max-num-batched-tokens 8192
     --enable-prefix-caching
-    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 4]}'
+    --mamba-ssm-cache-dtype float16
+    --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [1, 2]}'
     --enable-chunked-prefill
     --async-scheduling
     --enable-auto-tool-choice
     --tool-call-parser qwen3_xml
     --reasoning-parser qwen3
     --trust-remote-code
-    --attention-backend flashinfer
   startup_timeout: 540
   extra_env:
     FLASHINFER_DISABLE_VERSION_CHECK: "1"
