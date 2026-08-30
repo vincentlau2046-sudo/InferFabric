@@ -20,7 +20,7 @@ vllm:
     --max-num-batched-tokens 8192
     --enable-prefix-caching
     --mamba-ssm-cache-dtype float16
-    --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [1, 2]}'
+    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 3, 4]}'
     --enable-chunked-prefill
     --async-scheduling
     --enable-auto-tool-choice
