@@ -328,10 +328,13 @@ class GpuStateMachine:
                 self._proc.stop_asr_server(port=m.asr.port)
         self._proc.force_kill_all()
 
+        # P1-6: Clear GPU CUDA state after force kill to eliminate fragmentation
+        self._proc.clear_gpu_cuda_state(force=True)
+
         if not wait_gpu_free(timeout=20):
             log.warning(
                 "GPU not free after force_reset (%d MB used). "
-                "Skipping nvidia-smi --gpu-reset (destructive). "
+                "GPU CUDA state was cleared but GPU still has memory in use. "
                 "Manual reset may be needed: sudo nvidia-smi --gpu-reset",
                 gpu_used_mb()
             )

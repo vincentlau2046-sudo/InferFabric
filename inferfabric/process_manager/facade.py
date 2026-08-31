@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from inferfabric.config import DEFAULT_LOG_DIR, COMFYUI_DIR
+from inferfabric.config import DEFAULT_LOG_DIR, COMFYUI_DIR, GPU_AUTO_CLEAR_CUDA_STATE
 from inferfabric.health import check_http_status
 from inferfabric.process_manager.base import BaseProcessManager
 from inferfabric.process_manager.vllm import VLLMProcessManager
@@ -296,6 +296,25 @@ class ProcessManager(BaseProcessManager):
 
         return results
 
+    # ─── GPU CUDA State Reset ──────────────────────────────
+
+    def clear_gpu_cuda_state(self, gpu_index: int = 0, force: bool = False) -> dict:
+        """Public: clear GPU CUDA driver state to eliminate fragmentation.
+
+        Delegates to the base class method. Call this after stopping all
+        GPU-bound services and before starting an exclusive model, to
+        ensure the CUDA driver’s internal memory map is clean.
+
+        When ``GPU_AUTO_CLEAR_CUDA_STATE`` is False, this is a no-op
+        unless ``force=True`` (used by CLI 'gpu-clear' command).
+
+        Returns dict with status and method used.
+        """
+        if not GPU_AUTO_CLEAR_CUDA_STATE and not force:
+            log.debug("GPU CUDA state clear disabled by GPU_AUTO_CLEAR_CUDA_STATE=False")
+            return {"status": "skipped", "message": "disabled by config"}
+        return self._clear_gpu_cuda_state(gpu_index)
+
     def force_kill_all(self) -> dict:
         """Nuclear option: SIGKILL everything related to vLLM + ComfyUI + TTS + ASR + SGLang."""
         # vLLM
@@ -348,6 +367,8 @@ class ProcessManager(BaseProcessManager):
         subprocess.run(["fuser", "-k", "8881/tcp"], timeout=5, check=False)
 
         time.sleep(2)
+        if GPU_AUTO_CLEAR_CUDA_STATE:
+            self._clear_gpu_cuda_state()  # clear fragmentation after force kill
         self._state.set("vllm_pid", "")
         self._state.set("comfyui_pid", "")
         self._state.set("tts_pid", "")

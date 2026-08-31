@@ -48,6 +48,13 @@ HEALTH_CHECK_TIMEOUT = 300      # 5 minutes default for vLLM to become healthy (
 GPU_FREE_TIMEOUT = 30           # seconds to wait for GPU memory release
 GPU_FREE_THRESHOLD_MB = 2048    # MB below which GPU is considered "free"
 
+# P1-6: Auto-clear GPU CUDA state on service transitions
+# When True, calls nvidia-smi reset/toggle after GPU-bound services stop
+# and before exclusive models start, to mitigate memory fragmentation.
+# Set False if fragmentation is not observed or if resets interfere with
+# other GPU workloads (e.g., display rendering on the same GPU).
+GPU_AUTO_CLEAR_CUDA_STATE = True
+
 
 # ─── Data Classes ────────────────────────────────────────────────
 

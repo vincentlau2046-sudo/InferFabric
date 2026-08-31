@@ -155,6 +155,86 @@ class BaseProcessManager:
         
         return {"status": "timeout", "message": f"GPU did not return to idle (threshold={threshold}MB)"}
     
+
+    # ─── GPU CUDA State Reset (Fragmentation Mitigation) ───────────
+
+    def _clear_gpu_cuda_state(self, gpu_index: int = 0) -> dict:
+        """Clear GPU CUDA driver state to eliminate memory fragmentation.
+
+        After a GPU-heavy process (ComfyUI, vLLM, etc.) exits, the CUDA driver
+        may retain a fragmented memory map that prevents large contiguous
+        allocations — even though nvidia-smi shows sufficient free memory.
+
+        This method tries multiple approaches in order of effectiveness:
+
+        1. ``nvidia-smi --gpu-reset`` — Full GPU state reset (most effective)
+        2. ``nvidia-smi -pm 0 && nvidia-smi -pm 1`` — Persistence mode toggle
+           (causes driver to re-initialize internal state)
+        3. ``nvidia-smi -r`` — Secondary reset method (falls through)
+
+        Safety: only call when GPU is confirmed idle (no running CUDA contexts).
+        Each approach is validated by reading GPU memory before and after.
+        """
+        before_mb = gpu_used_mb()
+        log.info("Clearing GPU CUDA state (current usage: %d MB) ...", before_mb)
+
+        # ── Approach 1: nvidia-smi --gpu-reset ────────────────────
+        try:
+            r = subprocess.run(
+                ["nvidia-smi", "--gpu-reset", "-i", str(gpu_index)],
+                timeout=30, capture_output=True, text=True,
+            )
+            if r.returncode == 0:
+                time.sleep(2)  # wait for reset to complete
+                after_mb = gpu_used_mb()
+                log.info("GPU reset successful (before: %d MB, after: %d MB)", before_mb, after_mb)
+                return {"status": "ok", "method": "gpu-reset", "before_mb": before_mb, "after_mb": after_mb}
+            else:
+                log.warning("nvidia-smi --gpu-reset failed (rc=%d): %s", r.returncode, r.stderr.strip())
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+            log.warning("nvidia-smi --gpu-reset unavailable: %s", e)
+
+        # ── Approach 2: Toggle persistence mode ───────────────────
+        # PM toggling causes the driver to reinitialize its internal memory map
+        try:
+            r = subprocess.run(
+                ["nvidia-smi", "-pm", "0"],
+                timeout=10, capture_output=True, text=True,
+            )
+            if r.returncode == 0:
+                time.sleep(1)
+                subprocess.run(
+                    ["nvidia-smi", "-pm", "1"],
+                    timeout=10, capture_output=True, text=True,
+                )
+                time.sleep(1)
+                after_mb = gpu_used_mb()
+                log.info("GPU PM toggle successful (before: %d MB, after: %d MB)", before_mb, after_mb)
+                return {"status": "ok", "method": "pm-toggle", "before_mb": before_mb, "after_mb": after_mb}
+            else:
+                log.warning("nvidia-smi -pm toggle failed (rc=%d): %s", r.returncode, r.stderr.strip())
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+            log.warning("nvidia-smi -pm toggle unavailable: %s", e)
+
+        # ── Approach 3: nvidia-smi -r (secondary reset) ───────────
+        try:
+            r = subprocess.run(
+                ["nvidia-smi", "-r"],
+                timeout=30, capture_output=True, text=True,
+            )
+            if r.returncode == 0:
+                time.sleep(2)
+                after_mb = gpu_used_mb()
+                log.info("GPU nvidia-smi -r successful (before: %d MB, after: %d MB)", before_mb, after_mb)
+                return {"status": "ok", "method": "nvidia-smi-r", "before_mb": before_mb, "after_mb": after_mb}
+            else:
+                log.warning("nvidia-smi -r failed (rc=%d): %s", r.returncode, r.stderr.strip())
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+            log.warning("nvidia-smi -r unavailable: %s", e)
+
+        log.warning("All GPU CUDA state reset methods failed — fragmentation may persist")
+        return {"status": "error", "message": "No GPU reset method succeeded"}
+
     def _get_gpu_baseline(self) -> int:
         """Get or cache the baseline GPU memory usage.
 

@@ -12,6 +12,7 @@ Usage:
   iff history             Show switch history
   iff reset               Force reset to idle
   iff reconcile           Fix DB vs actual state inconsistencies
+  iff gpu-clear           Clear GPU CUDA state (fix fragmentation after ComfyUI)
 """
 
 import sys
@@ -269,6 +270,46 @@ def cmd_wake(args):
         sys.exit(1)
 
 
+def cmd_gpu_clear(args):
+    """Manually clear GPU CUDA state to eliminate memory fragmentation.
+
+    This is useful after ComfyUI (or any GPU-heavy service) has been running
+    for a while and has exited, but CUDA internal memory fragmentation prevents
+    new models from allocating large contiguous VRAM blocks.
+
+    Safe to run when GPU is idle. Tries multiple approaches:
+    1. nvidia-smi --gpu-reset (most effective, requires no running CUDA contexts)
+    2. nvidia-smi -pm toggle (fallback)
+    3. nvidia-smi -r (secondary fallback)
+    """
+    gpu_index = 0
+    if args and args[0] == "--gpu":
+        try:
+            gpu_index = int(args[1])
+            args = args[2:]
+        except (ValueError, IndexError):
+            pass
+
+    mgr = ModelManager()
+    # Initialize dependencies so we have access to the process manager
+    # force=True bypasses GPU_AUTO_CLEAR_CUDA_STATE config
+    result = mgr._proc.clear_gpu_cuda_state(gpu_index, force=True)
+
+    utils = {
+        "gpu-reset": "nvidia-smi --gpu-reset (full state reset)",
+        "pm-toggle": "nvidia-smi persistence mode toggle",
+        "nvidia-smi-r": "nvidia-smi -r (secondary reset)",
+    }
+    method_name = utils.get(result.get("method", ""), result.get("method", "?"))
+
+    if result["status"] == "ok":
+        print(f"✅ GPU CUDA state cleared via {method_name}")
+        print(f"   Memory: {result.get('before_mb', '?')} MB → {result.get('after_mb', '?')} MB")
+    else:
+        print(f"❌ Failed to clear GPU CUDA state: {result.get('message', 'unknown error')}")
+        print("   Try: sudo nvidia-smi --gpu-reset (manual)")
+
+
 def cmd_pull(args):
     """Pre-download model files: ollama pull / huggingface-cli download."""
     if not args:
@@ -385,9 +426,11 @@ def main():
         cmd_pull(rest)
     elif cmd == "list-downloaded":
         cmd_list_downloaded(rest)
+    elif cmd in ("gpu-clear", "gpu_clear"):
+        cmd_gpu_clear(rest)
     else:
         print(f"Unknown command: {cmd}")
-        print("Available: status, models, switch, stop, pull, list-downloaded, sleep, wake, history, reset, reconcile")
+        print("Available: status, models, switch, stop, pull, list-downloaded, sleep, wake, history, reset, reconcile, gpu-clear")
         sys.exit(1)
 
 

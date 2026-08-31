@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import (
+    GPU_AUTO_CLEAR_CUDA_STATE,
     GPU_FREE_TIMEOUT,
     GPU_FREE_THRESHOLD_MB,
     ModelConfig,
@@ -75,6 +76,14 @@ class ModelLifecycle:
         model = self._models.get(model_name)
         if model is None:
             return {"status": "error", "message": f"Model {model_name} not found in YAML after reload"}
+
+        # P1-6: Clear GPU CUDA state before deploying an exclusive model.
+        # After ComfyUI (or any GPU-heavy service) exits, the CUDA driver may
+        # retain a fragmented memory map. Clearing it here ensures the new
+        # model can allocate large contiguous blocks without hitting CUDA OOM
+        # even though nvidia-smi shows sufficient free memory.
+        if GPU_AUTO_CLEAR_CUDA_STATE and model.is_exclusive and target_mode == GPUMode.EXCLUSIVE:
+            self._proc.clear_gpu_cuda_state()
 
         # PR-1: VRAM budget guard — reject if peak would exceed 97% of GPU
         # (95% was too tight: bge-m3 ~480MB + peak_vram_mb leaves <10MB margin)
@@ -302,6 +311,13 @@ class ModelLifecycle:
         # Clear GPU-bound services before deploying new model (none services preserved above)
         self.state.set("active_services", json.dumps(preserved_none))
 
+        # P1-6: Clear GPU CUDA state between exclusive model switches
+        # After the old model's process exits, the CUDA driver may retain
+        # fragmented memory. Clearing here prevents allocation failures
+        # when the new model tries to allocate its KV cache.
+        if GPU_AUTO_CLEAR_CUDA_STATE:
+            self._proc.clear_gpu_cuda_state()
+
         # Deploy the new model
         result = self._deploy_model(model, GPUMode.EXCLUSIVE)
 
@@ -436,6 +452,14 @@ class ModelLifecycle:
                 if gpu_idle2.get("status") not in ("ok", "force"):
                     self.state.set("profile_state", ServiceState.ERROR)
                     return {"status": "error", "message": "GPU not freed after force kill"}
+
+            # P1-6: Clear GPU CUDA state to eliminate fragmentation
+            # after any GPU-bound service stops (ComfyUI in particular)
+            if GPU_AUTO_CLEAR_CUDA_STATE:
+                if any(m.is_comfyui or m.is_vllm or m.is_sglang
+                       for svc in from_services if (m := self._models.get(svc))):
+                    # only clear if GPU had a heavy service running
+                    self._proc.clear_gpu_cuda_state()
 
             # Update state
             self.state.set_multi({
