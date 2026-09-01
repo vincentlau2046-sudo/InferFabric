@@ -11,15 +11,26 @@
       </div>
       <div id="ovActive"><div class="if-empty">加载中…</div></div>
     </div>
-    <!-- GPU & 系统 -->
-    <div class="if-card">
-      <div class="if-card-hdr">
-        <div class="if-card-icon" style="background:var(--green-s);color:var(--green)">
-          <svg width="15" height="15"><use href="#s-gpu"/></svg>
+    <!-- GPU 综合 & 系统综合（纵向排列） -->
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="if-card">
+        <div class="if-card-hdr">
+          <div class="if-card-icon" style="background:var(--green-s);color:var(--green)">
+            <svg width="15" height="15"><use href="#s-gpu"/></svg>
+          </div>
+          <span class="if-card-title">GPU 综合信息</span>
         </div>
-        <span class="if-card-title">GPU &amp; 系统状态</span>
+        <div id="ovGpu"><div class="if-empty">加载中…</div></div>
       </div>
-      <div id="ovSys"><div class="if-empty">加载中…</div></div>
+      <div class="if-card">
+        <div class="if-card-hdr">
+          <div class="if-card-icon" style="background:var(--blue-s);color:var(--blue)">
+            <svg width="15" height="15"><use href="#s-monitor"/></svg>
+          </div>
+          <span class="if-card-title">系统综合信息</span>
+        </div>
+        <div id="ovSys"><div class="if-empty">加载中…</div></div>
+      </div>
     </div>
   </div>
 

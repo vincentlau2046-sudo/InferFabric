@@ -387,6 +387,7 @@ async function loadOverview() {
       for (const name of svcs) {
         const info = sInfo[name] || {};
         const m = models.find(x => x.name === name) || {};
+        const ec = m.engine_config || {};
         const ok = (health[name] || '❌') === '✅';
         const sleeping = !!sleepSt[name];
         const badgeCls = info.mode === 'shared' ? 'shrd' : 'excl';
@@ -394,15 +395,30 @@ async function loadOverview() {
         const statusCls = sleeping ? 'sleeping' : (ok ? 'running' : 'stopped');
         const statusIcon = sleeping ? '⏸' : (ok ? '✅' : '✗');
         const statusText = sleeping ? '休眠中' : (ok ? '运行中' : '异常');
-        const tags = [];
-        if (m.quantization) tags.push(m.quantization);
-        if (m.context_window != null) tags.push(m.context_window >= 1024 ? Math.round(m.context_window / 1024) + 'K ctx' : m.context_window + ' ctx');
-        tags.push(FW_LABELS[info.type] || info.type || '—');
-        if (m.model_type) tags.push((MT_ICON[m.model_type] || '🧠') + ' ' + m.model_type);
-        const tagsHtml = tags.map(t => '<span class="card-tag">' + t + '</span>').join('');
+        const engineTags = [];
+        // vLLM params
+        if (ec.max_num_seqs != null) engineTags.push('Batch: ' + ec.max_num_seqs);
+        if (ec.gpu_memory_utilization != null) engineTags.push('VRAM: ' + (ec.gpu_memory_utilization * 100).toFixed(0) + '%');
+        if (ec.kv_cache_dtype) engineTags.push('KV: ' + ec.kv_cache_dtype);
+        if (ec.max_batched_tokens != null) engineTags.push('Chunk: ' + ec.max_batched_tokens);
+        if (ec.chunked_prefill != null) engineTags.push('Prefill: ' + (ec.chunked_prefill ? '✓' : '✗'));
+        if (ec.kv_offloading_size != null) engineTags.push('Offload: ' + Number(ec.kv_offloading_size).toFixed(0) + 'GB');
+        // SGLang params
+        if (ec.max_running_requests != null) engineTags.push('MaxReq: ' + ec.max_running_requests);
+        if (ec.context_length != null) engineTags.push('Ctx: ' + ec.context_length);
+        if (ec.mem_fraction != null) engineTags.push('VRAM: ' + (ec.mem_fraction * 100).toFixed(0) + '%');
+        if (ec.enable_lmcache != null) engineTags.push('LMCache: ' + (ec.enable_lmcache ? '✓' : '✗'));
+        // ollama_cpp params
+        if (ec.threads != null) engineTags.push('Threads: ' + ec.threads);
+        if (ec.context_size != null) engineTags.push('Ctx: ' + ec.context_size);
+        // ollama_cpp params
+        if (ec.conda_env && engineTags.length === 0) engineTags.push('Env: ' + ec.conda_env);
+        const engineHtml = engineTags.map(t => '<span class="card-tag">' + t + '</span>').join('');
+        // Layer 3: original model name (from description, first part)
+        const origName = m.description ? m.description.replace(/[—–].*$/, '').trim() : m.name;
         html += '<div class="model-card active">' +
           '<div class="card-hdr">' +
-            '<div class="card-icon-box">' + (FW_ICONS[info.type] || '📦') + '</div>' +
+            '<div class="card-icon-box">' + (FW_ICONS[info.type] || '\u{1f4e6}') + '</div>' +
             '<div class="card-name">' + name + '</div>' +
             '<span class="card-badge ' + badgeCls + '">' + badgeLabel + '</span>' +
           '</div>' +
@@ -411,8 +427,8 @@ async function loadOverview() {
             '<span class="st-text">' + statusText + '</span>' +
             '<span class="st-port">:' + (info.port != null ? info.port : '—') + '</span>' +
           '</div>' +
-          '<div class="card-tags">' + tagsHtml + '</div>' +
-          (m.description ? '<div class="ov-desc" style="margin:0 0 8px">' + m.description + '</div>' : '') +
+          '<div class="card-tags">' + engineHtml + '</div>' +
+          '<div class="ov-desc" style="font-size:12px;color:var(--if-text-3)">' + origName + '</div>' +
         '</div>';
       }
       html += '</div>';
@@ -426,31 +442,36 @@ async function loadOverview() {
   const cpu = store.get('cpu') || {};
   const mem = store.get('mem') || {};
   const ver = store.get('version') || '';
-  const sysEl = document.getElementById('ovSys');
-  if (sysEl) {
-    const pct = gpu.pct != null ? Math.min(100, Math.max(0, gpu.pct)) : 0;
-    const barCls = pct > 90 ? 'crit' : pct > 70 ? 'warn' : '';
-    const tile = (val, label) =>
-      '<div class="m-stat">' +
-      '<span class="m-stat-val" style="font-size:16px">' + val + '</span>' +
-      '<span class="m-stat-label">' + label + '</span></div>';
-    const gpuMemTile =
-      '<div class="m-stat">' +
-      '<span class="m-stat-val" style="font-size:16px">' + pct.toFixed(1) + '%</span>' +
-      '<span class="m-stat-label">显存 ' + Number(gpu.used || 0).toLocaleString() + ' / ' + Number(gpu.total || 0).toLocaleString() + ' MB</span>' +
-      '<div style="height:5px;background:var(--if-surface-2);border-radius:999px;overflow:hidden;margin-top:8px"><div class="perf-bar-f ' + barCls + '" style="height:100%;width:' + pct + '%"></div></div>' +
-      '</div>';
-    sysEl.innerHTML =
+  const pct = gpu.pct != null ? Math.min(100, Math.max(0, gpu.pct)) : 0;
+  const barCls = pct > 90 ? 'crit' : pct > 70 ? 'warn' : '';
+  const tile = (val, label) =>
+    '<div class="m-stat">' +
+    '<span class="m-stat-val" style="font-size:16px">' + val + '</span>' +
+    '<span class="m-stat-label">' + label + '</span></div>';
+  const gpuMemTile =
+    '<div class="m-stat">' +
+    '<span class="m-stat-val" style="font-size:16px">' + pct.toFixed(1) + '%</span>' +
+    '<span class="m-stat-label">显存 ' + Number(gpu.used || 0).toLocaleString() + ' / ' + Number(gpu.total || 0).toLocaleString() + ' MB</span>' +
+    '<div style="height:5px;background:var(--if-surface-2);border-radius:999px;overflow:hidden;margin-top:8px"><div class="perf-bar-f ' + barCls + '" style="height:100%;width:' + pct + '%"></div></div>' +
+    '</div>';
+  const gpuEl = document.getElementById('ovGpu');
+  if (gpuEl) {
+    gpuEl.innerHTML =
       '<div class="m-overview-grid">' +
       gpuMemTile +
       tile(gpuUtil.pct != null ? Number(gpuUtil.pct).toFixed(1) + '%' : '—', 'GPU 利用率') +
       tile((gpuUtil.clock != null && gpuUtil.clock !== '—') ? gpuUtil.clock : '—', 'GPU 频率 (MHz)') +
       tile((gpuUtil.power != null && gpuUtil.power !== '—') ? gpuUtil.power : '—', 'GPU 功耗 (W)') +
+      '</div>';
+  }
+  const sysEl = document.getElementById('ovSys');
+  if (sysEl) {
+    sysEl.innerHTML =
+      '<div class="m-overview-grid">' +
       tile(cpu.pct != null ? Number(cpu.pct).toFixed(1) + '%' : '—', 'CPU 使用率') +
       tile((cpu.cores != null && cpu.cores !== '—') ? String(cpu.cores) : '—', 'CPU 核心数') +
       tile((mem.used || 0) + ' GB', '内存 / ' + (mem.total || 0) + ' GB') +
       tile(ovFormatUptime(cpu.uptime), '运行时长') +
-      tile(ver || '—', '版本') +
       '</div>';
   }
 }

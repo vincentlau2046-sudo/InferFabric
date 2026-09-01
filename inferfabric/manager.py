@@ -141,20 +141,71 @@ class ModelManager:
             except KeyError:
                 return None
 
+        def _engine_config(m):
+            """Extract engine operational params from model config."""
+            import re as _re
+            if m.type == 'vllm' and m.vllm:
+                v = m.vllm
+                extra = v.extra_flags or ''
+                bt = None; cp = False
+                mt = _re.search(r'--max-num-batched-tokens[= ](\d+)', extra)
+                if mt: bt = int(mt.group(1))
+                if '--enable-chunked-prefill' in extra: cp = True
+                return {
+                    'max_num_seqs': v.max_num_seqs,
+                    'gpu_memory_utilization': v.gpu_memory_utilization,
+                    'kv_cache_dtype': v.kv_cache_dtype,
+                    'max_batched_tokens': bt,
+                    'chunked_prefill': cp,
+                    'kv_offloading_size': v.kv_offloading_size,
+                    'conda_env': v.conda_env,
+                    'served_name': v.served_name,
+                }
+            if m.type == 'sglang' and m.sglang:
+                s = m.sglang
+                return {
+                    'max_running_requests': s.max_running_requests,
+                    'context_length': s.context_length,
+                    'mem_fraction': s.mem_fraction,
+                    'cpu_offload_gb': s.cpu_offload_gb,
+                    'enable_lmcache': s.enable_lmcache,
+                    'served_name': s.served_name,
+                }
+            if m.type in ('ollama_cpp', 'ollama') and m.ollama_cpp:
+                o = m.ollama_cpp
+                return {
+                    'threads': o.threads,
+                    'context_size': o.context_size,
+                    'gpu_layers': o.gpu_layers,
+                    'served_name': m.name,
+                }
+            if m.type == 'comfyui' and m.comfyui:
+                return {
+                    'conda_env': m.comfyui.conda_env,
+                    'working_dir': getattr(m.comfyui, 'working_dir', ''),
+                    'served_name': m.name,
+                }
+            if m.type == 'ollama' and m.ollama:  # inherited daemon — sparse info
+                return {
+                    'model_ref': getattr(m.ollama, 'model_ref', '') or '',
+                    'served_name': m.ollama.model_ref if m.ollama and m.ollama.model_ref else m.name,
+                }
+            return None
         return [
             {
-                "name": m.name,
-                "description": m.description,
-                "mode": m.gpu_role,
-                "type": m.type,
-                "active": self._gpu_state._is_model_actively_running(m),
-                "model_type": getattr(m, "model_type", "llm"),
-                "modality": getattr(m, "resolved_modality", "text"),
-                "quantization": getattr(m, "quantization", ""),
-                "context_window": _get_context(m),
+                'name': m.name,
+                'description': m.description,
+                'mode': m.gpu_role,
+                'type': m.type,
+                'active': self._gpu_state._is_model_actively_running(m),
+                'model_type': getattr(m, 'model_type', 'llm'),
+                'modality': getattr(m, 'resolved_modality', 'text'),
+                'quantization': getattr(m, 'quantization', ''),
+                'context_window': _get_context(m),
+                'engine_config': _engine_config(m),
             }
             for m in self._models.values()
-            if m.type != "ollama_daemon"
+            if m.type != 'ollama_daemon'
         ]
 
     def find_model_by_served_name(self, served_name: str) -> Optional[ModelConfig]:
