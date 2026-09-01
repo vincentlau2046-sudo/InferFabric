@@ -10,4 +10,4 @@ port: 8188
 working_dir: ~/ComfyUI
 health_url: http://localhost:8188/system_stats
 health_check_timeout: 180
-extra_flags: --cache-none --enable-manager
+extra_flags: --enable-manager
