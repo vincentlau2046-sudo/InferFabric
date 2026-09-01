@@ -1,82 +1,84 @@
-  <div class="tab-content active" id="tab-inference">
+<div class="tab-content" id="tab-inference">
 
   <!-- Active Services -->
-  <div class="panel" id="svcCard" style="margin-bottom:18px;padding:16px 20px;min-height:40px"></div>
+  <div class="if-card" id="svcCard" style="margin-bottom:16px;min-height:56px"></div>
 
   <!-- Model Panels -->
-  <div class="panels">
-    <div class="panel">
-      <div class="section-header">
-        <div class="section-icon" style="background:var(--red-s)">
-          <svg width="18" height="18"><use href="#s-cube"/></svg>
+  <div class="if-grid-3">
+    <div class="if-card">
+      <div class="if-card-hdr">
+        <div class="if-card-icon" style="background:var(--red-s);color:var(--red)">
+          <svg width="15" height="15"><use href="#s-cube"/></svg>
         </div>
-        <span class="section-title">独占模型</span>
-        <span class="section-count" id="exclCount">0</span>
+        <span class="if-card-title">独占模型</span>
+        <span class="if-card-badge" id="exclCount">0</span>
       </div>
       <div id="exclList" class="model-grid"></div>
     </div>
-    <div class="panel">
-      <div class="section-header">
-        <div class="section-icon" style="background:var(--green-s)">
-          <svg width="18" height="18"><use href="#s-cube"/></svg>
+    <div class="if-card">
+      <div class="if-card-hdr">
+        <div class="if-card-icon" style="background:var(--blue-s);color:var(--blue)">
+          <svg width="15" height="15"><use href="#s-cube"/></svg>
         </div>
-        <span class="section-title">共享服务</span>
-        <span class="section-count" id="shrdCount">0</span>
+        <span class="if-card-title">共享服务</span>
+        <span class="if-card-badge" id="shrdCount">0</span>
       </div>
       <div id="shrdList" class="model-grid"></div>
     </div>
-    <div class="panel">
-      <div class="section-header">
-        <div class="section-icon" style="background:var(--orange-s)">
-          <svg width="18" height="18"><use href="#s-bolt"/></svg>
+    <div class="if-card">
+      <div class="if-card-hdr">
+        <div class="if-card-icon" style="background:var(--green-s);color:var(--green)">
+          <svg width="15" height="15"><use href="#s-bolt"/></svg>
         </div>
-        <span class="section-title">空闲</span>
-        <span class="section-count" id="freeCount">0</span>
+        <span class="if-card-title">空闲</span>
+        <span class="if-card-badge" id="freeCount">0</span>
       </div>
       <div id="freeList" class="model-grid"></div>
     </div>
   </div>
 
-  <div class="act-row">
-    <button class="act-btn pri" onclick="doSwitch('idle')">释放 GPU</button>
-    <button class="act-btn sec" onclick="doReconcile()">Reconcile</button>
-    <button class="act-btn sec" onclick="doReloadConfig()">重载配置</button>
-    <button class="act-btn warn" onclick="doReset()">强制重置</button>
+  <div style="display:flex;flex-wrap:wrap;gap:8px;margin:14px 0">
+    <button class="if-btn if-btn-pri" onclick="doSwitch('idle')">🔓 释放 GPU</button>
+    <button class="if-btn if-btn-sec" onclick="doReconcile()">⚖️ Reconcile</button>
+    <button class="if-btn if-btn-sec" onclick="doReloadConfig()">🔄 重载配置</button>
+    <button class="if-btn if-btn-warn" onclick="doReset()">⚠️ 强制重置</button>
   </div>
 
   <!-- S3: 推理 Chat 面板 (底部, 不常用) -->
-  <div class="inference-panel">
-    <div class="panel-hdr collapse" onclick="this.classList.toggle('open');this.nextElementSibling.classList.toggle('open')">
-      <svg width="16" height="16" style="color:var(--primary);flex-shrink:0"><use href="#s-message"/></svg>
-      <span>推理 Chat</span>
-      <span class="collapse-arrow">▸</span>
+  <div class="if-card inference-panel">
+    <div class="if-card-hdr collapsible" onclick="this.classList.toggle('open');this.nextElementSibling.classList.toggle('open')">
+      <div class="if-card-icon" style="background:var(--blue-s);color:var(--blue)">
+        <svg width="15" height="15"><use href="#s-message"/></svg>
+      </div>
+      <span class="if-card-title">推理 Chat</span>
+      <span class="if-card-chevron">▸</span>
     </div>
-    <div class="chat-body">
-      <div class="chat-controls">
-        <div class="chat-select-row">
-          <label class="chat-label">模型</label>
-          <select id="chatModel" class="chat-select" onchange="void 0">
-            <option value="">— 无活跃模型 —</option>
-          </select>
-          <label class="chat-label" style="margin-left:12px">Max Tokens</label>
-          <input type="number" id="chatMaxTokens" class="chat-input-num" value="1024" min="64" max="4096">
-          <label class="chat-label" style="margin-left:12px">Temperature</label>
-          <input type="number" id="chatTemp" class="chat-input-num" value="0.7" min="0" max="2" step="0.1">
+    <div class="panel-content open">
+      <div class="chat-body">
+        <div class="chat-controls">
+          <div class="chat-select-row">
+            <label class="chat-label">模型</label>
+            <select id="chatModel" class="chat-select" onchange="void 0">
+              <option value="">— 无活跃模型 —</option>
+            </select>
+            <label class="chat-label" style="margin-left:12px">Max Tokens</label>
+            <input type="number" id="chatMaxTokens" class="chat-input-num" value="1024" min="64" max="4096">
+            <label class="chat-label" style="margin-left:12px">Temperature</label>
+            <input type="number" id="chatTemp" class="chat-input-num" value="0.7" min="0" max="2" step="0.1">
+          </div>
         </div>
+        <div class="chat-messages" id="chatMessages">
+          <div class="chat-empty">选择模型后发送消息开始对话</div>
+        </div>
+        <div class="chat-input-row">
+          <textarea id="chatInput" class="chat-input" rows="3" placeholder="Type your message..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
+          <button class="chat-send" id="chatSendBtn" onclick="sendChat()">
+            <svg width="16" height="16"><path d="M3 3l16 8L3 19V3z" fill="currentColor"/></svg>
+          </button>
+        </div>
+        <div class="chat-stats" id="chatStats"></div>
       </div>
-      <div class="chat-messages" id="chatMessages">
-        <div class="chat-empty">选择模型后发送消息开始对话</div>
-      </div>
-      <div class="chat-input-row">
-        <textarea id="chatInput" class="chat-input" rows="3" placeholder="Type your message..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
-        <button class="chat-send" id="chatSendBtn" onclick="sendChat()">
-          <svg width="16" height="16"><path d="M3 3l16 8L3 19V3z" fill="currentColor"/></svg>
-        </button>
-      </div>
-      <div class="chat-stats" id="chatStats"></div>
     </div>
   </div>
 
   </div><!-- /tab-inference -->
-
-  <!-- ════════ Tab 2: 指标监控 ════════ -->

@@ -1,12 +1,14 @@
 <div class="tab-content" id="tab-monitor">
 
   <!-- Panel 1: vLLM 性能 (最前面) -->
-  <div class="perf-panel" id="perfPanel">
-    <div class="perf-hdr">
-      <div class="panel-icon" style="background:var(--teal);box-shadow:0 2px 6px rgba(100,210,255,.2)">📊</div>
-      <span class="panel-title" id="perfTitle">vLLM 性能</span>
-      <span class="perf-sleep-badge" id="sleepBadge">休眠中</span>
-      <span class="perf-refresh">刷新 60s</span>
+  <div class="if-card" id="perfPanel">
+    <div class="if-card-hdr">
+      <div class="if-card-icon" style="background:var(--teal-s);color:var(--teal)">
+        <svg width="15" height="15"><use href="#s-chart"/></svg>
+      </div>
+      <span class="if-card-title" id="perfTitle">vLLM 性能</span>
+      <span class="if-chip warn" id="sleepBadge">休眠中</span>
+      <span style="margin-left:auto;font-size:11px;color:var(--if-text-3)">刷新 60s</span>
     </div>
     <div class="perf-cards">
       <div class="perf-card" id="pcKv"><span class="perf-label">KV Cache</span><span class="perf-tip">GPU KV 缓存占用率。>90% 容易触发抢占，导致延迟飙升</span><span class="perf-main" id="kvVal">—</span><div class="perf-bar"><div class="perf-bar-f" id="kvBar" style="width:0"></div></div></div>
@@ -18,10 +20,12 @@
   </div>
 
   <!-- Panel 2: 请求概览 -->
-  <div class="m-panel" id="overviewPanel">
-    <div class="panel-hdr">
-      <div class="panel-icon" style="background:var(--primary-g);box-shadow:0 2px 6px rgba(204,122,96,.2)">📋</div>
-      <span class="panel-title">请求概览</span>
+  <div class="if-card" id="overviewPanel">
+    <div class="if-card-hdr">
+      <div class="if-card-icon" style="background:var(--primary-g);color:var(--if-c-primary)">
+        <svg width="15" height="15"><use href="#s-chart"/></svg>
+      </div>
+      <span class="if-card-title">请求概览</span>
       <div class="m-window-toggle">
         <button class="m-wtab" data-w="1h">1h</button>
         <button class="m-wtab active" data-w="24h">24h</button>
@@ -38,28 +42,34 @@
   </div>
 
   <!-- Panel 3: Token 用量 -->
-  <div class="m-panel" id="tokenPanel">
-    <div class="panel-hdr">
-      <div class="panel-icon" style="background:var(--green-g);box-shadow:0 2px 6px rgba(48,209,88,.2)">📈</div>
-      <span class="panel-title">Token 用量</span>
+  <div class="if-card" id="tokenPanel">
+    <div class="if-card-hdr">
+      <div class="if-card-icon" style="background:var(--green-g);color:var(--green)">
+        <svg width="15" height="15"><use href="#s-chart"/></svg>
+      </div>
+      <span class="if-card-title">Token 用量</span>
     </div>
     <div class="m-token-table" id="tokenTable"><div class="m-empty">加载中…</div></div>
   </div>
 
   <!-- Panel 4: 延迟分布 -->
-  <div class="m-panel" id="latencyPanel">
-    <div class="panel-hdr">
-      <div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(10,132,255,.2)">⏱</div>
-      <span class="panel-title">延迟分布</span>
+  <div class="if-card" id="latencyPanel">
+    <div class="if-card-hdr">
+      <div class="if-card-icon" style="background:var(--blue-g);color:var(--blue)">
+        <svg width="15" height="15"><use href="#s-bolt"/></svg>
+      </div>
+      <span class="if-card-title">延迟分布</span>
     </div>
     <div class="m-latency-table" id="latencyTable"><div class="m-empty">加载中…</div></div>
   </div>
 
   <!-- Panel 5: 费用概览 -->
-  <div class="m-panel" id="costPanel">
-    <div class="panel-hdr">
-      <div class="panel-icon" style="background:var(--orange-g);box-shadow:0 2px 6px rgba(245,158,11,.2)">💰</div>
-      <span class="panel-title">费用概览</span>
+  <div class="if-card" id="costPanel">
+    <div class="if-card-hdr">
+      <div class="if-card-icon" style="background:var(--orange-g);color:var(--orange)">
+        <svg width="15" height="15"><use href="#s-gear"/></svg>
+      </div>
+      <span class="if-card-title">费用概览</span>
     </div>
     <div class="m-cost-grid">
       <div class="m-cost-total"><span class="m-cost-val" id="costTotal">¥0.00</span><span class="m-cost-label">总计</span></div>
@@ -68,24 +78,28 @@
   </div>
 
   <!-- Panel 6: 请求日志 -->
-  <div class="m-panel" id="logPanel">
-    <div class="panel-hdr">
-      <div class="panel-icon" style="background:var(--purple-g);box-shadow:0 2px 6px rgba(191,90,242,.2)">📝</div>
-      <span class="panel-title">请求日志</span>
-      <span style="margin-left:auto;font-size:11px;color:var(--text3)" id="logTs">—</span>
+  <div class="if-card" id="logPanel">
+    <div class="if-card-hdr">
+      <div class="if-card-icon" style="background:var(--purple-g);color:var(--purple)">
+        <svg width="15" height="15"><use href="#s-message"/></svg>
+      </div>
+      <span class="if-card-title">请求日志</span>
+      <span style="margin-left:auto;font-size:11px;color:var(--if-text-3)" id="logTs">—</span>
     </div>
     <div class="m-log-scroll" id="logBody"><div class="m-empty">加载中…</div></div>
   </div>
 
   <!-- Panel 7: 切换历史 -->
-  <div class="hist-card">
-    <div class="panel-hdr">
-      <div class="panel-icon" style="background:var(--purple-g);box-shadow:0 2px 6px rgba(191,90,242,.2)">🕐</div>
-      <span class="panel-title">切换历史</span>
+  <div class="if-card">
+    <div class="if-card-hdr">
+      <div class="if-card-icon" style="background:var(--purple-g);color:var(--purple)">
+        <svg width="15" height="15"><use href="#s-swap"/></svg>
+      </div>
+      <span class="if-card-title">切换历史</span>
     </div>
     <div class="hist-scroll">
       <div class="hrow hrow-hdr"><span>时间</span><span>来源</span><span></span><span>目标</span><span>耗时</span><span></span></div>
-      <div id="hBody"><div style="text-align:center;padding:20px;color:var(--text4);font-size:14px">加载中…</div></div>
+      <div id="hBody"><div style="text-align:center;padding:20px;color:var(--if-text-3);font-size:14px">加载中…</div></div>
     </div>
   </div>
   </div><!-- /tab-monitor -->

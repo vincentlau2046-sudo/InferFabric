@@ -1,87 +1,87 @@
 <div class="tab-content" id="tab-cloud">
 
-    <!-- 添加 Provider -->
-    <div class="cloud-section">
-      <div class="section-header">
-        <div class="section-icon" style="background:var(--primary-s)">
-          <svg width="18" height="18"><use href="#s-cube"/></svg>
-        </div>
-        <span class="section-title">添加 Provider</span>
+  <!-- 添加 Provider -->
+  <div class="cloud-section">
+    <div class="if-card-hdr">
+      <div class="if-card-icon" style="background:var(--if-c-primary-soft);color:var(--if-c-primary)">
+        <svg width="15" height="15"><use href="#s-cube"/></svg>
       </div>
-      <div id="presetGrid" class="preset-grid-mac">加载中...</div>
+      <span class="if-card-title">添加 Provider</span>
+    </div>
+    <div id="presetGrid" class="preset-grid-mac">加载中...</div>
 
-      <!-- 选中预设表单——内联卡片 -->
-      <div id="presetForm" class="cloud-config-card" style="display:none">
-        <div class="cloud-config-hdr">
-          <span id="presetSelected">—</span>
-          <button class="cloud-config-close" onclick="cloudDeselectPreset()">✕</button>
-        </div>
-        <div class="cloud-config-body">
-          <div id="presetEnvHint" class="cloud-config-hint"></div>
-          <div class="cloud-config-row">
-            <input class="deploy-form-input" id="cpPresetApiKey" type="password" placeholder="API Key — sk-... 或 ${ENV_VAR}" style="flex:1">
-            <button class="act-btn pri" onclick="cloudAddPreset()">添加 & 发现</button>
-          </div>
-        </div>
+    <!-- 选中预设表单——内联卡片 -->
+    <div id="presetForm" class="cloud-config-card" style="display:none">
+      <div class="cloud-config-hdr">
+        <span id="presetSelected">—</span>
+        <button class="cloud-config-close" onclick="cloudDeselectPreset()">✕</button>
       </div>
-
-      <!-- 手动配置卡片 -->
-      <div class="cloud-config-card">
-        <div class="cloud-config-hdr">🔗 手动配置</div>
-        <div class="cloud-config-body">
-          <div class="cloud-config-grid">
-            <div class="deploy-form-field">
-              <label class="deploy-form-label">名称</label>
-              <input class="deploy-form-input" id="cpName" type="text" placeholder="my-provider">
-            </div>
-            <div class="deploy-form-field">
-              <label class="deploy-form-label">API Key</label>
-              <input class="deploy-form-input" id="cpApiKey" type="password" placeholder="sk-...">
-            </div>
-            <div class="deploy-form-field">
-              <label class="deploy-form-label">OpenAI Base URL</label>
-              <input class="deploy-form-input" id="cpOpenaiBase" type="url" placeholder="https://api.example.com/v1">
-            </div>
-            <div class="deploy-form-field">
-              <label class="deploy-form-label">Anthropic Base URL</label>
-              <input class="deploy-form-input" id="cpAnthropicBase" type="url" placeholder="https://api.example.com/anthropic">
-            </div>
-          </div>
-          <div class="cloud-config-actions">
-            <button class="act-btn pri" onclick="cloudAddProvider()">添加 & 发现</button>
-            <button class="act-btn sec" onclick="cloudTestProvider()">测试连接</button>
-          </div>
+      <div class="cloud-config-body">
+        <div id="presetEnvHint" class="cloud-config-hint"></div>
+        <div class="cloud-config-row">
+          <input class="deploy-form-input" id="cpPresetApiKey" type="password" placeholder="API Key — sk-... 或 ${ENV_VAR}" style="flex:1">
+          <button class="if-btn if-btn-pri" onclick="cloudAddPreset()">添加 & 发现</button>
         </div>
       </div>
     </div>
 
-    <!-- 已配置 Provider -->
-    <div class="cloud-section">
-      <div class="section-header">
-        <div class="section-icon" style="background:var(--primary-s)">
-          <svg width="18" height="18"><use href="#s-cloud"/></svg>
+    <!-- 手动配置卡片 -->
+    <div class="cloud-config-card">
+      <div class="cloud-config-hdr">🔗 手动配置</div>
+      <div class="cloud-config-body">
+        <div class="cloud-config-grid">
+          <div class="deploy-form-field">
+            <label class="deploy-form-label">名称</label>
+            <input class="deploy-form-input" id="cpName" type="text" placeholder="my-provider">
+          </div>
+          <div class="deploy-form-field">
+            <label class="deploy-form-label">API Key</label>
+            <input class="deploy-form-input" id="cpApiKey" type="password" placeholder="sk-...">
+          </div>
+          <div class="deploy-form-field">
+            <label class="deploy-form-label">OpenAI Base URL</label>
+            <input class="deploy-form-input" id="cpOpenaiBase" type="url" placeholder="https://api.example.com/v1">
+          </div>
+          <div class="deploy-form-field">
+            <label class="deploy-form-label">Anthropic Base URL</label>
+            <input class="deploy-form-input" id="cpAnthropicBase" type="url" placeholder="https://api.example.com/anthropic">
+          </div>
         </div>
-        <span class="section-title">已配置 Provider</span>
-        <div class="section-actions">
-          <button onclick="cloudDiscoverAll()" class="act-btn sec" style="font-size:12px;padding:4px 12px">🔍 全部发现</button>
-          <button onclick="cloudReload()" class="act-btn sec" style="font-size:12px;padding:4px 12px">🔄 热加载</button>
+        <div class="cloud-config-actions">
+          <button class="if-btn if-btn-pri" onclick="cloudAddProvider()">添加 & 发现</button>
+          <button class="if-btn if-btn-sec" onclick="cloudTestProvider()">测试连接</button>
         </div>
       </div>
-      <div id="cloudProvidersList" class="cloud-provider-list">加载中...</div>
     </div>
+  </div>
 
-    <!-- 已发现模型 -->
-    <div class="cloud-section">
-      <div class="section-header">
-        <div class="section-icon" style="background:var(--green-s)">
-          <svg width="18" height="18"><use href="#s-chart"/></svg>
-        </div>
-        <span class="section-title">已发现模型</span>
-        <span class="section-count" id="cloudModelCount">0</span>
+  <!-- 已配置 Provider -->
+  <div class="cloud-section">
+    <div class="if-card-hdr">
+      <div class="if-card-icon" style="background:var(--if-c-primary-soft);color:var(--if-c-primary)">
+        <svg width="15" height="15"><use href="#s-cloud"/></svg>
       </div>
-      <div id="cloudModelsList" class="cloud-model-grid">加载中...</div>
+      <span class="if-card-title">已配置 Provider</span>
+      <div class="section-actions">
+        <button onclick="cloudDiscoverAll()" class="if-btn if-btn-sec" style="font-size:12px;padding:4px 12px">🔍 全部发现</button>
+        <button onclick="cloudReload()" class="if-btn if-btn-sec" style="font-size:12px;padding:4px 12px">🔄 热加载</button>
+      </div>
     </div>
+    <div id="cloudProvidersList" class="cloud-provider-list">加载中...</div>
+  </div>
 
-  </div><!-- /tab-cloud -->
+  <!-- 已发现模型 -->
+  <div class="cloud-section">
+    <div class="if-card-hdr">
+      <div class="if-card-icon" style="background:var(--green-s);color:var(--green)">
+        <svg width="15" height="15"><use href="#s-chart"/></svg>
+      </div>
+      <span class="if-card-title">已发现模型</span>
+      <span class="if-card-badge" id="cloudModelCount">0</span>
+    </div>
+    <div id="cloudModelsList" class="cloud-model-grid">加载中...</div>
+  </div>
+
+</div><!-- /tab-cloud -->
 
 <div class="toast" id="toast"></div>

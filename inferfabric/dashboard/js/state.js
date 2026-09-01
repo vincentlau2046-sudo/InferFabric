@@ -223,11 +223,11 @@ class StateStore {
     if (this._switchLocked) return;
     // Deactivate all tabs
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.snav-item').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.if-nav-item').forEach(t => t.classList.remove('active'));
     // Activate target
     const target = document.getElementById(tabId);
     if (target) target.classList.add('active');
-    const btn = document.querySelector(`.snav-item[data-tab="${tabId}"]`);
+    const btn = document.querySelector(`.if-nav-item[data-tab="${tabId}"]`);
     if (btn) btn.classList.add('active');
     // Store + notify
     this._tabActive = tabId;
@@ -272,11 +272,11 @@ store.on('switch_target', (val) => {
     overlay.style.display = '';
     document.getElementById('switchOverlayMsg').textContent = `正在切换到 ${val}…`;
     // Lock sidebar nav
-    document.querySelectorAll('.snav-item').forEach(el => el.classList.add('locked'));
+    document.querySelectorAll('.if-nav-item').forEach(el => el.classList.add('locked'));
     store.setSwitchLocked(true);
   } else {
     overlay.style.display = 'none';
-    document.querySelectorAll('.snav-item').forEach(el => el.classList.remove('locked'));
+    document.querySelectorAll('.if-nav-item').forEach(el => el.classList.remove('locked'));
     store.setSwitchLocked(false);
   }
 });

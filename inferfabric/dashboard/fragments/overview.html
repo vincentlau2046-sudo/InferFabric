@@ -1,0 +1,44 @@
+<div class="tab-content active" id="tab-overview">
+  <div class="if-grid-2">
+    <!-- 激活模型详情卡 -->
+    <div class="if-card">
+      <div class="if-card-hdr">
+        <div class="if-card-icon" style="background:var(--if-c-primary-soft);color:var(--if-c-primary)">
+          <svg width="15" height="15"><use href="#s-cube"/></svg>
+        </div>
+        <span class="if-card-title">激活模型详情</span>
+        <span class="if-card-badge" id="ovActiveCount">0</span>
+      </div>
+      <div id="ovActive"><div class="if-empty">加载中…</div></div>
+    </div>
+    <!-- GPU & 系统 -->
+    <div class="if-card">
+      <div class="if-card-hdr">
+        <div class="if-card-icon" style="background:var(--green-s);color:var(--green)">
+          <svg width="15" height="15"><use href="#s-gpu"/></svg>
+        </div>
+        <span class="if-card-title">GPU &amp; 系统状态</span>
+      </div>
+      <div id="ovSys"><div class="if-empty">加载中…</div></div>
+    </div>
+  </div>
+
+  <!-- vLLM 实时性能（仅当存在活跃的 vLLM 服务时显示数据） -->
+  <div class="if-card" id="ovPerfCard" style="margin-top:12px">
+    <div class="if-card-hdr">
+      <div class="if-card-icon" style="background:var(--orange-s);color:var(--orange)">
+        <svg width="15" height="15"><use href="#s-bolt"/></svg>
+      </div>
+      <span class="if-card-title">vLLM 实时性能</span>
+      <span class="if-card-badge" id="ovPerfPort">—</span>
+    </div>
+    <div id="ovPerf"><div class="if-empty">无活跃 vLLM 服务</div></div>
+  </div>
+
+  <div class="if-grid-4" style="margin-top:12px">
+    <button class="if-btn if-btn-warn" onclick="doRelease('idle')">🔓 释放 GPU</button>
+    <button class="if-btn if-btn-pri" onclick="doReconcile()">⚖️ Reconcile</button>
+    <button class="if-btn if-btn-sec" onclick="doReloadConfig()">🔄 重载配置</button>
+    <button class="if-btn if-btn-warn" onclick="doReset()">⚠️ 强制重置</button>
+  </div>
+</div>

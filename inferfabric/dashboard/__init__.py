@@ -23,7 +23,7 @@ def get_html() -> str:
     try:
         base = (_DASHBOARD_DIR / "base.html").read_text(encoding="utf-8")
         # 替换 fragment 占位符
-        for frag_name in ("inference", "monitor", "deploy", "cloud"):
+        for frag_name in ("overview", "inference", "monitor", "deploy", "cloud"):
             frag_path = _DASHBOARD_DIR / "fragments" / f"{frag_name}.html"
             try:
                 frag = frag_path.read_text(encoding="utf-8")

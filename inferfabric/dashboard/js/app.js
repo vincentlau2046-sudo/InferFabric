@@ -326,7 +326,7 @@ async function load() {
   const health=s.services_health||{};
   const sInfo=s.services_info||{};
   const svcCard=document.getElementById('svcCard');
-  let svcHtml='<div style="display:flex;align-items:center;gap:10px;margin-bottom:'+(svcs.length?12:0)+'px"><div class="panel-icon" style="background:var(--blue-g);box-shadow:0 2px 6px rgba(10,132,255,.2)">📡</div><span class="panel-title">活跃服务</span></div>';
+  let svcHtml='<div class="if-card-hdr" style="margin-bottom:'+(svcs.length?12:0)+'px"><div class="if-card-icon" style="background:var(--blue-s);color:var(--blue)"><svg width="15" height="15"><use href="#s-cube"/></svg></div><span class="if-card-title">活跃服务</span></div>';
   if(svcs.length===0){
     svcHtml+='<span class="svc-empty">无活跃服务</span>';
   }else{
@@ -346,6 +346,195 @@ async function load() {
     svcHtml+='</div>';
   }
   svcCard.innerHTML=svcHtml;
+}
+
+// ── Overview (P2→P6 验收：激活模型详细状态卡片) ──
+
+function ovFormatUptime(sec) {
+  if (sec == null || sec === undefined) return '—';
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
+  let out = '';
+  if (d) out += d + 'd ';
+  if (h) out += h + 'h ';
+  out += m + 'm ' + s + 's';
+  return out;
+}
+async function loadOverview() {
+  let models = store.get('models');
+  let st = store.get('status');
+  if (!models || !st) {
+    const snap = await store.forceRefresh();
+    models = (snap && snap.models) || [];
+    st = (snap && snap.status) || {};
+  }
+  const svcs = st.active_services || [];
+  const health = st.services_health || {};
+  const sInfo = st.services_info || {};
+  const sleepSt = st.sleep_states || {};
+
+  const countEl = document.getElementById('ovActiveCount');
+  if (countEl) countEl.textContent = String(svcs.length);
+  const activeEl = document.getElementById('ovActive');
+  if (activeEl) {
+    if (svcs.length === 0) {
+      activeEl.innerHTML = '<div class="if-empty">暂无激活模型</div>';
+    } else {
+      // 卡片式：与"推理"tab 的 model-card 同一视觉语言
+      const FW_ICONS = { vllm:'🔥', ollama:'🦙', sglang:'📦', comfyui:'🎨', asr_server:'🎤', tts_server:'🔊', ollama_cpp:'📦' };
+      const FW_LABELS = { vllm:'vLLM', ollama:'Ollama', sglang:'SGLang', comfyui:'ComfyUI', asr_server:'ASR', tts_server:'TTS', ollama_cpp:'ollama.cpp' };
+      const MT_ICON = { llm:'🧠', vl:'👁', omni:'🌐', ocr:'📄', aigc:'✨', embedding:'📊', rerank:'🔄', infra:'⚙️', tts:'🔊', asr:'🎤' };
+      let html = '<div class="model-grid">';
+      for (const name of svcs) {
+        const info = sInfo[name] || {};
+        const m = models.find(x => x.name === name) || {};
+        const ok = (health[name] || '❌') === '✅';
+        const sleeping = !!sleepSt[name];
+        const badgeCls = info.mode === 'shared' ? 'shrd' : 'excl';
+        const badgeLabel = info.mode === 'shared' ? '共享' : '独占';
+        const statusCls = sleeping ? 'sleeping' : (ok ? 'running' : 'stopped');
+        const statusIcon = sleeping ? '⏸' : (ok ? '✅' : '✗');
+        const statusText = sleeping ? '休眠中' : (ok ? '运行中' : '异常');
+        const tags = [];
+        if (m.quantization) tags.push(m.quantization);
+        if (m.context_window != null) tags.push(m.context_window >= 1024 ? Math.round(m.context_window / 1024) + 'K ctx' : m.context_window + ' ctx');
+        tags.push(FW_LABELS[info.type] || info.type || '—');
+        if (m.model_type) tags.push((MT_ICON[m.model_type] || '🧠') + ' ' + m.model_type);
+        const tagsHtml = tags.map(t => '<span class="card-tag">' + t + '</span>').join('');
+        html += '<div class="model-card active">' +
+          '<div class="card-hdr">' +
+            '<div class="card-icon-box">' + (FW_ICONS[info.type] || '📦') + '</div>' +
+            '<div class="card-name">' + name + '</div>' +
+            '<span class="card-badge ' + badgeCls + '">' + badgeLabel + '</span>' +
+          '</div>' +
+          '<div class="card-status ' + statusCls + '">' +
+            '<span class="st-icon">' + statusIcon + '</span>' +
+            '<span class="st-text">' + statusText + '</span>' +
+            '<span class="st-port">:' + (info.port != null ? info.port : '—') + '</span>' +
+          '</div>' +
+          '<div class="card-tags">' + tagsHtml + '</div>' +
+          (m.description ? '<div class="ov-desc" style="margin:0 0 8px">' + m.description + '</div>' : '') +
+        '</div>';
+      }
+      html += '</div>';
+      activeEl.innerHTML = html;
+    }
+  }
+
+  // GPU & 系统状态
+  const gpu = store.get('gpu') || {};
+  const gpuUtil = store.get('gpu_util') || {};
+  const cpu = store.get('cpu') || {};
+  const mem = store.get('mem') || {};
+  const ver = store.get('version') || '';
+  const sysEl = document.getElementById('ovSys');
+  if (sysEl) {
+    const pct = gpu.pct != null ? Math.min(100, Math.max(0, gpu.pct)) : 0;
+    const barCls = pct > 90 ? 'crit' : pct > 70 ? 'warn' : '';
+    const tile = (val, label) =>
+      '<div class="m-stat">' +
+      '<span class="m-stat-val" style="font-size:16px">' + val + '</span>' +
+      '<span class="m-stat-label">' + label + '</span></div>';
+    const gpuMemTile =
+      '<div class="m-stat">' +
+      '<span class="m-stat-val" style="font-size:16px">' + pct.toFixed(1) + '%</span>' +
+      '<span class="m-stat-label">显存 ' + Number(gpu.used || 0).toLocaleString() + ' / ' + Number(gpu.total || 0).toLocaleString() + ' MB</span>' +
+      '<div style="height:5px;background:var(--if-surface-2);border-radius:999px;overflow:hidden;margin-top:8px"><div class="perf-bar-f ' + barCls + '" style="height:100%;width:' + pct + '%"></div></div>' +
+      '</div>';
+    sysEl.innerHTML =
+      '<div class="m-overview-grid">' +
+      gpuMemTile +
+      tile(gpuUtil.pct != null ? Number(gpuUtil.pct).toFixed(1) + '%' : '—', 'GPU 利用率') +
+      tile((gpuUtil.clock != null && gpuUtil.clock !== '—') ? gpuUtil.clock : '—', 'GPU 频率 (MHz)') +
+      tile((gpuUtil.power != null && gpuUtil.power !== '—') ? gpuUtil.power : '—', 'GPU 功耗 (W)') +
+      tile(cpu.pct != null ? Number(cpu.pct).toFixed(1) + '%' : '—', 'CPU 使用率') +
+      tile((cpu.cores != null && cpu.cores !== '—') ? String(cpu.cores) : '—', 'CPU 核心数') +
+      tile((mem.used || 0) + ' GB', '内存 / ' + (mem.total || 0) + ' GB') +
+      tile(ovFormatUptime(cpu.uptime), '运行时长') +
+      tile(ver || '—', '版本') +
+      '</div>';
+  }
+}
+
+// ── vLLM 实时性能（总览，60s 轮询，仅总览 tab 激活时刷新）──
+let ovPerfTimer = null;
+async function ovPerfTick() {
+  const st = store.get('status') || {};
+  const sInfo = st.services_info || {};
+  const svcs = st.active_services || [];
+  const perfEl = document.getElementById('ovPerf');
+  const portEl = document.getElementById('ovPerfPort');
+  if (!perfEl) return;
+  const vllmSvc = svcs.find(n => sInfo[n] && sInfo[n].type === 'vllm');
+  if (!vllmSvc) {
+    if (portEl) portEl.textContent = '—';
+    perfEl.innerHTML = '<div class="if-empty">无活跃 vLLM 服务</div>';
+    return;
+  }
+  const port = sInfo[vllmSvc] ? sInfo[vllmSvc].port : null;
+  if (portEl) portEl.textContent = 'port ' + port;
+  try {
+    const m = await j('/vllm_metrics?port=' + port);
+    if (m.error) {
+      perfEl.innerHTML = '<div class="if-empty">指标暂不可用（' + m.error + '）</div>';
+      return;
+    }
+    const perfCard = (label, tip, main, sub, bar) => {
+      let s = '<div class="perf-card">';
+      s += '<span class="perf-label">' + label + '</span>';
+      if (tip) s += '<span class="perf-tip">' + tip + '</span>';
+      if (bar != null) {
+        const bcls = bar > 90 ? 'crit' : bar > 70 ? 'warn' : '';
+        s += '<span class="perf-main">' + main + '</span>';
+        s += '<div class="perf-bar"><div class="perf-bar-f ' + bcls + '" style="width:' + Math.min(100, bar).toFixed(1) + '%"></div></div>';
+      } else {
+        s += '<span class="perf-main">' + main + '</span>';
+        if (sub) s += '<span class="perf-sub">' + sub + '</span>';
+      }
+      s += '</div>';
+      return s;
+    };
+    const tpot = m.tpot_seconds || {};
+    const tf = m.ttft_seconds || {};
+    let html = '<div class="perf-cards">';
+    const kv = m.kv_cache_usage_perc ?? 0;
+    html += perfCard('KV Cache', 'GPU KV 缓存占用率。>90% 容易触发抢占，导致延迟飙升', kv.toFixed(1) + '%', null, kv);
+    if (m.seq_length != null) {
+      html += perfCard('Seq Length', '平均请求长度（Prompt + Generation 总 Token 数）',
+        Number(m.seq_length).toLocaleString() + ' tokens',
+        'P ' + (m.seq_prompt != null ? Number(m.seq_prompt).toLocaleString() : '—') + ' + G ' + (m.seq_generation != null ? Number(m.seq_generation).toLocaleString() : '—') + ' (' + (m.seq_count || 0) + ' requests)');
+    }
+    if (m.tpot_cum_mean != null) {
+      html += perfCard('TPOT', 'Time Per Output Token（秒）',
+        (m.tpot_cum_mean * 1000).toFixed(1) + ' ms',
+        'P50 ' + ((tpot.p50 || 0) * 1000).toFixed(1) + 'ms | P95 ' + ((tpot.p95 || 0) * 1000).toFixed(1) + 'ms | ' + (m.tpot_cum_n || 0) + ' reqs');
+    }
+    if (m.ttft_cum_mean != null) {
+      html += perfCard('TTFT', 'Time to First Token（秒）',
+        m.ttft_cum_mean.toFixed(2) + 's',
+        '累计 ' + (m.ttft_cum_n || 0) + ' 次 | P50 ' + (tf.p50 != null ? tf.p50.toFixed(2) : '—') + 's | P95 ' + (tf.p95 != null ? tf.p95.toFixed(2) : '—') + 's');
+    } else if (tf.mean != null) {
+      html += perfCard('TTFT', 'Time to First Token（秒）',
+        tf.mean.toFixed(2) + 's',
+        'P50 ' + (tf.p50 != null ? tf.p50.toFixed(2) : '—') + 's | P95 ' + (tf.p95 != null ? tf.p95.toFixed(2) : '—') + 's | ' + (tf.count || 0) + ' 次');
+    }
+    if (m.throughput != null) {
+      let subText = 'total ' + (m.throughput_cum_n != null ? Number(m.throughput_cum_n).toLocaleString() : '0') + ' tokens';
+      if (m.throughput_inst != null && m.throughput_inst !== undefined)
+        subText += ' | ' + m.throughput_inst + ' t/s (10s)';
+      html += perfCard('Throughput', '生成吞吐量（tokens/s）', m.throughput + ' t/s (EMA)', subText);
+    }
+    html += '</div>';
+    perfEl.innerHTML = html;
+  } catch (e) {
+    perfEl.innerHTML = '<div class="if-empty">指标获取失败: ' + e.message + '</div>';
+  }
+}
+function ovPerfStart() {
+  if (ovPerfTimer) return;
+  ovPerfTimer = setInterval(() => {
+    const tab = document.getElementById('tab-overview');
+    if (tab && tab.classList.contains('active')) ovPerfTick();
+  }, 60000);
 }
 
 // ── vLLM Performance ──
@@ -875,6 +1064,17 @@ function init() {
   if (window.startPolling) startPolling();  // state.js: 3s fetch → store → render(bindings)
   load();                       // One-time: history, active svc, vLLM metrics
   loadModels();
+  loadOverview();
+  ovPerfTick();
+  ovPerfStart();
+  if (window.store && window.store.on) {
+    store.on('models', loadOverview);
+    store.on('status', loadOverview);
+    store.on('gpu', loadOverview);
+    store.on('cpu', loadOverview);
+    store.on('mem', loadOverview);
+    store.on('version', loadOverview);
+  }
   loadLocalModels();
   loadUsage();
   cloudLoadPresets();
