@@ -282,6 +282,26 @@ if (window.store) {
 }
 async function j(p,o) { return (await fetch(p,o)).json(); }
 
+// 从 store 重新检测 vLLM 服务并启动/刷新指标轮询（监控 tab 用）
+function refreshVllmMetrics() {
+  const s = store.get('status');
+  if (!s) return;
+  const svcInfo = s.services_info || {};
+  let vPort = null, vName = null;
+  for (const n of (s.active_services || [])) {
+    const info = svcInfo[n] || {};
+    if (info.type === 'vllm' && info.port) { vPort = info.port; vName = n; break; }
+  }
+  if (vPort) {
+    clearInterval(vllmTimer);
+    loadVllmMetrics(vPort, vName);
+    vllmTimer = setInterval(() => loadVllmMetrics(vPort, vName), 10000);
+  } else {
+    clearInterval(vllmTimer);
+    vllmTimer = null;
+  }
+}
+
 async function load() {
   // v5.x: render from the /api/snapshot store (single source of truth).
   let s = store.get('status');
@@ -305,21 +325,7 @@ async function load() {
     return '<div class="hrow"><span class="h-time">'+ts+'</span><span class="h-from">'+esc(h.from||'—')+'</span><span class="h-arrow">→</span><span class="h-to">'+esc(h.to)+'</span><span class="h-dur">'+d+'</span><span>'+st+'</span></div>';
   }).join('');}
 
-  // vLLM metrics detection
-  const svcInfo=s.services_info||{};
-  let vPort=null, vName=null;
-  for(const n of (s.active_services||[])){
-    const info=svcInfo[n]||{};
-    if(info.type==='vllm'&&info.port){ vPort=info.port; vName=n; break; }
-  }
-  if(vPort){
-    clearInterval(vllmTimer);
-    loadVllmMetrics(vPort,vName);
-    vllmTimer=setInterval(()=>loadVllmMetrics(vPort,vName),10000);
-  }else{
-    clearInterval(vllmTimer);
-    vllmTimer=null;
-  }
+  refreshVllmMetrics();
 
   // Active services row layout
   const svcs=s.active_services||[];
@@ -1189,6 +1195,12 @@ function init() {
     store.on('cpu', loadOverview);
     store.on('mem', loadOverview);
     store.on('version', loadOverview);
+    store.on('status', function() {
+      // 修复：快照首次到达/更新时自动刷新性能卡片，解决 60s 空白窗口
+      refreshVllmMetrics();
+      const tab = document.getElementById('tab-overview');
+      if (tab && tab.classList.contains('active')) ovPerfTick();
+    });
   }
   loadLocalModels();
   loadUsage();
