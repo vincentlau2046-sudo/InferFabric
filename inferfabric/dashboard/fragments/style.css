@@ -286,7 +286,7 @@ a:hover { text-decoration: underline; }
   margin-left: auto; font-size: var(--if-fs-sm); font-weight: 600;
   padding: 1px 8px; border-radius: var(--if-radius-pill);
 }
-#ovActive .model-card { height: 174px; }
+#ovActive .model-card { height: 310px; }
 .card-status { display: flex; align-items: center; gap: 6px; font-size: var(--if-fs-sm); margin-bottom: 12px; }
 .card-status .st-icon { font-size: var(--if-fs-sm); }
 .card-status .st-text { font-weight: 500; }
@@ -622,7 +622,6 @@ th { color: var(--if-text-3); font-weight: 600; font-size: var(--if-fs-sm); text
 .m-stat-label { font-size: var(--if-fs-sm); color: var(--if-text-3); }
 .if-card { background: var(--if-surface); border: 1px solid var(--if-border); border-radius: var(--if-radius-card); box-shadow: var(--if-shadow-card); }
 .if-card-hdr { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--if-border); }
-.if-card-hdr { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--if-border); }
 .if-card-hdr.collapsible { cursor: pointer; }
 
 .if-card-icon { width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--if-radius-sm); background: var(--if-surface-2); color: var(--if-text-2); flex-shrink: 0; }
@@ -647,12 +646,30 @@ th { color: var(--if-text-3); font-weight: 600; font-size: var(--if-fs-sm); text
 .if-btn-danger { background: var(--if-c-red); border-color: var(--if-c-red); color: #fff; }
 .if-btn-ghost { background: transparent; border-color: transparent; color: var(--if-text-2); }
 .if-btn-ghost:hover { background: var(--if-surface-2); }
+/* ── 总览页：本地模型使用统计 (v5.7) ── */
+.ov-g-toggle { margin-left: auto; display: flex; gap: 4px; }
+.ov-g-btn {
+  padding: 2px 10px; font-size: var(--if-fs-sm); font-weight: 600;
+  border: 1px solid var(--if-border); border-radius: var(--if-radius-pill);
+  background: var(--if-surface); color: var(--if-text-2); cursor: pointer; transition: all .15s;
+}
+.ov-g-btn:hover { border-color: var(--if-c-primary); color: var(--if-c-primary); }
+.ov-g-btn.active { background: var(--if-c-primary); border-color: var(--if-c-primary); color: #fff; }
+.ov-curve-svg { display: block; width: 100%; height: auto; }
+.ov-curve-svg text { fill: var(--if-text-3); font-size: var(--if-fs-sm); }
+#ovTokenCurveChart {
+  background: var(--if-surface-2); border: 1px solid var(--if-border);
+  border-radius: var(--if-radius-sm); overflow: hidden;
+}
+.ov-curve-summary {
+  padding: 6px 12px; font-size: var(--if-fs-sm); color: var(--if-text-3);
+  border-top: 1px solid var(--if-border); font-variant-numeric: tabular-nums;
+}
 .if-grid { display: grid; gap: var(--if-space-3); }
 .if-grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--if-space-3); }
 .if-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--if-space-3); }
 .if-grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--if-space-3); }
 .if-empty { padding: 24px; text-align: center; color: var(--if-text-3); font-size: var(--if-fs-sm); }
-.ov-desc { color: var(--if-text-2); font-size: var(--if-fs-base); font-weight: 400; }
 .ov-desc { color: var(--if-text-2); font-size: var(--if-fs-base); font-weight: 400; }
 @media (max-width: 1024px) { .if-grid-3, .if-grid-4 { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 640px) { .if-grid-2, .if-grid-3, .if-grid-4 { grid-template-columns: 1fr; } }

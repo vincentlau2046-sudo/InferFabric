@@ -76,6 +76,7 @@ _GET_ROUTES = {
     "/api/metrics":             lambda h, pm: h._handle_api_metrics(pm),
     "/api/request_log":         lambda h, pm: h._handle_request_log(pm),
     "/api/token-stats":         lambda h, pm: h._handle_token_stats(pm),
+    "/api/token-curve":         lambda h, pm: h._handle_token_curve(pm),
     "/api/snapshot":            lambda h, pm: h._handle_snapshot(pm),
     "/history":                 lambda h, pm: h._send_json(pm.mgr.state.get_history(limit=30)),
     "/vllm_metrics":            lambda h, pm: h._handle_vllm_metrics(pm),
@@ -598,6 +599,68 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             log.error("/api/token-stats failed: %s", e)
             self._send_json({"error": "token stats unavailable"}, 500)
+
+    def _handle_token_curve(self, pm):
+        """GET /api/token-curve — 本地模型 Token 使用曲线 (v5.7)。
+
+        ?granularity=hour|day|month
+        hour  : 最近 1h  → x = 分钟 (0–59)，60 桶
+        day   : 最近 24h → x = 小时 (0–23)，24 桶
+        month : 最近 30d → x = 天 (1–31)，31 桶
+        Y 轴 = tokens_in + tokens_out 总和
+        """
+        from urllib.parse import urlparse, parse_qs
+        from datetime import datetime, timedelta, timezone
+
+        try:
+            qs = parse_qs(urlparse(self.path).query or "")
+            g = (qs.get("granularity", ["hour"])[0]).lower()
+            specs = {
+                "hour":  {"since": 3600,       "buckets": 60, "xkey": "minute"},
+                "day":   {"since": 86400,      "buckets": 24, "xkey": "hour"},
+                "month": {"since": 30 * 86400, "buckets": 31, "xkey": "day"},
+            }
+            if g not in specs:
+                self._send_json({"error": f"invalid granularity: {g}"}, 400)
+                return
+            spec = specs[g]
+            since = int(time.time() - spec["since"])
+            tz8 = timezone(timedelta(hours=8))
+            rows = pm.telemetry.query_request_log(since=since, limit=100000)
+
+            n = spec["buckets"]
+            # 月档 x 轴为日号 (1-31)，其余档 x 从 0 起
+            x_start = 1 if g == "month" else 0
+            local_b = [{"x": x_start + i, "tokens": 0, "requests": 0} for i in range(n)]
+            cloud_b = [{"x": x_start + i, "tokens": 0, "requests": 0} for i in range(n)]
+
+            def x_of(ts):
+                dt = datetime.fromtimestamp(ts, tz=tz8)
+                return {"minute": dt.minute, "hour": dt.hour, "day": dt.day}[spec["xkey"]]
+
+            for r in rows:
+                ts = r.get("timestamp")
+                if ts is None:
+                    continue
+                try:
+                    x = x_of(ts)
+                except (ValueError, OSError):
+                    continue
+                tokens = int(r.get("tokens_in") or 0) + int(r.get("tokens_out") or 0)
+                target = cloud_b if r.get("cloud_provider") else local_b
+                idx = x - x_start
+                if 0 <= idx < n:
+                    target[idx]["tokens"] += tokens
+                    target[idx]["requests"] += 1
+
+            self._send_json({
+                "granularity": g,
+                "local": local_b,
+                "cloud": cloud_b,
+            }, 200)
+        except Exception as e:
+            log.error("/api/token-curve failed: %s", e)
+            self._send_json({"error": "token curve unavailable"}, 500)
 
     def _handle_snapshot(self, pm):
         """GET /api/snapshot — single consistent control-plane snapshot.

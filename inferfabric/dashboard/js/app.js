@@ -1077,6 +1077,98 @@ document.addEventListener('click',e=>{
   loadUsage();
 });
 
+// ── 本地模型使用曲线 (v5.7) ──
+let ovTokenGranularity = 'hour';
+
+async function loadTokenCurve() {
+  const el = document.getElementById('ovTokenCurveChart');
+  if (!el) return;
+  try {
+    const cw = el.clientWidth > 0 ? el.clientWidth : 760; // viewBox 宽度=容器宽度 → 缩放比 1:1
+    const r = await j('/api/token-curve?granularity=' + ovTokenGranularity);
+    const buckets = r.local || [];
+    const hasData = buckets.some(b => (b.tokens || 0) > 0);
+    if (!hasData) {
+      el.innerHTML = '<div class="if-empty">暂无使用数据</div>';
+      return;
+    }
+    el.innerHTML = renderTokenCurve(r, cw);
+  } catch (e) {
+    el.innerHTML = '<div class="if-empty">' + esc(e.message || '加载失败') + '</div>';
+  }
+}
+
+function fmtTok(v) {
+  if (v >= 1e9) return Math.round(v / 1e9) + 'B';
+  if (v >= 1e6) return Math.round(v / 1e6) + 'M';
+  if (v >= 1e3) return Math.round(v / 1e3) + 'K';
+  return String(v);
+}
+
+function renderTokenCurve(r, W) {
+  const g = r.granularity;
+  const buckets = r.local || [];
+  W = W || 760; // viewBox 宽度跟随容器，保证 1:1 渲染
+  const H = 156; // 框整体放大 20%
+  const pad = { t: 8, r: 12, b: 20, l: 56 };
+  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+  const n = buckets.length;
+  const maxTok = Math.max(...buckets.map(b => b.tokens || 0), 1);
+  function niceMax(v) {
+    const p = Math.pow(10, Math.floor(Math.log10(v)));
+    const m = v / p;
+    return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p;
+  }
+  const yMax = niceMax(maxTok);
+  const x = i => pad.l + (n <= 1 ? iw / 2 : i * (iw / (n - 1)));
+  const y = v => pad.t + ih * (1 - v / yMax);
+  const pts = buckets.map((b, i) => [x(i), y(b.tokens || 0)]);
+
+  // 坐标文字回归 SVG 内（与图形一体）；viewBox=容器宽 → 1:1 真实 px
+  const step = g === 'hour' ? 15 : g === 'day' ? 6 : 5;
+  const offset = g === 'month' ? 1 : 0; // 月档 x 为日号 1-31
+  const lastB = buckets[buckets.length - 1];
+  let xticks = '';
+  for (const b of buckets) {
+    if ((b.x - offset) % step === 0 || b === lastB) {
+      const i = buckets.indexOf(b);
+      xticks += '<text x="' + x(i) + '" y="' + (H - 5) + '" text-anchor="middle">' + b.x + '</text>';
+    }
+  }
+  let ygrid = '';
+  for (let s = 0; s <= 4; s++) {
+    const v = Math.round(yMax * s / 4);
+    const yy = y(v);
+    ygrid += '<line x1="' + pad.l + '" y1="' + yy + '" x2="' + (W - pad.r) + '" y2="' + yy + '" stroke="var(--if-border)" stroke-dasharray="3 3"/>' +
+      '<text x="' + (pad.l - 8) + '" y="' + (yy + 4) + '" text-anchor="end">' + fmtTok(v) + '</text>';
+  }
+  const linePts = pts.map(p => p.map(v => Math.round(v * 100) / 100).join(',')).join(' ');
+  const last = pts[pts.length - 1];
+  const segs = pts.map(p => 'L ' + Math.round(p[0] * 100) / 100 + ' ' + Math.round(p[1] * 100) / 100);
+  const area = 'M ' + pad.l + ' ' + (pad.t + ih) + ' ' + segs.join(' ') +
+    ' L ' + (Math.round(last[0] * 100) / 100) + ' ' + (pad.t + ih) + ' Z';
+
+  const totalTok = buckets.reduce((s, b) => s + (b.tokens || 0), 0);
+  const totalReq = buckets.reduce((s, b) => s + (b.requests || 0), 0);
+
+  return '<svg class="ov-curve-svg" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto">' +
+    ygrid + xticks +
+    '<path d="' + area + '" fill="var(--if-c-primary-soft)" stroke="none"/>' +
+    '<polyline points="' + linePts + '" fill="none" stroke="var(--if-c-primary)" stroke-width="2"/>' +
+    pts.map(p => '<circle cx="' + (Math.round(p[0] * 100) / 100) + '" cy="' + (Math.round(p[1] * 100) / 100) + '" r="2" fill="var(--if-c-primary)"/>').join('') +
+    '</svg>' +
+    '<div class="ov-curve-summary">合计 ' + fmtTok(totalTok) + ' tokens · ' + totalReq + ' 次请求</div>';
+}
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('.ov-g-btn');
+  if (!t) return;
+  document.querySelectorAll('.ov-g-btn').forEach(b => b.classList.remove('active'));
+  t.classList.add('active');
+  ovTokenGranularity = t.dataset.g;
+  loadTokenCurve();
+});
+
 
 // ── Initialization (P0: migrated to store-driven) ──
 function init() {
@@ -1098,6 +1190,7 @@ function init() {
   }
   loadLocalModels();
   loadUsage();
+  loadTokenCurve();
   cloudLoadPresets();
   cloudLoadProviders();
   // v5.x: The 3s /api/snapshot poller is the only periodic refresh —
@@ -1114,6 +1207,7 @@ function refreshPanels() {
   loadModels();
   loadLocalModels();
   loadUsage();
+  loadTokenCurve();
 }
 window.refreshPanels = refreshPanels;
 

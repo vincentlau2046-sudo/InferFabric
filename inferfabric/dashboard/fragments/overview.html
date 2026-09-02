@@ -46,10 +46,21 @@
     <div id="ovPerf"><div class="if-empty">无活跃 vLLM 服务</div></div>
   </div>
 
-  <div class="if-grid-4" style="margin-top:12px">
-    <button class="if-btn if-btn-warn" onclick="doRelease('idle')">🔓 释放 GPU</button>
-    <button class="if-btn if-btn-pri" onclick="doReconcile()">⚖️ Reconcile</button>
-    <button class="if-btn if-btn-sec" onclick="doReloadConfig()">🔄 重载配置</button>
-    <button class="if-btn if-btn-warn" onclick="doReset()">⚠️ 强制重置</button>
+  <!-- 本地模型使用统计 (v5.7: Token 使用曲线) -->
+  <div class="if-card" id="ovTokenCurveCard" style="margin-top:12px">
+    <div class="if-card-hdr">
+      <div class="if-card-icon" style="background:var(--purple-s);color:var(--purple)">
+        <svg width="15" height="15"><use href="#s-chart"/></svg>
+      </div>
+      <span class="if-card-title">本地模型使用统计</span>
+      <div class="ov-g-toggle">
+        <button class="ov-g-btn active" data-g="hour">小时</button>
+        <button class="ov-g-btn" data-g="day">天</button>
+        <button class="ov-g-btn" data-g="month">月</button>
+      </div>
+    </div>
+    <div class="if-card-body">
+      <div id="ovTokenCurveChart"><div class="if-empty">加载中…</div></div>
+    </div>
   </div>
 </div>
