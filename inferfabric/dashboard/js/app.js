@@ -390,8 +390,10 @@ async function loadOverview() {
         const ec = m.engine_config || {};
         const ok = (health[name] || '❌') === '✅';
         const sleeping = !!sleepSt[name];
-        const badgeCls = info.mode === 'shared' ? 'shrd' : 'excl';
-        const badgeLabel = info.mode === 'shared' ? '共享' : '独占';
+        // 三态映射：exclusive→独占，shared→共享，其余（none 等）→空闲
+        const mode = info.mode || 'none';
+        const badgeCls = mode === 'shared' ? 'shrd' : (mode === 'exclusive' ? 'excl' : 'idle');
+        const badgeLabel = mode === 'shared' ? '共享' : (mode === 'exclusive' ? '独占' : '空闲');
         const statusCls = sleeping ? 'sleeping' : (ok ? 'running' : 'stopped');
         const statusIcon = sleeping ? '⏸' : (ok ? '✅' : '✗');
         const statusText = sleeping ? '休眠中' : (ok ? '运行中' : '异常');

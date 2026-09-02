@@ -286,6 +286,9 @@ a:hover { text-decoration: underline; }
   margin-left: auto; font-size: var(--if-fs-sm); font-weight: 600;
   padding: 1px 8px; border-radius: var(--if-radius-pill);
 }
+.card-badge.excl { background: var(--green-s); color: var(--green); }
+.card-badge.shrd { background: var(--purple-s); color: var(--purple); }
+.card-badge.idle { background: var(--if-surface-2); color: var(--if-text-3); border: 1px solid var(--if-border); }
 #ovActive .model-card { height: 310px; }
 .card-status { display: flex; align-items: center; gap: 6px; font-size: var(--if-fs-sm); margin-bottom: 12px; }
 .card-status .st-icon { font-size: var(--if-fs-sm); }
