@@ -37,13 +37,6 @@
     </div>
   </div>
 
-  <div style="display:flex;flex-wrap:wrap;gap:8px;margin:14px 0">
-    <button class="if-btn if-btn-pri" onclick="doSwitch('idle')">🔓 释放 GPU</button>
-    <button class="if-btn if-btn-sec" onclick="doReconcile()">⚖️ Reconcile</button>
-    <button class="if-btn if-btn-sec" onclick="doReloadConfig()">🔄 重载配置</button>
-    <button class="if-btn if-btn-warn" onclick="doReset()">⚠️ 强制重置</button>
-  </div>
-
   <!-- S3: 推理 Chat 面板 (底部, 不常用) -->
   <div class="if-card inference-panel">
     <div class="if-card-hdr collapsible" onclick="this.classList.toggle('open');this.nextElementSibling.classList.toggle('open')">

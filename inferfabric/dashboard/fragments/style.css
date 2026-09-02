@@ -180,7 +180,7 @@ a:hover { text-decoration: underline; }
 .sidebar-status-dot.ok { background: var(--if-metric-safe); }
 .sidebar-status-dot.err { background: var(--if-metric-crit); animation: ifPulse 1.2s infinite; }
 @keyframes ifPulse { 50% { opacity: .35; } }
-.if-main { flex: 1; min-width: 0; padding: var(--if-space-4); }
+.if-main { flex: 1; min-width: 0; padding: var(--if-space-4); padding-bottom: 60px; }
 .if-metrics {
   position: sticky; top: 48px; z-index: 10;
   display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--if-space-3);
@@ -649,6 +649,18 @@ th { color: var(--if-text-3); font-weight: 600; font-size: var(--if-fs-sm); text
 .if-btn-danger { background: var(--if-c-red); border-color: var(--if-c-red); color: #fff; }
 .if-btn-ghost { background: transparent; border-color: transparent; color: var(--if-text-2); }
 .if-btn-ghost:hover { background: var(--if-surface-2); }
+
+/* ── 控制栏 (固定底部) ── */
+.if-ctrls {
+  position: fixed; bottom: 0; left: 232px; right: 0;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 10px 24px;
+  background: color-mix(in srgb, var(--if-surface-1) 94%, transparent);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border-top: 1px solid var(--if-border);
+  box-shadow: 0 -2px 12px rgba(0,0,0,.06);
+  z-index: 100;
+}
 /* ── 总览页：本地模型使用统计 (v5.7) ── */
 .ov-g-toggle { margin-left: auto; display: flex; gap: 4px; }
 .ov-g-btn {

@@ -190,6 +190,14 @@
   </div>
 </div>
 
+  <!-- 控制栏 (固定底部，所有 TAB 可见) -->
+  <div class="if-ctrls">
+    <button class="if-btn if-btn-pri" onclick="doSwitch('idle')">🔓 释放 GPU</button>
+    <button class="if-btn if-btn-sec" onclick="doReconcile()">⚖️ Reconcile</button>
+    <button class="if-btn if-btn-sec" onclick="doReloadConfig()">🔄 重载配置</button>
+    <button class="if-btn if-btn-warn" onclick="doReset()">⚠️ 强制重置</button>
+  </div>
+
 <!-- Toast -->
 <div class="toast-banner" id="toast"></div>
 <!-- API Error Banner -->
