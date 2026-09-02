@@ -12,9 +12,9 @@ sglang:
   served_name: muse-glimmer
   port: 8006
   conda_env: ""
-  mem_fraction: 0.85
+  mem_fraction: 0.90
   docker_image: lmsysorg/sglang:dev-muse-glimmer
-  context_length: 131072
+  context_length: 139264
   max_running_requests: 8
   cpu_offload_gb: 16
   enable_lmcache: true
