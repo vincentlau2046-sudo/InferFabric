@@ -12,13 +12,13 @@ vllm:
   port: 8005
   conda_env: gemma-4-31b
   gpu_memory_utilization: 0.92
-  max_model_len: 204800
-  max_num_seqs: 8
+  max_model_len: 163840
+  max_num_seqs: 4
   kv_cache_dtype: fp8
   startup_timeout: 480
   extra_flags: >-
     --enable-prefix-caching
-    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_num_of_warmups": 1, "cudagraph_capture_sizes": [1, 2, 4, 8]}'
+    --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_num_of_warmups": 1, "cudagraph_capture_sizes": [1, 2, 3, 4]}'
     --enable-chunked-prefill
     --async-scheduling
     --enable-auto-tool-choice
