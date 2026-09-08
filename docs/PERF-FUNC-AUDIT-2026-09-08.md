@@ -125,6 +125,53 @@
 3. 性能侧按"快速胜利"清单逐项落实（nvidia-smi 缓存、连接池、N+1 合并、前端防抖）
 4. 测试侧：修复 49 个陈旧断言 + 补齐第七节测试缺口
 
+## 十四、模型配置元数据驱动方案审查（2026-09-09）
+
+> 审查视角：模型配置以 `models.d/*.yaml` 为唯一事实源（元数据驱动），逐层核查代码是否真正读取元数据，找出"应读元数据却硬编码"的 bug 与优化点。
+
+### 审查结论
+
+- **主路径是元数据驱动的**：核心启动参数（port、conda_env、served_name、model_type、gpu_role、max_model_len、gpu_memory_utilization 等）全部由 `models.d/*.yaml` 声明，`config.py:523-735` 的 `load_models()` 是单一加载入口，带 `name == 文件名` 校验（`config.py:548-552`）。
+- **413 上下文守卫已元数据驱动**（commit 4dc92c0/40d231c）：`forwarder.py:371-415` 的 `check_context_window()` 读取 `ModelConfig.max_context_len`（`config.py:431-443` 多态分发 `vllm.max_model_len` / `sglang.context_length` / `ollama_cpp.context_size`），超限 413 拒绝且不重试（`forwarder.py:453-465` 对上游 500 "maximum context length" 也统一转 413）。
+- **VRAM 预算守卫也是元数据驱动**：`model_lifecycle.py:90-108` 读 `peak_vram_mb` 元数据（`config.py:729` 从 YAML 解析）。
+- 但仍存在多处**未读元数据、直接硬编码**的位置，按严重程度排列如下。
+
+### 硬编码 bug（应读元数据却写死）
+
+**P0 — 影响正确性**
+
+1. **Ollama daemon 端口 11434 多处硬编码**：`config.py:410`（`ModelConfig.port` 的 `type: ollama` 分支直接 `return 11434`）、`config.py:509`（`health_url` 硬编码 `http://localhost:11434/api/tags`）、`engine_adapter/ollama.py:25`（健康检查硬编码）、`manager.py:254`（`check_ollama_health(port=11434)` 默认参数）。而 `ollama-daemon.yaml` 已声明 `ollama_daemon.port: 11434` 和 `health_url`——daemon 端口一旦在 YAML 变更，`type: ollama` 模型的 `.port`/`.health_url` 仍指向旧端口。**建议**：统一改为读取 daemon 的 `ollama_daemon.port` / `health_url` 元数据。
+2. **`process_manager/facade.py:332`**：`force_kill_all` 硬编码端口列表 `[8000, 8001, 8002]`。实际 vLLM 端口分布在 8002/8003/8004/8005/8008/8010/8011（8000/8001 无模型使用）→ 清理覆盖不全。**建议**：从 `load_models()` 动态读取 `.vllm.port` / `.sglang.port` 生成列表。
+3. **`process_manager/vllm.py:264`**：`_pkill_vllm_fallback` 同样硬编码 `[8000, 8001, 8002]`（257-261 行先尝试 `load_models` 动态读取，异常时才回退到该硬编码 fallback，但 fallback 列表覆盖不全）。
+4. **`forwarder.py:424`**：`served_name` 缺失时 fallback 到硬编码旧模型名 `"vllm_qwen27b"`（已不存在的模型）。**建议**：fallback 改为 `model_obj.name`（YAML key）。
+
+**P1 — 影响扩展性**
+
+5. **`facade.py:355-367`**：`force_kill_all` 中 TTS/ASR 清理硬编码端口 8880（TTS）/ 8881（ASR）及进程名 `Qwen3-TTS-Openai-Fastapi/api`、`funasr-server`。建议从 `load_models()` 读 `tts_server.port` / `asr_server.port` 与进程名元数据。
+6. **`model_discovery.py:174-178`**：`auto_deploy_model()` 生成的 vLLM YAML 模板硬编码 `conda_env: qw36-27b-vllm`、`gpu_memory_utilization: 0.83`、`max_model_len: 131072`、`max_num_seqs: 4`——对新模型类型不适用。建议：这些参数由仪表盘 Deploy 表单传入（表单已有对应输入项），模板仅保留结构。
+7. **`forwarder.py:267-285`**：`estimate_tokens` 的 `len(text)//4` 粗估系数与每图 `1000` token 估值均为硬编码。**建议**：YAML 增加可选字段 `estimate_ratio`（默认 0.25）、`estimate_image_tokens`（默认 1000），`ModelConfig` 暴露后 `estimate_tokens()` 读取。
+8. **`forwarder.py:385`**：413 守卫中 `max_output` 默认值 8192 硬编码。**建议**：YAML 增加可选字段 `default_max_output_tokens`（默认 8192），守卫优先读取。
+9. **`config.py:91-110`**：`VLLMConfig.build_cmd()` 中 `--host 0.0.0.0`（99 行）与 `--kv-offloading-backend native`（104 行）为代码内写死；高频参数 `--trust-remote-code`、`--tool-call-parser`、`--reasoning-parser`、`--enable-prefix-caching`、`--enable-chunked-prefill`、`--async-scheduling`、`--enable-auto-tool-choice`、`--max-num-batched-tokens`、`--attention-backend` 目前藏在 `extra_flags` 自由字符串里。**建议**：提升为 `VLLMConfig` 显式结构化字段（`SGLangConfig` 已完成同类迁移：`config.py:128-139` 的 `context_length`/`reasoning_parser`/`tool_call_parser` 是好的迁移范例），`build_cmd()` 自动 emit。
+10. **`config.py:207`**：`ComfyUIConfig` 默认 `extra_flags = "--cache-none --enable-manager"`，而 `comfyui.yaml` 已移除 `--cache-none`（commit 6c1a5ed）→ 默认值与 YAML 值不一致；YAML 未声明 `extra_flags` 时 `--cache-none` 会被默认值重新注入。**建议**：默认值改 `""`，参数强制由 YAML 声明。
+
+**P2 — 文档/元数据一致性**
+
+11. **主 README 端口表过期**：`8001 qwen38-27b-vl`（实际 `qwen38-27b-abliterated` 用 8002）、`8002 qwen3-vl-4b`（实际 8003）；漏掉 8004（ovis-ocr2）、8005（gemma4-31b-vl）、8006（muse-glimmer）、8008（qwen36-35b-vl）、8010/8011（P/D 分离）、8881（asr-sensevoice）、11442（bge-reranker-v2-m3）。
+12. **`models.d/README.md`**：`muse-glimmer-vl.yaml` 的类型列登记为 `vllm`，而 YAML 实际 `type: sglang`（同一行描述列写 "(SGLang)"，与类型列自相矛盾）。
+13. **主 README 版本史只写到 v5.5.1**，实际 `__version__ = "5.6.5"`。
+
+### 已做对的（元数据驱动，值得保留）
+
+- `config.py:431-443` `ModelConfig.max_context_len` 多态分发（`vllm.max_model_len` / `sglang.context_length` / `ollama_cpp.context_size`）
+- `config.py:396-428` `ModelConfig.port` / `served_name` 多态接口
+- `config.py:523-735` `load_models()` 元数据加载单一入口 + `name==文件名` 校验（548-552）
+- `config.py:88-111` `VLLMConfig.build_cmd()` 端口/模型路径/env 均读元数据；`extra_env` 保护键校验（`config.py:567-578`）
+- `config.py:145-173` `SGLangConfig.build_cmd()` 结构化字段已从 `extra_flags` 迁移（`config.py:128-139`）
+- `forwarder.py:371-415` 元数据驱动 413 守卫（`model_obj.max_context_len` + `estimate_tokens` 粗估 + `forwarder.py:326-353` `_vllm_tokenize` 精确计数 + `forwarder.py:453-465` 500 溢出检测统一转 413）
+- `model_lifecycle.py:90-108` 与 `:219-231` VRAM 预算守卫读 `peak_vram_mb`
+- `engine_adapter/{vllm,sglang,ollama,comfyui,tts,asr}.py` 全部从 `ModelConfig` 元数据读 port / health_url
+- 仪表盘 JS（`state.js`/`monitor.js`/`app.js`）无硬编码端口/模型名，全部来自 `/api/snapshot` 的 `services_info[].port` 与 `models[]`
+
 ## 十三、元数据驱动视角审查（2026-09-09）
 
 > 专项只读审查（Explore agent，36 次工具调用，覆盖 .py/.js/tests/docs）。结论先行：核心启动参数（port / conda_env / served_name / model_type / gpu_role / max_model_len / gpu_memory_utilization）绝大部分已由 `models.d/*.yaml` 驱动；413 上下文窗口守卫在 4dc92c0/40d231c 后已改为元数据驱动。以下硬编码问题按优先级排列。
