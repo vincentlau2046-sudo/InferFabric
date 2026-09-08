@@ -428,6 +428,21 @@ class ModelConfig:
         return self.name
 
     @property
+    def max_context_len(self) -> Optional[int]:
+        """Unified context window (input+output total) per backend metadata.
+
+        PR-ctx: proxy 侧据此在转发前估算 token 数，超限 413 拒绝。
+        未声明 (None) → 不强制。
+        """
+        if self.vllm:
+            return self.vllm.max_model_len
+        if self.sglang:
+            return self.sglang.context_length
+        if self.ollama_cpp:
+            return self.ollama_cpp.context_size
+        return None
+
+    @property
     def needs_gpu(self) -> bool:
         return self.gpu_role != "none"
 

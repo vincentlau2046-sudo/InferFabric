@@ -250,6 +250,14 @@ def handle_chat(handler, pm, data):
             data["model"] = model_obj.served_name
         if model_obj and (model_obj.is_ollama or model_obj.is_ollama_cpp):
             ollama_model_obj = model_obj
+        # PR-ctx: 元数据驱动 context 守卫 — 估算超限直接 413，让客户端自己处理
+        if model_obj and not forwarder.check_context_window(handler, data, model_obj):
+            pm.logger.log(RequestLog(
+                req_id=req_id, key_name=key_name, model=model,
+                status=413, error="context_window_exceeded", route="local",
+                duration_ms=(time.monotonic() - handler._req_start) * 1000,
+            ))
+            return
 
     if ollama_model_obj and (ollama_model_obj.is_ollama or ollama_model_obj.is_ollama_cpp):
         handle_ollama_native(handler, pm, data, target_port, ollama_model_obj)

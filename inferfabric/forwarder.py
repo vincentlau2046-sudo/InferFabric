@@ -19,6 +19,7 @@ from inferfabric.config import (
     exponential_backoff,
     should_retry_on_status,
 )
+from inferfabric.proxy.request_logger import RequestLog
 from inferfabric.proxy.sse_buffer import SSELineBuffer
 
 
@@ -247,6 +248,63 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
         )
 
 
+# ── PR-ctx: context window guard (metadata-driven) ──
+
+
+def estimate_tokens(data: dict) -> int:
+    """Rough token estimate: len(text)/4 (chars→tokens, no tokenizer).
+
+    粗略估算（user-confirmed）。覆盖 system / messages（str 或 content blocks）/ tools。
+    """
+    total = 0
+    system = data.get("system")
+    if isinstance(system, str):
+        total += max(len(system) // 4, 1)
+    elif isinstance(system, list):
+        for block in system:
+            if isinstance(block, dict) and block.get("type") == "text":
+                total += max(len(block.get("text", "")) // 4, 1)
+    for msg in data.get("messages", []) or []:
+        content = msg.get("content")
+        if isinstance(content, str):
+            total += max(len(content) // 4, 1)
+        elif isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "text":
+                    total += max(len(block.get("text", "")) // 4, 1)
+                elif block.get("type") == "image":
+                    total += 1000  # 每图块固定粗估
+    for tool in data.get("tools", []) or []:
+        total += max(len(json.dumps(tool, ensure_ascii=False)) // 4, 1)
+    return total
+
+
+def check_context_window(handler, data: dict, model_obj) -> bool:
+    """PR-ctx: context window guard — 超限直接 413，让客户端自己处理。
+
+    元数据驱动：上限来自 model_obj.max_context_len（模型 YAML 声明）。
+    未声明 (None) → 不强制，直接放行。
+    返回 True=放行，False=已发 413。
+    """
+    max_ctx = model_obj.max_context_len
+    if not max_ctx:
+        return True
+    max_output = data.get("max_tokens") or data.get("max_completion_tokens") or 8192
+    input_budget = max_ctx - max_output
+    est = estimate_tokens(data)
+    if est > input_budget:
+        err = (
+            f"Context window exceeded: estimated {est} input tokens + "
+            f"{max_output} output tokens > {max_ctx} context limit "
+            f"(model: {model_obj.name})"
+        )
+        send_json(handler, {"error": err}, 413)
+        return False
+    return True
+
+
 # ── Local forward with retry chain ──
 
 
@@ -254,6 +312,15 @@ def forward_anthropic_local(handler, pm, data, auth_header, model_obj, original_
     """CCR-style retry chain: local vLLM + exponential backoff → error on exhaustion."""
     was_stream = data.get("stream", False)
     data["model"] = model_obj.served_name or "vllm_qwen27b"
+    # PR-ctx: 元数据驱动 context 守卫 — 超限 413 拒绝，不转发
+    if not check_context_window(handler, data, model_obj):
+        pm.logger.log(RequestLog(
+            req_id=pm.new_request_id(),
+            key_name=pm.auth.key_name(auth_header) if pm.auth.enabled else "anonymous",
+            model=data.get("model", ""),
+            status=413, error="context_window_exceeded", route="local",
+        ))
+        return
     body = json.dumps(data).encode("utf-8")
 
     last_error = None
