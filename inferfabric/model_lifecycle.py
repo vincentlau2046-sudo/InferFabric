@@ -392,6 +392,10 @@ class ModelLifecycle:
         }
 
     def _switch_to_idle(self) -> dict:
+        # v5.6.8 debug: log stack trace on every switch-to-idle to trace mysterious caller
+        import traceback
+        log.info("_switch_to_idle() caller:\n%s", "".join(traceback.format_stack()[:-1]))
+
         """Stop all services and transition to idle.  Captures service list
         before reconcile to avoid the gpu_mode/active_services drift where
         reconcile sets mode=IDLE but services are still in active_services.

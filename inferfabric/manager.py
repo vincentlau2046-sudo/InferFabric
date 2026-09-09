@@ -258,6 +258,10 @@ class ModelManager:
     # ── Switch ────────────────────────────────────────────────────
 
     def switch(self, target: str) -> dict:
+        # v5.6.8 debug: log stack trace on every switch to trace mysterious caller
+        import traceback
+        log.info("switch(%r) caller:\n%s", target, "".join(traceback.format_stack()[:-1]))
+
         """Switch to target model/service.
 
         Two orthogonal paths dispatched by gpu_role:
