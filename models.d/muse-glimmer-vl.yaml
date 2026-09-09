@@ -14,7 +14,7 @@ sglang:
   conda_env: ""
   mem_fraction: 0.90
   docker_image: lmsysorg/sglang:dev-muse-glimmer
-  context_length: 139264
+  context_length: 163840
   max_running_requests: 8
   cpu_offload_gb: 16
   enable_lmcache: true

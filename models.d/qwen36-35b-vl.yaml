@@ -10,7 +10,7 @@ vllm:
   served_name: qwen36-35b-vl
   port: 8008
   conda_env: qwen36-35b-vl
-  max_model_len: 262144
+  max_model_len: 163840
   gpu_memory_utilization: 0.85
   max_num_seqs: 4
   kv_cache_dtype: fp8
