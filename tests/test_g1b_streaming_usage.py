@@ -187,3 +187,49 @@ class TestSSELineBuffer:
         buf.flush()
         assert buf.usage["prompt_tokens"] == 15
         assert buf.usage["completion_tokens"] == 7
+
+    def test_anthropic_message_start_nested_usage(self):
+        """Anthropic message_start：usage 嵌套在 message 下（input_tokens）。"""
+        buf = SSELineBuffer()
+        event = b"event: message_start\ndata: " + json.dumps({
+            "type": "message_start",
+            "message": {
+                "id": "msg_test",
+                "model": "qwen38-27b-abliterated",
+                "usage": {"input_tokens": 105},
+            },
+        }).encode() + b"\n\n"
+        buf.feed(event)
+        buf.flush()
+        assert buf.usage["prompt_tokens"] == 105
+        assert buf.usage["completion_tokens"] == 0
+
+    def test_anthropic_stream_full_sequence(self):
+        """Anthropic 完整流式序列：message_start(input) → content_block_delta × N → message_delta(output)。
+
+        验证按字段合并：message_delta 的 usage 只有 output_tokens，
+        不会把 message_start 已提取的 input_tokens 清零。
+        """
+        buf = SSELineBuffer()
+        # message_start（含嵌套 message.usage.input_tokens）
+        buf.feed(b"event: message_start\ndata: " + json.dumps({
+            "type": "message_start",
+            "message": {"id": "msg_x", "usage": {"input_tokens": 105}},
+        }).encode() + b"\n\n")
+        # content_block_delta（无 usage）
+        for i in range(3):
+            buf.feed(b"event: content_block_delta\ndata: " + json.dumps({
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": f"word{i} "},
+            }).encode() + b"\n\n")
+        # message_delta（只有 output_tokens）
+        buf.feed(b"event: message_delta\ndata: " + json.dumps({
+            "type": "message_delta",
+            "delta": {"stop_reason": "stop"},
+            "usage": {"output_tokens": 70},
+        }).encode() + b"\n\n")
+        # message_stop
+        buf.feed(b"event: message_stop\ndata: " + json.dumps({"type": "message_stop"}).encode() + b"\n\n")
+        buf.flush()
+        assert buf.usage["prompt_tokens"] == 105
+        assert buf.usage["completion_tokens"] == 70

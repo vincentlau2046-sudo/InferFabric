@@ -35,7 +35,9 @@ log = logging.getLogger("inferfabric.proxy_manager")
 
 PROXY_HOST = os.environ.get("EDGE_PROXY_HOST", "127.0.0.1")
 PROXY_PORT = int(os.environ.get("EDGE_PROXY_PORT", "8999"))
-AUTO_SWITCH = os.environ.get("EDGE_AUTO_SWITCH", "1") == "1"
+# Default OFF: a single stray request should not displace the active model.
+# Set EDGE_AUTO_SWITCH=1 to re-enable request-driven auto-switching.
+AUTO_SWITCH = os.environ.get("EDGE_AUTO_SWITCH", "0") == "1"
 HEALTH_CHECK_INTERVAL = int(os.environ.get("EDGE_HEALTH_CHECK", "60"))
 WATCHDOG_INTERVAL = 20
 

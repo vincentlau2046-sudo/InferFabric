@@ -338,11 +338,20 @@ class ModelManager:
             gpu_services = [s for s in actual
                             if (m := self._models.get(s)) and not m.is_gpu_none
                             and s != target]
-            if gpu_services:
+            # Port-based cross-check: catch running services that the health
+            # scan missed (transient 503 / timeout false negatives). A vLLM
+            # process still owning its port means the GPU is actually busy.
+            port_owners = {name: p for name, p in self._gpu_state._scan_port_owners().items()
+                           if name != target}
+            if gpu_services or port_owners:
                 vram = gpu_used_mb()
+                occupied = ", ".join(
+                    (f"{s} (port {p[0]}, pid {p[1]})" for s, p in port_owners.items()
+                    if s not in gpu_services)
+                ) or ", ".join(gpu_services)
                 return {
                     "status": "error",
-                    "message": f"GPU is occupied ({', '.join(gpu_services)} running, {vram}MB used). "
+                    "message": f"GPU is occupied ({occupied or ', '.join(gpu_services)}, {vram}MB used). "
                                f"DB state is stale (gpu_mode=idle but GPU busy). "
                                f"Run 'iff reconcile' or 'iff reset'.",
                 }

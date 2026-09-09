@@ -8,6 +8,7 @@ Core HTTP handler with routing, dashboard, and delegation to:
 Extracted from proxy.py (v4.1 P3 split).
 """
 
+import errno
 import sys
 import os
 import signal
@@ -266,6 +267,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         req_id = pm.new_request_id()
         req_start = time.monotonic()
         key_name = pm.auth.key_name(auth_header) if pm.auth.enabled else "anonymous"
+        # G-1b: 挂到 handler 上，供 _forward_local / forwarder 写 RequestLog
+        self._req_id = req_id
+        self._req_start = req_start
+        self._key_name = key_name
+        self._usage = {"prompt_tokens": 0, "completion_tokens": 0}
         req_model = data.get("model", "")
         req_status = 200
         req_error = None
@@ -453,10 +459,25 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 429,
             )
             return
+        # G-1b: 记录本地成功请求 — 修复 Anthropic 端点成功请求不写 request_log 导致
+        # dashboard 最近 1 小时看不到 qwen38-27b 使用统计的问题
+        status = forwarder.forward_anthropic_local(
+            self, pm, data, auth_header, model_obj, original_model
+        )
         try:
-            forwarder.forward_anthropic_local(
-                self, pm, data, auth_header, model_obj, original_model
-            )
+            if status is not None:
+                usage = getattr(self, '_usage', {}) or {}
+                pm.logger.log(RequestLog(
+                    req_id=getattr(self, '_req_id', ''),
+                    key_name=getattr(self, '_key_name', 'anonymous'),
+                    model=original_model or model_name,
+                    status=200 if status == 200 else 502,
+                    ttft_ms=getattr(self, '_ttft_ms', None),
+                    route="local",
+                    tokens_in=int(usage.get("prompt_tokens") or 0),
+                    tokens_out=int(usage.get("completion_tokens") or 0),
+                    duration_ms=(time.monotonic() - getattr(self, '_req_start', time.monotonic())) * 1000,
+                ))
         finally:
             gate.release()
 
@@ -1423,6 +1444,32 @@ def _validate_admin_token_safety():
             )
 
 
+def _create_server(retries: int = 5, retry_delay: float = 2.0):
+    """Create the HTTP server, retrying on EADDRINUSE (stale proxy holding the port).
+
+    A previously-started proxy may still own PROXY_PORT (e.g. after a crash
+    without clean shutdown). Bounded retry lets the old process exit and frees
+    the port, instead of dying immediately and letting systemd restart-loop
+    (Restart=always + RestartSec=5 → crash-restart every 5s, replaying 42k rows
+    each time). If the port is still held after `retries`, re-raise OSError
+    so the caller can exit non-zero.
+    """
+    for attempt in range(retries):
+        try:
+            return ThreadedHTTPServer((PROXY_HOST, PROXY_PORT), ProxyHandler)
+        except OSError as e:
+            if e.errno == errno.EADDRINUSE and attempt < retries - 1:
+                log.warning(
+                    "Port %d in use (stale proxy still bound?) — retry %d/%d in %.0fs",
+                    PROXY_PORT, attempt + 1, retries, retry_delay,
+                )
+                time.sleep(retry_delay)
+            else:
+                log.error("Cannot bind %s:%d: %s", PROXY_HOST, PROXY_PORT, e)
+                raise
+    raise RuntimeError("unreachable")
+
+
 def main():
     import traceback
 
@@ -1463,7 +1510,7 @@ def main():
     watchdog = ModelWatchdog(mgr.mgr, check_interval=30, auto_restart=True)
     watchdog.start()
 
-    server = ThreadedHTTPServer((PROXY_HOST, PROXY_PORT), ProxyHandler)
+    server = _create_server()
     server.proxy_mgr = mgr
     server.watchdog = watchdog
 

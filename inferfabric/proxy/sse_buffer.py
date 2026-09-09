@@ -81,13 +81,19 @@ class SSELineBuffer:
             except (json.JSONDecodeError, UnicodeDecodeError):
                 continue
 
-            # 提取 usage（last wins）
+            # 提取 usage（按字段合并：各字段独立 last-wins，零值不覆盖）
             usage = obj.get("usage")
+            if not usage:
+                # Anthropic message_start 事件：usage 嵌套在 message 下
+                msg = obj.get("message")
+                if isinstance(msg, dict):
+                    usage = msg.get("usage")
             if usage and isinstance(usage, dict):
                 # key 归一化：OpenAI 命名 (prompt/completion_tokens) 优先，
                 # 缺失时回退 Anthropic/百度命名 (input/output_tokens)
                 pt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
                 ct = usage.get("completion_tokens") or usage.get("output_tokens") or 0
-                if pt > 0 or ct > 0:
+                if pt:
                     self.usage["prompt_tokens"] = pt
+                if ct:
                     self.usage["completion_tokens"] = ct

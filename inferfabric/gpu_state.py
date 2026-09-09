@@ -68,6 +68,27 @@ class GpuStateMachine:
                 actual.append(name)
         return actual
 
+    def _scan_port_owners(self) -> dict:
+        """Port-based cross-check: map of model_name → (port, pid) for GPU-bound
+        models whose port has a live process (via fuser).
+
+        Catches running services that a health-check miss (transient 503/timeout
+        false negatives) would hide. Used by the switch occupancy guard so a
+        vLLM that owns its port blocks a new exclusive deploy even when /health
+        is unreachable.
+        """
+        owners = {}
+        for name, m in self._models.items():
+            if getattr(m, "is_gpu_none", False):
+                continue
+            port = getattr(m, "port", None)
+            if not port:
+                continue
+            pid = self._port_pid(port)
+            if pid is not None:
+                owners[name] = (port, pid)
+        return owners
+
     def _derive_gpu_mode(self, actual_services: list[str]) -> GPUMode:
         """Determine actual gpu_mode from running services (gpu_none services don't count)."""
         actual_gpu_mode = GPUMode.IDLE

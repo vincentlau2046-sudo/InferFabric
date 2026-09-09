@@ -100,12 +100,18 @@ def pipe_stream_response(handler, resp, sse_buf=None):
     handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
     handler.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, anthropic-version")
     handler.end_headers()
+    # PR-B: TTFT — 仅在 handler 携带 _req_start 时记录（本地路径）
+    ttft_recorded = False
     try:
         while True:
             chunk = resp.read(8192)
             if not chunk:
                 break
             try:
+                if not ttft_recorded:
+                    ttft_recorded = True
+                    if hasattr(handler, '_req_start'):
+                        handler._ttft_ms = (time.monotonic() - handler._req_start) * 1000
                 handler.wfile.write(chunk)
                 handler.wfile.flush()
                 # G-1b: 旁路观察 — 零延迟透传不变，喂入 buffer 提取 usage
@@ -136,6 +142,13 @@ def handle_json_response(handler, resp, model_obj, original_model, data, auth_he
         return
     try:
         result = json.loads(resp_body)
+        # G-1b: 提取 usage 并存入 handler._usage（Anthropic 命名 input/output_tokens 归一化为 prompt/completion_tokens）
+        usage = result.get("usage")
+        if usage and isinstance(usage, dict):
+            u = getattr(handler, '_usage', None) or {"prompt_tokens": 0, "completion_tokens": 0}
+            u["prompt_tokens"] = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+            u["completion_tokens"] = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+            handler._usage = u
         send_json(handler, result)
     except json.JSONDecodeError:
         send_json(handler, {"error": "invalid response from local model"}, 502)
@@ -251,7 +264,14 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
 
 
 def forward_anthropic_local(handler, pm, data, auth_header, model_obj, original_model):
-    """CCR-style retry chain: local vLLM + exponential backoff → error on exhaustion."""
+    """CCR-style retry chain: local vLLM + exponential backoff → error on exhaustion.
+
+    Returns the upstream HTTP status code once the response is sent to the
+    client (200 → success; non-retryable error is surfaced to the client as
+    502 by handle_json_response). Returns None when all retries are
+    exhausted. The caller (ProxyHandler._forward_local) uses the return
+    value to write a RequestLog for the usage statistics.
+    """
     was_stream = data.get("stream", False)
     data["model"] = model_obj.served_name or "vllm_qwen27b"
     body = json.dumps(data).encode("utf-8")
@@ -278,10 +298,14 @@ def forward_anthropic_local(handler, pm, data, auth_header, model_obj, original_
                 continue
 
             if was_stream:
-                pipe_stream_response(handler, resp)
+                # G-1b: 旁路观察 Anthropic SSE 事件提取 usage（message_start 的
+                # message.usage.input_tokens + message_delta 的 usage.output_tokens）
+                sse_buf = SSELineBuffer()
+                pipe_stream_response(handler, resp, sse_buf)
+                handler._usage = dict(sse_buf.usage)
             else:
                 handle_json_response(handler, resp, model_obj, original_model, data, auth_header)
-            return
+            return resp.status
 
         except (ConnectionRefusedError, ConnectionResetError, OSError, BrokenPipeError) as e:
             last_error = e
@@ -310,3 +334,4 @@ def forward_anthropic_local(handler, pm, data, auth_header, model_obj, original_
 
     log.error("Local model failed after all retries: %s", last_error)
     send_json(handler, {"error": f"Local model unreachable: {last_error}"}, 503)
+    return None
