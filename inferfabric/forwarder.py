@@ -125,7 +125,7 @@ def pipe_stream_response(handler, resp, sse_buf=None):
 
 
 def handle_json_response(handler, resp, model_obj, original_model, data, auth_header):
-    """Handle non-streaming JSON response; propagate upstream status (unified with streaming)."""
+    """Handle non-streaming JSON response; returns error on non-200."""
     resp_status = resp.status
     resp_body = resp.read()
     if resp_status != 200:
@@ -133,12 +133,7 @@ def handle_json_response(handler, resp, model_obj, original_model, data, auth_he
                     model_obj.name, resp_status)
         data["model"] = original_model
         resp.close()
-        # 透传上游真实状态码（与流式路径 pipe_stream_response 统一），不再一律压成 502
-        try:
-            payload = json.loads(resp_body)
-        except (json.JSONDecodeError, ValueError):
-            payload = {"error": f"Local model returned {resp_status}"}
-        send_json(handler, payload, resp_status)
+        send_json(handler, {"error": f"Local model returned {resp_status}"}, 502)
         return
     try:
         result = json.loads(resp_body)
@@ -286,97 +281,11 @@ def estimate_tokens(data: dict) -> int:
     return total
 
 
-# ── context-window guard: exact tokenization + 500-overflow detection ──
-
-_CONTEXT_OVERFLOW_SIGS = (
-    "maximum context length",
-    "your prompt contains",
-    "context length is",
-)
-
-
-def _is_context_overflow(body_text: str) -> bool:
-    low = body_text.lower()
-    return any(s in low for s in _CONTEXT_OVERFLOW_SIGS)
-
-
-def _data_to_prompt(data: dict) -> str:
-    """Flatten system + messages + tools into one prompt string for exact tokenization."""
-    parts = []
-    system = data.get("system")
-    if isinstance(system, str):
-        parts.append(system)
-    elif isinstance(system, list):
-        for block in system:
-            if isinstance(block, dict) and block.get("type") == "text":
-                parts.append(block.get("text", ""))
-    for msg in data.get("messages", []) or []:
-        content = msg.get("content")
-        if isinstance(content, str):
-            parts.append(content)
-        elif isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    parts.append(block.get("text", ""))
-    for tool in data.get("tools", []) or []:
-        parts.append(json.dumps(tool, ensure_ascii=False))
-    return "\n".join(parts)
-
-
-def _vllm_tokenize(model_obj, data: dict):
-    """Exact input token count via vLLM /tokenize (engine-side BPE). Returns int, or None if unavailable."""
-    prompt = _data_to_prompt(data)
-    if not prompt:
-        return 0
-    body = json.dumps({"prompt": prompt}).encode("utf-8")
-    conn = None
-    try:
-        conn = HTTPConnection("127.0.0.1", model_obj.port, timeout=30)
-        conn.request("POST", "/tokenize", body=body,
-                      headers={"Content-Type": "application/json"})
-        resp = conn.getresponse()
-        if resp.status != 200:
-            resp.read()
-            resp.close()
-            return None
-        payload = json.loads(resp.read().decode("utf-8", "replace"))
-        resp.close()
-        return payload.get("count")
-    except Exception as e:
-        log.warning("vLLM /tokenize failed for %s: %s", model_obj.name, e)
-        return None
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-
-def _pipe_raw(handler, status: int, raw: bytes):
-    """Pipe a fully-read raw body back to the client as a single chunked stream."""
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Access-Control-Allow-Origin", "*")
-    handler.send_header("Transfer-Encoding", "chunked")
-    handler.end_headers()
-    if raw:
-        handler.wfile.write(f"{len(raw):x}\r\n".encode())
-        handler.wfile.write(raw)
-        handler.wfile.write(b"\r\n")
-        handler.wfile.write(b"0\r\n\r\n")
-        handler.wfile.flush()
-
-
 def check_context_window(handler, data: dict, model_obj) -> bool:
-    """PR-ctx: context window guard — 混合策略。
+    """PR-ctx: context window guard — 超限直接 413，让客户端自己处理。
 
     元数据驱动：上限来自 model_obj.max_context_len（模型 YAML 声明）。
-    - 未声明 (None) → 不强制，直接放行。
-    - len/4 粗估 ≤ 预算 90% → 直接放行（零成本快路径）。
-    - 粗估 > 预算 → 直接 413。
-    - 粗估落在 (90%, 100%) 灰区 → 调 vLLM /tokenize 拿精确 token 数，
-      精确输入 + max_tokens > max_ctx 则 413。
+    未声明 (None) → 不强制，直接放行。
     返回 True=放行，False=已发 413。
     """
     max_ctx = model_obj.max_context_len
@@ -384,34 +293,15 @@ def check_context_window(handler, data: dict, model_obj) -> bool:
         return True
     max_output = data.get("max_tokens") or data.get("max_completion_tokens") or 8192
     input_budget = max_ctx - max_output
-    if input_budget <= 0:
-        send_json(handler, {
-            "error": f"Context window exceeded: requested output {max_output} tokens >= context limit {max_ctx} (model: {model_obj.name})",
-            "type": "context_window_exceeded",
-        }, 413)
-        return False
     est = estimate_tokens(data)
     if est > input_budget:
-        send_json(handler, {
-            "error": (
-                f"Context window exceeded: estimated {est} input tokens + "
-                f"{max_output} output tokens > {max_ctx} context limit "
-                f"(model: {model_obj.name})"
-            ),
-            "type": "context_window_exceeded",
-        }, 413)
+        err = (
+            f"Context window exceeded: estimated {est} input tokens + "
+            f"{max_output} output tokens > {max_ctx} context limit "
+            f"(model: {model_obj.name})"
+        )
+        send_json(handler, {"error": err}, 413)
         return False
-    if est > int(input_budget * 0.9):
-        exact = _vllm_tokenize(model_obj, data)
-        if exact is not None and exact + max_output > max_ctx:
-            send_json(handler, {
-                "error": (
-                    f"Context window exceeded: exact input {exact} + output {max_output} "
-                    f"= {exact + max_output} > {max_ctx} (model: {model_obj.name})"
-                ),
-                "type": "context_window_exceeded",
-            }, 413)
-            return False
     return True
 
 
@@ -441,43 +331,6 @@ def forward_anthropic_local(handler, pm, data, auth_header, model_obj, original_
             conn.request("POST", "/v1/messages", body=body,
                          headers={"Content-Type": "application/json"})
             resp = conn.getresponse()
-
-            if resp.status == 500:
-                raw = b""
-                try:
-                    raw = resp.read()
-                except Exception:
-                    pass
-                resp.close()
-                text = raw.decode("utf-8", "replace")
-                if _is_context_overflow(text):
-                    # 上下文超限是确定性客户端错误 —— 回 413，不重试
-                    send_json(handler, {
-                        "error": "Context window exceeded: upstream (vLLM) rejected the prompt — input + requested output exceeds the model context limit",
-                        "type": "context_window_exceeded",
-                    }, 413)
-                    pm.logger.log(RequestLog(
-                        req_id=pm.new_request_id(),
-                        key_name=pm.auth.key_name(auth_header) if pm.auth.enabled else "anonymous",
-                        model=data.get("model", ""),
-                        status=413, error="context_window_exceeded", route="local",
-                    ))
-                    return
-                if attempt < UPSTREAM_LOCAL_RETRIES:
-                    delay_s = exponential_backoff(attempt)
-                    log.warning("Local %s returned 500, retry #%d in %.1fs",
-                                model_obj.name, attempt, delay_s)
-                    time.sleep(delay_s)
-                    continue
-                # 最终次：把 500 原样透传（统一流式/非流式状态）
-                if was_stream:
-                    _pipe_raw(handler, 500, raw)
-                else:
-                    try:
-                        send_json(handler, json.loads(text), 500)
-                    except (json.JSONDecodeError, ValueError):
-                        send_json(handler, {"error": "Local model returned 500"}, 500)
-                return
 
             if should_retry_on_status(resp.status) and attempt < UPSTREAM_LOCAL_RETRIES:
                 try:
