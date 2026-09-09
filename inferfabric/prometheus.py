@@ -47,7 +47,9 @@ def parse_prometheus_text(text: str):
                 histos[base] = {"buckets": [], "sum": 0.0, "count": 0}
             histos[base]["count"] = int(val)
         elif "_total" in name:
-            counters[name.rsplit("_total", 1)[0]] = val
+            base = name.rsplit("_total", 1)[0]
+            # Sum across label-sets (e.g. vllm:request_success_total{finished_reason=...})
+            counters[base] = counters.get(base, 0.0) + val
         else:
             gauges[name] = val
 

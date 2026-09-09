@@ -89,7 +89,14 @@ class TokenStatsCollector:
         _gauges, counters, histos = parse_prometheus_text(text)
         prompt_h = histos.get("vllm:request_prompt_tokens")
         gen_h = histos.get("vllm:request_generation_tokens")
+        # This vLLM build exposes vllm:request_success (labeled by finished_reason),
+        # not vllm:num_requests_completed — fall back so `requests` populates.
         req_total = counters.get("vllm:num_requests_completed")
+        if req_total is None:
+            # This vLLM build exposes vllm:request_success_total (labeled by finished_reason)
+            req_total = counters.get("vllm:request_success")
+        if req_total is None:
+            req_total = counters.get("vllm:request_success")
 
         result = {}
         if prompt_h:
