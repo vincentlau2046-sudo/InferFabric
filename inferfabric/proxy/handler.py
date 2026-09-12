@@ -126,6 +126,9 @@ def _handle_watchdog_status(handler):
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
+    # 修复:HTTP/1.0 下发送 Transfer-Encoding: chunked 会导致 HTTP 客户端
+    # (reqwest/atomcode v5)解析失败 "unexpected transfer-encoding parsed"
+    protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
         log.debug("[proxy] " + fmt, *args)
