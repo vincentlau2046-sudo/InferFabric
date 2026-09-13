@@ -161,16 +161,30 @@ def _normalize_tools_for_openai(data):
     400 ("Field required: function" per tool); the client (Claude Code)
     does not retry 400s, so the session hangs. Convert in-place before
     forwarding to the local vLLM OpenAI endpoint.
+
+    Also drops server-side Anthropic tools (e.g. ``web_search_20250305``)
+    that have no OpenAI equivalent.
     """
     tools = data.get("tools")
     if isinstance(tools, list):
-        for i, t in enumerate(tools):
-            if isinstance(t, dict) and "input_schema" in t and "function" not in t:
+        kept = []
+        for t in tools:
+            if not isinstance(t, dict):
+                kept.append(t)
+            elif "function" in t:
+                kept.append(t)  # already OpenAI format
+            elif "input_schema" in t:
+                # Anthropic user-defined tool → convert to OpenAI function
                 fn = {"name": t.get("name", "")}
                 if t.get("description"):
                     fn["description"] = t["description"]
                 fn["parameters"] = t.get("input_schema") or {"type": "object", "properties": {}}
-                tools[i] = {"type": "function", "function": fn}
+                kept.append({"type": "function", "function": fn})
+            else:
+                # Server-side Anthropic tool or unknown — drop; not valid in OpenAI format
+                # (e.g. web_search_20250305, computer_20250124, text_editor_20250124)
+                continue
+        data["tools"] = kept
 
     # Anthropic tool_choice object forms: {"type":"tool","name":X} /
     # {"type":"any"} / {"type":"auto"} / {"type":"none"}
@@ -262,6 +276,8 @@ def handle_chat(handler, pm, data):
                           or pm.cloud.cloud_models.get(short_name))
             if provider_cfg and cloud_model:
                 log.info("/v1/chat/completions → CLOUD %s [model=%s]", provider_name, model)
+                # Normalize Anthropic-style tools → OpenAI format for cloud OpenAI endpoint
+                _normalize_tools_for_openai(data)
                 result = forwarder.forward_to_cloud(
                     handler, data, provider_cfg, cloud_model,
                     protocol="openai", original_model=model,
