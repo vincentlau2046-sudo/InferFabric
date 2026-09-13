@@ -99,6 +99,10 @@ def pipe_stream_response(handler, resp, sse_buf=None):
     handler.send_header("Access-Control-Allow-Origin", "*")
     handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
     handler.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, anthropic-version")
+    # HTTP/1.1 keep-alive 下，响应体必须自带结束信号：发送
+    # Transfer-Encoding: chunked 并按 chunked 分帧写出，否则客户端
+    # (Claude/reqwest) 会一直等待 body 结束 → "wait api" 卡住
+    handler.send_header("Transfer-Encoding", "chunked")
     handler.end_headers()
     # PR-B: TTFT — 仅在 handler 携带 _req_start 时记录（本地路径）
     ttft_recorded = False
@@ -112,7 +116,10 @@ def pipe_stream_response(handler, resp, sse_buf=None):
                     ttft_recorded = True
                     if hasattr(handler, '_req_start'):
                         handler._ttft_ms = (time.monotonic() - handler._req_start) * 1000
+                # chunked 分帧：hex 尺寸前缀 + 数据 + CRLF
+                handler.wfile.write(f"{len(chunk):x}\r\n".encode("ascii"))
                 handler.wfile.write(chunk)
+                handler.wfile.write(b"\r\n")
                 handler.wfile.flush()
                 # G-1b: 旁路观察 — 零延迟透传不变，喂入 buffer 提取 usage
                 if sse_buf is not None:
@@ -120,6 +127,12 @@ def pipe_stream_response(handler, resp, sse_buf=None):
             except (BrokenPipeError, ConnectionResetError):
                 log.info("Client disconnected during stream forwarding")
                 break
+        # 终止块 0 大小 chunk：HTTP/1.1 keep-alive 下通知客户端 body 结束
+        try:
+            handler.wfile.write(b"0\r\n\r\n")
+            handler.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
     finally:
         if sse_buf is not None:
             sse_buf.flush()

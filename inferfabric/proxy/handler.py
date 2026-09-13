@@ -1343,7 +1343,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             resp_body = resp.read()
             self.send_response(resp.status)
             for k, v in resp.getheaders():
+                # HTTP/1.1 keep-alive 下不要透传上游 Content-Length / Transfer-Encoding：
+                # 上游 vLLM 可能以 chunked 编码返回，但我们用 _safe_write 写完整 body（无 chunked 分帧），
+                # 严格客户端（reqwest）会报 "unexpected transfer-encoding parsed"
+                if k.lower() in ("content-length", "transfer-encoding"):
+                    continue
                 self.send_header(k, v)
+            self.send_header("Content-Length", str(len(resp_body)))
             self.end_headers()
             self._safe_write(resp_body)
         except Exception as e:
@@ -1407,7 +1413,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             resp_body = resp.read()
             self.send_response(resp.status)
             for k, v in resp.getheaders():
+                # HTTP/1.1 keep-alive 下不要透传上游 Content-Length / Transfer-Encoding：
+                # 上游 vLLM 可能以 chunked 编码返回，但我们用 _safe_write 写完整 body（无 chunked 分帧），
+                # 严格客户端（reqwest）会报 "unexpected transfer-encoding parsed"
+                if k.lower() in ("content-length", "transfer-encoding"):
+                    continue
                 self.send_header(k, v)
+            self.send_header("Content-Length", str(len(resp_body)))
             self.end_headers()
             self._safe_write(resp_body)
         except Exception as e:
