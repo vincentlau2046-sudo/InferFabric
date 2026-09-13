@@ -10,16 +10,20 @@ vllm:
   served_name: qwen38-27b-abliterated
   port: 8002
   conda_env: Qwen3.8-27B-VL
-  max_model_len: 163840
-  gpu_memory_utilization: 0.92
+  max_model_len: 131072
+  # 0.94 预算内切出 MTP(3 tokens) 的 draft 开销；KV 溢出由 16GiB CPU offloading 兜底
+  gpu_memory_utilization: 0.95
   max_num_seqs: 4
   kv_cache_dtype: fp8
   kv_offloading_size: 16
   kv_offloading_backend: native
+  # MTP 投机解码：每步多预测 3 个 token，加速解码；batched-tokens 降到 2048（配合 prefix caching + KV offload）
+  #--speculative-config '{"method": "mtp", "num_speculative_tokens": 1}'
   extra_flags: >-
-    --max-num-batched-tokens 4096
+    --max-num-batched-tokens 2048
     --enable-prefix-caching
-    --mamba-ssm-cache-dtype float16
+    --mamba-ssm-cache-dtype float16    
+    --speculative-config '{"method": "mtp", "num_speculative_tokens": 1}'
     --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_capture_sizes": [1, 2, 3, 4]}'
     --enable-chunked-prefill
     --async-scheduling
@@ -27,8 +31,7 @@ vllm:
     --tool-call-parser qwen3_xml
     --reasoning-parser qwen3
     --trust-remote-code
-    --speculative-config '{"method": "mtp", "num_speculative_tokens": 1}'
-  startup_timeout: 540
+  startup_timeout: 700
   extra_env:
     FLASHINFER_DISABLE_VERSION_CHECK: "1"
     VLLM_USE_DEEP_GEMM: "0"

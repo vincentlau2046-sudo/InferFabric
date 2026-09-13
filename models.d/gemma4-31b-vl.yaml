@@ -12,11 +12,13 @@ vllm:
   port: 8005
   conda_env: gemma-4-31b
   gpu_memory_utilization: 0.92
-  max_model_len: 163840
+  max_model_len: 65536
   max_num_seqs: 4
   kv_cache_dtype: fp8
-  startup_timeout: 480
+  kv_offloading_size: 8
+  kv_offloading_backend: native
   extra_flags: >-
+    --max-num-batched-tokens 16384
     --enable-prefix-caching
     --compilation-config '{"cudagraph_mode": "PIECEWISE", "cudagraph_num_of_warmups": 1, "cudagraph_capture_sizes": [1, 2, 3, 4]}'
     --enable-chunked-prefill
@@ -25,9 +27,6 @@ vllm:
     --tool-call-parser gemma4
     --reasoning-parser gemma4
     --trust-remote-code
-    --limit-mm-per-prompt '{"image": 4, "audio": 0}'
-    --kv-offloading-backend native
-    --kv-offloading-size 16
   extra_env:
     FLASHINFER_DISABLE_VERSION_CHECK: "1"
     VLLM_USE_DEEP_GEMM: "0"

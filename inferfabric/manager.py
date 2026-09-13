@@ -50,7 +50,8 @@ class ModelManager:
       idle → shared:    deploy shared model/service
       exclusive → idle:  stop exclusive model
       shared → idle:     stop all shared services
-      shared → shared:   add/remove shared service (hot-plug V1: full restart)
+      shared → shared:   add/remove shared service (incremental hot-plug;
+               other shared services keep running)
 
       ❌ exclusive → shared:  must idle first
       ❌ shared → exclusive:  must idle first
@@ -271,7 +272,8 @@ class ModelManager:
               idle → exclusive/shared: allowed
               exclusive → idle: allowed
               shared → idle: allowed
-              shared → shared: allowed (add/remove service, V1: full restart)
+              shared → shared: allowed (incremental: add via _shared_add_service /
+               remove via stop_service — existing shared services keep running)
               exclusive → exclusive: allowed (same-port swap)
               exclusive → shared:    ❌ must idle first
               shared → exclusive:    ❌ must idle first
@@ -385,7 +387,8 @@ class ModelManager:
                 # Exclusive → exclusive: stop old, start new (same-port swap)
                 result = self._lifecycle._switch_exclusive(model)
             elif current_mode == GPUMode.SHARED and target_mode == GPUMode.SHARED:
-                # V1: full restart — stop all, then start all including new one
+                # Shared add (incremental) — start only the new model;
+                # existing shared services keep running (VRAM budget checked first)
                 result = self._lifecycle._shared_add_service(model)
             else:
                 result = {"status": "error", "message": f"Unexpected state: {current_mode} → {target_mode}"}
