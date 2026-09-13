@@ -152,6 +152,44 @@ def handle_ollama_native(handler, pm, data, target_port, model_obj):
             pass
 
 
+def _normalize_tools_for_openai(data):
+    """Rewrite Anthropic-format tool definitions into OpenAI function format.
+
+    Claude Code POSTs Anthropic-style tools (``name``/``description``/
+    ``input_schema``) to /v1/chat/completions. vLLM validates
+    ``tools[i].function.parameters`` and rejects the whole request with
+    400 ("Field required: function" per tool); the client (Claude Code)
+    does not retry 400s, so the session hangs. Convert in-place before
+    forwarding to the local vLLM OpenAI endpoint.
+    """
+    tools = data.get("tools")
+    if isinstance(tools, list):
+        for i, t in enumerate(tools):
+            if isinstance(t, dict) and "input_schema" in t and "function" not in t:
+                fn = {"name": t.get("name", "")}
+                if t.get("description"):
+                    fn["description"] = t["description"]
+                fn["parameters"] = t.get("input_schema") or {"type": "object", "properties": {}}
+                tools[i] = {"type": "function", "function": fn}
+
+    # Anthropic tool_choice object forms: {"type":"tool","name":X} /
+    # {"type":"any"} / {"type":"auto"} / {"type":"none"}
+    tc = data.get("tool_choice")
+    if isinstance(tc, dict) and tc.get("type") in ("tool", "any", "auto", "none"):
+        tc_type = tc["type"]
+        if tc_type == "tool":
+            data["tool_choice"] = {
+                "type": "function",
+                "function": {"name": tc.get("name", "")},
+            }
+        elif tc_type == "any":
+            data["tool_choice"] = "required"
+        elif tc_type == "auto":
+            data["tool_choice"] = "auto"
+        else:
+            data["tool_choice"] = "none"
+
+
 def handle_chat(handler, pm, data):
     """Handle OpenAI chat completions request.
 
@@ -256,6 +294,10 @@ def handle_chat(handler, pm, data):
         return
 
     # vLLM path — apply dynamic rate limiter
+    # Normalize Anthropic-style tools (input_schema) to OpenAI function format
+    # before forwarding to vLLM's /v1/chat/completions (prevents per-tool
+    # "Field required: function" 400s that Claude Code does not retry).
+    _normalize_tools_for_openai(data)
     body = json.dumps(data).encode("utf-8")
     # v4.6.3: 使用配置的 timeout (observe 模式下不会 429)
     gate = pm.dual_gate.acquire(model)
