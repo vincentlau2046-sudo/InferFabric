@@ -347,6 +347,10 @@ class ProxyManager:
             if ok:
                 self._last_switch = time.time()
             else:
+                # R0: a FAILED switch also arms the cooldown, so the next
+                # ensure_service call skips (returns False) instead of retrying
+                # an in-flight/failed switch forever (infinite 503 storm).
+                self._last_switch = time.time()
                 self.mgr.state.set("switching_target", "")
                 return result["status"] in ("switched", "already_active")
         finally:

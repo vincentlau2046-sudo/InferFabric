@@ -362,9 +362,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     log.warning("/v1/messages → 503 auto-switch to %s failed", target_model.name)
                     self._send_json(
                         {"error": f"Auto-switch to {target_model.name} failed, retry later",
-                         "status": "switch_failed", "retry_after": 30},
+                         "status": "switch_failed", "retry_after": 10},
                         503,
-                        extra_headers={"Retry-After": "30"},
+                        extra_headers={"Retry-After": "10"},  # R0: match ensure_service cooldown
                     )
                     return
             else:
@@ -372,9 +372,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                          target_model.name)
                 self._send_json(
                     {"error": f"Model {target_model.name} not active, auto-switch disabled",
-                     "status": "not_active", "retry_after": 30},
+                     "status": "not_active", "retry_after": 10},
                     503,
-                    extra_headers={"Retry-After": "30"},
+                    extra_headers={"Retry-After": "10"},
                 )
                 return
 

@@ -242,7 +242,11 @@ def handle_chat(handler, pm, data):
                 reason = f"{service_name} was manually stopped — auto-switch blocked for {pm.mgr.state.MANUAL_STOP_TTL}s"
             else:
                 reason = "tri-state rule violation or switch in progress"
-            handler._send_json({"error": f"Cannot switch to {reason}"}, 503)
+            handler._send_json(
+                {"error": f"Cannot switch to {reason}", "status": "switch_blocked", "retry_after": 10},
+                503,
+                extra_headers={"Retry-After": "10"},  # R0: Agent 可据此退避
+            )
             return
 
     target_port = pm.get_target_port(model)
