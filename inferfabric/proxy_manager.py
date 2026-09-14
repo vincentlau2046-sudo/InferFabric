@@ -100,9 +100,17 @@ class ProxyManager:
         # R9: AnomalyCollector — 结构化异常事件（线程安全环形缓冲）
         from inferfabric.anomaly_collector import AnomalyCollector
         self.anomalies = AnomalyCollector()
-        # R5: ResponseCache — 精确匹配响应缓存
-        from inferfabric.proxy.response_cache import ResponseCache
-        self.response_cache = ResponseCache(maxsize=self._runtime_config.get("cache", {}).get("max_entries", 500))
+        # R5: ResponseCache — 精确匹配响应缓存（IFF_CACHE_ENABLED 环境变量可覆盖 YAML）
+        _cache_env = os.environ.get("IFF_CACHE_ENABLED")
+        if _cache_env is not None:
+            _cache_enabled = _cache_env.lower() in ("1", "true", "yes")
+        else:
+            _cache_enabled = self._runtime_config.get("cache", {}).get("enabled", True)
+        if _cache_enabled:
+            from inferfabric.proxy.response_cache import ResponseCache
+            self.response_cache = ResponseCache(maxsize=self._runtime_config.get("cache", {}).get("max_entries", 500))
+        else:
+            self.response_cache = None
         # D-2: Build served_name → friendly_name mapping for dashboard
         self._metrics_name_map = {}
         for m in self.mgr._models.values():

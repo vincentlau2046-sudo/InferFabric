@@ -59,6 +59,11 @@
       <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="1.5"/>
       <path d="M8 8l6 6m0-6l-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
     </symbol>
+    <symbol id="s-alert" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M11 7v5"/>
+      <path d="M11 15.5v.5"/>
+      <circle cx="11" cy="11" r="9"/>
+    </symbol>
   </defs>
 </svg>
 </head>
@@ -121,6 +126,10 @@
         <button class="if-nav-item" data-tab="tab-cloud" onclick="switchTab('tab-cloud')">
           <svg width="22" height="22"><use href="#s-cloud"/></svg>
           <span>云端</span>
+        </button>
+        <button class="if-nav-item" data-tab="tab-anomaly" onclick="switchTab('tab-anomaly')">
+          <svg width="22" height="22"><use href="#s-alert"/></svg>
+          <span>异常</span>
         </button>
       </nav>
 
@@ -218,6 +227,7 @@
 <!-- JS:state -->
 <!-- JS:app -->
 <!-- JS:monitor -->
+<!-- JS:anomaly -->
 </script>
 </body>
 </html>

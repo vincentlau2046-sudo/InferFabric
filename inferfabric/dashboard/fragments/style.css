@@ -689,3 +689,16 @@ th { color: var(--if-text-3); font-weight: 600; font-size: var(--if-fs-sm); text
 .ov-desc { color: var(--if-text-2); font-size: var(--if-fs-base); font-weight: 400; }
 @media (max-width: 1024px) { .if-grid-3, .if-grid-4 { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 640px) { .if-grid-2, .if-grid-3, .if-grid-4 { grid-template-columns: 1fr; } }
+
+/* ── R10: 异常看板 ──────────────────────────── */
+.anomaly-row { display:flex; gap:12px; padding:8px 0 2px; border-bottom:1px solid var(--if-bg-3); align-items:flex-start; }
+.anomaly-time { color:var(--if-text-3); white-space:nowrap; min-width:60px; font-size:var(--if-fs-sm); }
+.anomaly-code { white-space:nowrap; min-width:40px; font-weight:600; font-size:var(--if-fs-sm); }
+.anomaly-model { min-width:120px; color:var(--if-text-2); font-size:var(--if-fs-sm); }
+.anomaly-sev { min-width:80px; font-size:var(--if-fs-sm); }
+.anomaly-msg { flex:1; color:var(--if-text-1); font-size:var(--if-fs-sm); }
+.anomaly-cause { padding:0 0 8px 72px; font-size:12px; color:var(--if-text-3); line-height:1.4; }
+.sev-info { color:var(--if-c-blue); }
+.sev-warning { color:var(--if-c-orange); }
+.sev-error { color:var(--if-c-red); }
+.sev-critical { color:var(--if-c-red); font-weight:700; }
