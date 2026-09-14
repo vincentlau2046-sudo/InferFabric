@@ -47,6 +47,7 @@ def make_pm(switch_status="error"):
     pm.mgr.state.is_manually_stopped.return_value = False
     pm.mgr.switch.return_value = {"status": switch_status, "message": "deploy failed"}
     pm._wait_healthy = MagicMock(return_value=True)
+    pm.anomalies = MagicMock()  # R9: silence AnomalyEvent recording in handler
     return pm
 
 

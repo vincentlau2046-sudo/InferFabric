@@ -28,6 +28,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from inferfabric.state import GPUMode
 from inferfabric.proxy.request_logger import RequestLog
+from inferfabric.anomaly_collector import AnomalyEvent
 
 # Admin token for control-plane routes (/switch, /stop, /deploy, /pull, etc.)
 # If set, requests must include X-Admin-Token header matching this value.
@@ -323,6 +324,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             else:
                 # Not the switching target → 503
                 log.info("/v1/messages → 503 (switching to %s, not %s)", switching_target, requested_model)
+                elapsed = (time.monotonic() - req_start) * 1000
+                pm.logger.log(RequestLog(
+                    req_id=req_id, key_name=key_name, model=original_model,
+                    status=503, error="model_switching",
+                    duration_ms=elapsed,
+                ))
+                pm.anomalies.record(AnomalyEvent(
+                    category="routing", severity="warning", model=original_model,
+                    status_code=503,
+                    message=f"Model switching to {switching_target}, request for {original_model} rejected",
+                    possible_cause="本地模型正在切换中，请求的是另一个本地模型。等待切换完成或换一个模型。",
+                ))
                 self._send_json(
                     {"error": "Model is switching, please retry", "status": "switching", "retry_after": 30},
                     503,
@@ -350,6 +363,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                          target_model.name, requested_model)
                 switched = pm.ensure_service(target_model.name)
                 if switched is None:
+                    elapsed = (time.monotonic() - req_start) * 1000
+                    pm.logger.log(RequestLog(
+                        req_id=req_id, key_name=key_name, model=original_model,
+                        status=409, error="switch_in_progress",
+                        duration_ms=elapsed,
+                    ))
+                    pm.anomalies.record(AnomalyEvent(
+                        category="routing", severity="info", model=target_model.name,
+                        status_code=409,
+                        message=f"Auto-switch to {target_model.name} conflict: switch already in progress",
+                        possible_cause="另一请求正在发起同模型切换，线程锁被占用。立即重试通常可恢复。",
+                    ))
                     self._send_json({"error": "switch already in progress", "status": "conflict"}, 409)
                     return
                 if switched:
@@ -361,16 +386,40 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 else:
                     # Switch failed or model not healthy → 503
                     log.warning("/v1/messages → 503 auto-switch to %s failed", target_model.name)
+                    elapsed = (time.monotonic() - req_start) * 1000
+                    pm.logger.log(RequestLog(
+                        req_id=req_id, key_name=key_name, model=original_model,
+                        status=503, error="auto_switch_failed",
+                        duration_ms=elapsed,
+                    ))
+                    pm.anomalies.record(AnomalyEvent(
+                        category="model", severity="error", model=target_model.name,
+                        status_code=503,
+                        message=f"Auto-switch to {target_model.name} failed",
+                        possible_cause="vLLM 启动失败 / OOM / 配置错误 / 模型文件损坏。检查 vLLM 日志。",
+                    ))
                     self._send_json(
                         {"error": f"Auto-switch to {target_model.name} failed, retry later",
                          "status": "switch_failed", "retry_after": 10},
                         503,
-                        extra_headers={"Retry-After": "10"},  # R0: match ensure_service cooldown
+                        extra_headers={"Retry-After": "10"},
                     )
                     return
             else:
                 log.info("/v1/messages → model %s known but not active, AUTO_SWITCH=off",
                          target_model.name)
+                elapsed = (time.monotonic() - req_start) * 1000
+                pm.logger.log(RequestLog(
+                    req_id=req_id, key_name=key_name, model=original_model,
+                    status=503, error="model_not_active",
+                    duration_ms=elapsed,
+                ))
+                pm.anomalies.record(AnomalyEvent(
+                    category="config", severity="warning", model=target_model.name,
+                    status_code=503,
+                    message=f"Model {target_model.name} not active and AUTO_SWITCH=off",
+                    possible_cause="模型在配置中但未启动，且 auto_switch 被禁用。手动 /switch 或启用 AUTO_SWITCH。",
+                ))
                 self._send_json(
                     {"error": f"Model {target_model.name} not active, auto-switch disabled",
                      "status": "not_active", "retry_after": 10},
@@ -411,52 +460,25 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 else:
                     log.warning("/v1/messages → cloud route matched but config missing: %s", route)
 
-        # Step 3: Fallback to first active LLM (backward compat)
-        active_llm = None
-        for svc in pm.mgr.active_services:
-            model_obj = pm.mgr.get_model(svc)
-            if model_obj and model_obj.model_type in forwarder.LOCAL_LLM_TYPES:
-                if model_obj.port:
-                    active_llm = model_obj
-                    break
-
-        if active_llm:
-            log.info("/v1/messages → LOCAL %s (port %d) [fallback: no model match for %s]",
-                     active_llm.name, active_llm.port, requested_model or "<empty>")
-            self._forward_local(pm, data, auth_header, active_llm, original_model)
-        else:
-            # PR-D: Cloud fallback (replaces old Baidu fallback)
-            pm.ensure_cloud_discovered()
-            if pm.cloud.cloud_models:
-                # Try to find any cloud model that matches (prefer provider-prefixed key)
-                short_name = requested_model.split("/")[-1] if "/" in requested_model else requested_model
-                cloud_model = None
-                for _key in [f"{p.name}/{short_name}" for p in pm.cloud.providers.values()] + [short_name]:
-                    cloud_model = pm.cloud.cloud_models.get(_key)
-                    if cloud_model:
-                        break
-                if cloud_model:
-                    provider_cfg = pm.cloud.get_provider_config(cloud_model.provider)
-                    if provider_cfg:
-                        log.info("/v1/messages → CLOUD %s [fallback: no active LLM]",
-                                 cloud_model.provider)
-                        result = forwarder.forward_to_cloud(
-                            self, data, provider_cfg, cloud_model,
-                            protocol="anthropic", original_model=original_model,
-                        )
-                        pm.logger.log(RequestLog(
-                            model=original_model or requested_model, status=result.status, route=f"cloud:{cloud_model.provider}",
-                            key_name=key_name, req_id=req_id,
-                            cloud_provider=cloud_model.provider,
-                            tokens_in=result.usage.get("prompt_tokens", 0),
-                            tokens_out=result.usage.get("completion_tokens", 0),
-                            ttft_ms=result.ttft_ms,
-                            duration_ms=result.duration_ms,
-                            error=result.error,
-                        ))
-                        return
-            log.warning("/v1/messages → no route available [no active LLM, no cloud match]")
-            self._send_json({"error": "No active local model and no cloud route"}, 503)
+        # Step 3 (R8): Unknown model name — 404 + anomaly + RequestLog
+        # (Former Step 6 fallback to first active LLM + Step 7 cloud fallback
+        #  were removed — they silently routed unrecognized model names, in
+        #  violation of the transparent-gateway architecture boundary.)
+        elapsed = (time.monotonic() - req_start) * 1000
+        log.warning("/v1/messages → rejecting unknown model: %s", requested_model)
+        pm.logger.log(RequestLog(
+            req_id=req_id, key_name=key_name, model=original_model,
+            status=404, error="unknown_model",
+            duration_ms=elapsed,
+        ))
+        pm.anomalies.record(AnomalyEvent(
+            category="routing", severity="warning", model=requested_model,
+            status_code=404,
+            message=f"Unknown model '{requested_model}' — rejected: no match in local served_names or cloud_models",
+            possible_cause="1. 客户端传了不存在的模型名；2. cloud_provider.yaml 缺少对应 model_id；"
+                           "3. models.d/*.yaml 的 served_name 配置未覆盖此模型名",
+        ))
+        self._send_json({"error": f"Unknown model: {requested_model}"}, 404)
 
     def _forward_local(self, pm, data, auth_header, model_obj, original_model):
         """Forward request to a local model with rate limiting."""

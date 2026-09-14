@@ -12,6 +12,7 @@ from inferfabric.proxy_manager import AUTO_SWITCH
 from inferfabric import forwarder
 from inferfabric.proxy.sse_buffer import SSELineBuffer
 from inferfabric.proxy.request_logger import RequestLog
+from inferfabric.anomaly_collector import AnomalyEvent
 
 log = logging.getLogger("inferfabric.proxy.chat")
 
@@ -235,6 +236,18 @@ def handle_chat(handler, pm, data):
     if service_name and AUTO_SWITCH:
         switched = pm.ensure_service(service_name)
         if switched is None:
+            elapsed = (time.monotonic() - handler._req_start) * 1000
+            pm.logger.log(RequestLog(
+                req_id=req_id, key_name=key_name, model=model,
+                status=409, error="switch_in_progress",
+                duration_ms=elapsed,
+            ))
+            pm.anomalies.record(AnomalyEvent(
+                category="routing", severity="info", model=model,
+                status_code=409,
+                message=f"Switch to {service_name} in progress",
+                possible_cause="另一请求正在发起同模型切换，线程锁被占用。",
+            ))
             handler._send_json({"error": "switch already in progress", "status": "conflict"}, 409)
             return
         if not switched and service_name not in pm.mgr.active_services:
@@ -242,10 +255,22 @@ def handle_chat(handler, pm, data):
                 reason = f"{service_name} was manually stopped — auto-switch blocked for {pm.mgr.state.MANUAL_STOP_TTL}s"
             else:
                 reason = "tri-state rule violation or switch in progress"
+            elapsed = (time.monotonic() - handler._req_start) * 1000
+            pm.logger.log(RequestLog(
+                req_id=req_id, key_name=key_name, model=model,
+                status=503, error="cannot_switch",
+                duration_ms=elapsed,
+            ))
+            pm.anomalies.record(AnomalyEvent(
+                category="model", severity="warning", model=model,
+                status_code=503,
+                message=f"Cannot switch to {service_name}: {reason}",
+                possible_cause="模型被手动停止 / 三态规则阻止 / 切换正在进行中",
+            ))
             handler._send_json(
                 {"error": f"Cannot switch to {reason}", "status": "switch_blocked", "retry_after": 10},
                 503,
-                extra_headers={"Retry-After": "10"},  # R0: Agent 可据此退避
+                extra_headers={"Retry-After": "10"},
             )
             return
 
@@ -278,6 +303,19 @@ def handle_chat(handler, pm, data):
                     error=result.error,
                 ))
                 return
+        elapsed = (time.monotonic() - handler._req_start) * 1000
+        pm.logger.log(RequestLog(
+            req_id=req_id, key_name=key_name, model=model,
+            status=404, error="unknown_model",
+            duration_ms=elapsed,
+        ))
+        pm.anomalies.record(AnomalyEvent(
+            category="routing", severity="warning", model=model,
+            status_code=404,
+            message=f"Unknown model '{model}' — no local served_name or cloud match",
+            possible_cause="1. 客户端传了不存在的模型名；2. cloud_provider.yaml 缺少对应 model_id；"
+                           "3. models.d/*.yaml 的 served_name 配置未覆盖此模型名",
+        ))
         handler._send_json({"error": f"Unknown model: {model}"}, 404)
         return
 
