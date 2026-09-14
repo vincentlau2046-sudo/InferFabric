@@ -84,7 +84,7 @@ class NInferAdapter(EngineAdapter):
             "--host", "0.0.0.0", "--port", "8080",
             "--max-concurrency", str(cfg.max_concurrency),
             "--max-context", str(cfg.max_context),
-            "--kv-capacity", str(cfg.kv_capacity),
+            "--kv-capacity", "auto" if cfg.kv_capacity == 0 else str(cfg.kv_capacity),
             "--default-max-tokens", str(cfg.default_max_tokens),
             "--pending-timeout-ms", str(cfg.pending_timeout_ms),
             "--kv-dtype", cfg.kv_dtype,
