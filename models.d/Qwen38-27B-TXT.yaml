@@ -1,34 +1,26 @@
-name: qwen38-27b-text
-description: "Qwen3.8-27B NVFP4 — NInfer 推理引擎（纯文本，256K 上下文，MTP 投机解码）"
+name: Qwen38-27B-TXT
+description: Qwen3.8-27B NVFP4 — NInfer 推理引擎（纯文本，256K 上下文，MTP 投机解码）
 type: ninfer
 gpu_role: exclusive
 model_type: llm
 quantization: NVFP4
 peak_vram_mb: 19000
-
 ninfer:
-  served_name: qwen38-27b-text
+  served_name: Qwen38-27B-TXT
   weight_path: ~/models/ninfer-nvfp4/qwen3_8_27b_nvfp4.ninfer
-  docker_image: ninfer:qwen38-nvfp4-cuda13
+  docker_image: ninfer:latest
   port: 8007
   container_name: iff-ninfer-qwen38
-
-  # KV & 上下文
-  max_context: 262144       # 单请求最大上下文（256K）
-  kv_capacity: 262144       # KV cache 总池大小
-  kv_dtype: int8            # KV cache 精度（NVFP4 暂未加入此 rev 的 --kv-dtype）
-  weight_precision: NVFP4   # 权重量化精度
-
-  # 并发 & 性能
-  max_concurrency: 3
+  max_context: 262144
+  kv_capacity: 524288
+  kv_dtype: nvfp4
+  weight_precision: NVFP4
+  max_concurrency: 2
   default_max_tokens: 32000
-  prefill_chunk: 4096       # 安全值（8192 在长 prefill 下可能触发 TdrDelay）
+  prefill_chunk: 4096
   pending_timeout_ms: 600000
-
-  # MTP 投机解码
   enable_mtp: true
   draft_tokens: 4
   enable_lm_head_draft: false
-
-  # 启动
   startup_timeout: 120
+  model_id: Qwen38-27B-TXT
