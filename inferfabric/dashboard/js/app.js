@@ -1222,6 +1222,18 @@ function refreshPanels() {
   loadLocalModels();
   loadUsage();
   loadTokenCurve();
+  updateCacheStatus();
+}
+
+function updateCacheStatus() {
+  const el = document.getElementById('inf-cache-status');
+  if (!el) return;
+  const snap = store.get('snapshot');
+  if (snap && snap.local_models) {
+    const on = snap.local_models.cache_enabled;
+    el.textContent = on ? 'ON' : 'OFF';
+    el.style.color = on ? 'var(--if-c-green)' : 'var(--if-c-orange)';
+  }
 }
 window.refreshPanels = refreshPanels;
 

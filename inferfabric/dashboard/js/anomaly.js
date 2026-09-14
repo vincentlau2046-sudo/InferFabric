@@ -32,31 +32,22 @@
     if (cat) url += '&category='+cat;
     if (sev) url += '&severity='+sev;
     try {
-      const [aniResp, snapResp] = await Promise.all([
-        fetch(url),
-        fetch('/api/snapshot').catch(() => null),
-      ]);
-      const data = await aniResp.json();
+      const data = await (await fetch(url)).json();
       const list = document.getElementById('anomaly-event-list');
       const cnt = document.getElementById('anomaly-count');
+      const badge = document.getElementById('anomaly-count-badge');
       if (!data.events || data.events.length===0) {
-        list.innerHTML = '<p style="color:var(--text3);padding:1em 0">暂无异常事件</p>';
-        cnt.textContent = '';
-      } else {
-        list.innerHTML = data.events.map(render).join('');
-        cnt.textContent = data.count + ' 条';
+        list.innerHTML = '<p style="color:var(--text3);padding:1.5em 0;text-align:center">暂无异常事件 ✔</p>';
+        if (cnt) cnt.textContent = '';
+        if (badge) { badge.style.display = 'none'; }
+        return;
       }
-      // 更新缓存状态
-      const cacheEl = document.getElementById('cache-status');
-      if (cacheEl && snapResp) {
-        const snap = await snapResp.json();
-        const hasCache = snap.local_models && snap.local_models.cache_enabled;
-        cacheEl.textContent = hasCache ? 'ON' : 'OFF';
-        cacheEl.style.color = hasCache ? 'var(--if-c-green)' : 'var(--if-c-orange)';
-      }
+      list.innerHTML = data.events.map(render).join('');
+      if (cnt) cnt.textContent = data.count + ' 条';
+      if (badge) { badge.textContent = data.count; badge.style.display = ''; }
     } catch(e) {
       document.getElementById('anomaly-event-list').innerHTML =
-        '<p style="color:var(--text3)">加载失败: '+escapeHtml(e.message)+'</p>';
+        '<p style="color:var(--text3);padding:1em 0;text-align:center">加载失败: '+escapeHtml(e.message)+'</p>';
     }
   }
 

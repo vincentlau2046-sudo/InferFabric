@@ -37,6 +37,14 @@
     </div>
   </div>
 
+  <!-- Gateway Status -->
+  <div style="display:flex;gap:16px;margin-bottom:12px;font-size:13px;color:var(--text3);align-items:center">
+    <span>响应缓存: <b id="inf-cache-status" style="color:var(--if-c-green)">检测中...</b></span>
+    <span>异常采集: <b style="color:var(--if-c-green))">运行中</b></span>
+    <span style="flex:1"></span>
+    <span>IFF <b>v5.6.8</b></span>
+  </div>
+
   <!-- S3: 推理 Chat 面板 (底部, 不常用) -->
   <div class="if-card inference-panel">
     <div class="if-card-hdr collapsible" onclick="this.classList.toggle('open');this.nextElementSibling.classList.toggle('open')">
