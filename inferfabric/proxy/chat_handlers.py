@@ -17,6 +17,35 @@ from inferfabric.anomaly_collector import AnomalyEvent
 log = logging.getLogger("inferfabric.proxy.chat")
 
 
+def _normalize_tools_for_openai(data):
+    """Rewrite Anthropic-format tool definitions into OpenAI function format.
+
+    Minimal conversion: tools with ``input_schema`` (and no ``function``) are
+    wrapped in an OpenAI ``function`` envelope so they survive vLLM's Pydantic
+    validation at ``/v1/chat/completions``.
+    """
+    tools = data.get("tools")
+    if isinstance(tools, list):
+        for i, t in enumerate(tools):
+            if isinstance(t, dict) and "input_schema" in t and "function" not in t:
+                fn = {"name": t.get("name", "")}
+                if t.get("description"):
+                    fn["description"] = t["description"]
+                fn["parameters"] = t.get("input_schema") or {"type": "object", "properties": {}}
+                tools[i] = {"type": "function", "function": fn}
+    tc = data.get("tool_choice")
+    if isinstance(tc, dict) and tc.get("type") in ("tool", "any", "auto", "none"):
+        tc_type = tc["type"]
+        if tc_type == "tool":
+            data["tool_choice"] = {"type": "function", "function": {"name": tc.get("name", "")}}
+        elif tc_type == "any":
+            data["tool_choice"] = "required"
+        elif tc_type == "auto":
+            data["tool_choice"] = "auto"
+        else:
+            data["tool_choice"] = "none"
+
+
 def handle_ollama_native(handler, pm, data, target_port, model_obj):
     """Handle chat for Ollama backends using native /api/chat API.
 
@@ -153,41 +182,6 @@ def handle_ollama_native(handler, pm, data, target_port, model_obj):
             pass
 
 
-def _normalize_tools_for_openai(data):
-    """Rewrite Anthropic-format tool definitions into OpenAI function format.
-
-    Minimal conversion: tools with ``input_schema`` (and no ``function``) are
-    wrapped in an OpenAI ``function`` envelope so they survive vLLM's Pydantic
-    validation at ``/v1/chat/completions``.  Everything else is left alone.
-    """
-    tools = data.get("tools")
-    if isinstance(tools, list):
-        for i, t in enumerate(tools):
-            if isinstance(t, dict) and "input_schema" in t and "function" not in t:
-                fn = {"name": t.get("name", "")}
-                if t.get("description"):
-                    fn["description"] = t["description"]
-                fn["parameters"] = t.get("input_schema") or {"type": "object", "properties": {}}
-                tools[i] = {"type": "function", "function": fn}
-
-    # Anthropic tool_choice object forms: {"type":"tool","name":X} /
-    # {"type":"any"} / {"type":"auto"} / {"type":"none"}
-    tc = data.get("tool_choice")
-    if isinstance(tc, dict) and tc.get("type") in ("tool", "any", "auto", "none"):
-        tc_type = tc["type"]
-        if tc_type == "tool":
-            data["tool_choice"] = {
-                "type": "function",
-                "function": {"name": tc.get("name", "")},
-            }
-        elif tc_type == "any":
-            data["tool_choice"] = "required"
-        elif tc_type == "auto":
-            data["tool_choice"] = "auto"
-        else:
-            data["tool_choice"] = "none"
-
-
 def handle_chat(handler, pm, data):
     """Handle OpenAI chat completions request.
 
@@ -289,7 +283,7 @@ def handle_chat(handler, pm, data):
             handler._send_json(
                 {"error": f"Cannot switch to {reason}", "status": "switch_blocked", "retry_after": 10},
                 503,
-                extra_headers={"Retry-After": "10"},
+                extra_headers={"Retry-After": "10"},  # R0: Agent 可据此退避
             )
             return
 
@@ -333,7 +327,7 @@ def handle_chat(handler, pm, data):
             status_code=404,
             message=f"Unknown model '{model}' — no local served_name or cloud match",
             possible_cause="1. 客户端传了不存在的模型名；2. cloud_provider.yaml 缺少对应 model_id；"
-                           "3. models.d/*.yaml 的 served_name 配置未覆盖此模型名",
+                           "3. models.d/*.ymal 的 served_name 配置未覆盖此模型名",
         ))
         handler._send_json({"error": f"Unknown model: {model}"}, 404)
         return
@@ -372,7 +366,7 @@ def handle_chat(handler, pm, data):
         return
     try:
         for attempt in range(3):
-            if _forward_request(handler, pm, target_port, body, stream):
+            if _forward_request(handler, pm, target_port, body, stream, model_name=model):
                 # PR-B: Log successful request with TTFT + usage
                 ttft = getattr(handler, '_ttft_ms', None)
                 usage = getattr(handler, '_usage', {})
@@ -396,7 +390,7 @@ def handle_chat(handler, pm, data):
         gate.release()
 
 
-def _forward_request(handler, pm, target_port, body, stream):
+def _forward_request(handler, pm, target_port, body, stream, model_name=""):
     """Forward a request to an upstream service.
 
     Returns True if the response was fully sent to the client.
@@ -490,3 +484,6 @@ def _forward_request(handler, pm, target_port, body, stream):
         if not headers_sent:
             return False
         return True
+    finally:
+        if model_name:
+            pm.release_port(model_name, target_port)

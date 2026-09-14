@@ -29,7 +29,6 @@ _deps_path = os.path.join(os.path.dirname(__file__), "..", "_deps")
 if os.path.isdir(_deps_path):
     import sys as _sys
     _sys.path.insert(0, _deps_path)
-
 from pathlib import Path as _Path
 
 # IFF data directory (consistent with config.py / token_stats.py)
@@ -122,6 +121,8 @@ class ProxyManager:
         self.telemetry.update_metrics_name_map(self._metrics_name_map)
         # PR-B: Helper to create request context
         self._req_counter = itertools.count()
+        # R7: 多副本选择器缓存
+        self._selectors: dict = {}
 
     def new_request_id(self) -> str:
         """Generate a unique, thread-safe request ID for logging.
@@ -385,9 +386,36 @@ class ProxyManager:
         return healthy
 
     def get_target_port(self, model_name: str):
-        """Get port for a served_model_name."""
+        """Get port for a served_model_name (R7: uses ReplicaSelector if replicas configured)."""
         m = self.mgr.find_model_by_served_name(model_name)
-        return m.port if m else None
+        if not m:
+            return None
+        port = getattr(m, 'port', None)
+        replicas = getattr(m, 'replicas', None)
+        if isinstance(replicas, (list, tuple)) and replicas:
+            selector = self._get_selector(m.name)
+            if selector:
+                return selector.select()
+        return port
+
+    def release_port(self, model_name: str, port: int):
+        """释放副本并发计数（R7）。"""
+        selector = self._selectors.get(model_name)
+        if selector:
+            selector.release(port)
+
+    def _get_selector(self, model_name: str):
+        """懒创建 ReplicaSelector。"""
+        from inferfabric.proxy.replica_selector import ReplicaInfo, ReplicaSelector
+        if model_name not in self._selectors:
+            m = self.mgr.get_model(model_name)
+            replicas = getattr(m, 'replicas', None) if m else None
+            if not isinstance(replicas, (list, tuple)) or not replicas:
+                return None
+            strategy = self._runtime_config.get("load_balance", {}).get("strategy", "least_busy")
+            self._selectors[model_name] = ReplicaSelector(
+                [ReplicaInfo(port=p) for p in replicas], strategy)
+        return self._selectors.get(model_name)
 
     def make_conn(self, port: int, timeout: int = 300) -> HTTPConnection:
         """Create new HTTP connection per request — no pool (thread-safe).

@@ -365,6 +365,9 @@ class ModelConfig:
     modality: str = ""  # derived from model_type if empty; 'text' | 'text-vision' | 'multimodal' | 'aigc' | 'embedding' | 'rerank' | 'infra' | 'tts' | 'asr'
     quantization: str = ""  # quantization format: 'NVFP4', 'GPTQ-4bit', 'Q8_0', etc.
 
+    # R7: 多副本端口列表（如 [8002, 8003]；为空时使用 type 对应 config 的 port）
+    replicas: list[int] = field(default_factory=list)
+
     # Fields excluded from config hash (runtime / non-startup)
     _HASH_EXCLUDE_FIELDS = frozenset({"typical_vram_pct", "peak_vram_mb", "startup_timeout"})
 
@@ -715,6 +718,7 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             model_type=raw.get("model_type", "llm"),
             quantization=raw.get("quantization", ""),
             modality=raw.get("modality", ""),
+            replicas=raw.get("replicas", []),
         )
 
     return result

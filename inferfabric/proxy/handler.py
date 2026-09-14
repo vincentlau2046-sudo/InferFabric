@@ -504,8 +504,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 429,
             )
             return
-        # G-1b: 记录本地成功请求 — 修复 Anthropic 端点成功请求不写 request_log 导致
-        # dashboard 最近 1 小时看不到 qwen38-27b 使用统计的问题
+
+        # R7: 多副本端口选择
+        _selected_port = None
+        _replicas = getattr(model_obj, 'replicas', None)
+        if isinstance(_replicas, (list, tuple)) and _replicas:
+            _selected_port = pm.get_target_port(model_name)
+            if _selected_port:
+                _orig_port = model_obj.port
+                model_obj.port = _selected_port
+
         status = forwarder.forward_anthropic_local(
             self, pm, data, auth_header, model_obj, original_model
         )
@@ -525,6 +533,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 ))
         finally:
             gate.release()
+            if _selected_port:
+                pm.release_port(model_obj.name, _selected_port)
+                model_obj.port = _orig_port
 
     # ─── v1 Models ────────────────────────────────────────────────
 
