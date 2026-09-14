@@ -36,22 +36,6 @@ log = logging.getLogger("inferfabric.forwarder")
 
 # ── Local model type filter ──
 
-
-def _ensure_tool_schemas(data: dict) -> None:
-    """Ensure every tool entry has an input_schema if missing.
-
-    Some cloud Anthropic providers (e.g. baidu-codingplan) use Pydantic to
-    validate the request body and require input_schema on every tool entry,
-    including server-side tools (like web_search_20250305) that Claude Code
-    sends without one. Inject a minimal default schema to satisfy the validator.
-    """
-    tools = data.get("tools")
-    if not isinstance(tools, list):
-        return
-    for t in tools:
-        if isinstance(t, dict) and "input_schema" not in t:
-            t["input_schema"] = {"type": "object", "properties": {}}
-
 LOCAL_LLM_TYPES = {"llm", "vl", "omni"}
 
 
@@ -230,10 +214,6 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
         data["model"] = cloud_model.model_id
 
     was_stream = data.get("stream", False)
-    # Normalize tools for cloud Anthropic: inject input_schema for server tools
-    # (e.g. web_search_20250305) that Claude Code omits the field on.
-    if protocol == "anthropic":
-        _ensure_tool_schemas(data)
     body = json.dumps(data).encode("utf-8")
 
     try:
