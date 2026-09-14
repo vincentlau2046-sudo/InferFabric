@@ -846,7 +846,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             "status": status, "system": system, "models": models,
             "history": history, "token_stats": token_stats or {},
             "request_log": request_log, "metrics_24h": metrics_24h or {},
-            "local_models": {"discovered": [], "configured": list(pm.mgr._models.keys())},
+            "local_models": {"discovered": [], "configured": list(pm.mgr._models.keys()),
+             "cache_enabled": getattr(pm, 'response_cache', None) is not None},
         }
 
         inm = self.headers.get("If-None-Match", "")

@@ -32,17 +32,28 @@
     if (cat) url += '&category='+cat;
     if (sev) url += '&severity='+sev;
     try {
-      const resp = await fetch(url);
-      const data = await resp.json();
+      const [aniResp, snapResp] = await Promise.all([
+        fetch(url),
+        fetch('/api/snapshot').catch(() => null),
+      ]);
+      const data = await aniResp.json();
       const list = document.getElementById('anomaly-event-list');
       const cnt = document.getElementById('anomaly-count');
       if (!data.events || data.events.length===0) {
         list.innerHTML = '<p style="color:var(--text3);padding:1em 0">暂无异常事件</p>';
         cnt.textContent = '';
-        return;
+      } else {
+        list.innerHTML = data.events.map(render).join('');
+        cnt.textContent = data.count + ' 条';
       }
-      list.innerHTML = data.events.map(render).join('');
-      cnt.textContent = data.count + ' 条';
+      // 更新缓存状态
+      const cacheEl = document.getElementById('cache-status');
+      if (cacheEl && snapResp) {
+        const snap = await snapResp.json();
+        const hasCache = snap.local_models && snap.local_models.cache_enabled;
+        cacheEl.textContent = hasCache ? 'ON' : 'OFF';
+        cacheEl.style.color = hasCache ? 'var(--if-c-green)' : 'var(--if-c-orange)';
+      }
     } catch(e) {
       document.getElementById('anomaly-event-list').innerHTML =
         '<p style="color:var(--text3)">加载失败: '+escapeHtml(e.message)+'</p>';
