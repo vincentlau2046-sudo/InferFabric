@@ -75,6 +75,17 @@ class TestProviderConfig:
         assert cfg.discovery_enabled
         assert cfg.discovery_interval == 3600
         assert cfg.routing_default == "cloud_only"
+        assert cfg.timeout == 600  # R3: 60s→600s
+
+    def test_default_timeout_is_600(self):
+        """默认 timeout 为 600s（R3）。"""
+        cfg = ProviderConfig(name="test")
+        assert cfg.timeout == 600
+
+    def test_default_timeout_not_60(self):
+        """确保不再是旧的 60s 默认值。"""
+        cfg = ProviderConfig(name="test")
+        assert cfg.timeout != 60
 
 
 class TestCloudDiscoveryConfig:

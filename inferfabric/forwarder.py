@@ -216,61 +216,93 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
     was_stream = data.get("stream", False)
     body = json.dumps(data).encode("utf-8")
 
-    try:
-        req = Request(url, data=body, headers=headers, method="POST")
-        resp = urlopen(req, timeout=provider_cfg.timeout)
-        first_byte_time = time.monotonic()
+    # R2: 云端转发退避重试（3 次尝试，0.5s/1s/2s 指数退避）
+    max_retries = 3
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            req = Request(url, data=body, headers=headers, method="POST")
+            resp = urlopen(req, timeout=provider_cfg.timeout)
+            first_byte_time = time.monotonic()
 
-        if was_stream:
-            # G-1b: 流式 usage 提取 — 旁路观察 SSE 事件，复用 first_byte_time 记 TTFT
-            sse_buf = SSELineBuffer()
-            pipe_stream_response(handler, resp, sse_buf)
+            # Retryable status (429/5xx) → close and backoff
+            if should_retry_on_status(resp.status) and attempt < max_retries - 1:
+                log.warning(
+                    "Cloud %s returned HTTP %d (attempt %d/%d), retrying in %.1fs...",
+                    provider_cfg.name, resp.status, attempt + 1, max_retries,
+                    exponential_backoff(attempt),
+                )
+                resp.close()
+                time.sleep(exponential_backoff(attempt))
+                continue
+
+            if was_stream:
+                sse_buf = SSELineBuffer()
+                pipe_stream_response(handler, resp, sse_buf)
+                return CloudResult(
+                    status=200,
+                    usage=dict(sse_buf.usage),
+                    ttft_ms=(first_byte_time - start) * 1000,
+                    duration_ms=(time.monotonic() - start) * 1000,
+                )
+            else:
+                resp_body = resp.read()
+                result = json.loads(resp_body)
+                resp.close()
+                send_json(handler, result)
+                usage = result.get("usage", {})
+                if "input_tokens" in usage and "prompt_tokens" not in usage:
+                    usage["prompt_tokens"] = usage.get("input_tokens", 0)
+                if "output_tokens" in usage and "completion_tokens" not in usage:
+                    usage["completion_tokens"] = usage.get("output_tokens", 0)
+                return CloudResult(
+                    status=200,
+                    usage=usage,
+                    ttft_ms=(first_byte_time - start) * 1000,
+                    duration_ms=(time.monotonic() - start) * 1000,
+                )
+        except _HTTPError as e:
+            error_body = e.read().decode("utf-8", errors="replace")
+            e.close()
+            if should_retry_on_status(e.code) and attempt < max_retries - 1:
+                log.warning(
+                    "Cloud %s HTTP %d (attempt %d/%d), retrying in %.1fs...",
+                    provider_cfg.name, e.code, attempt + 1, max_retries,
+                    exponential_backoff(attempt),
+                )
+                time.sleep(exponential_backoff(attempt))
+                continue
+            # Non-retryable HTTP error → surface to client
+            log.error("Cloud %s returned HTTP %d: %s", provider_cfg.name, e.code, error_body[:200])
+            status = e.code if 400 <= e.code < 500 else 502
+            err_msg = f"Cloud provider error ({e.code}): {error_body[:500]}"
+            send_json(handler, {"error": err_msg}, status)
             return CloudResult(
-                status=200,
-                usage=dict(sse_buf.usage),
-                ttft_ms=(first_byte_time - start) * 1000,
+                status=status,
+                error=err_msg,
                 duration_ms=(time.monotonic() - start) * 1000,
             )
-        else:
-            resp_body = resp.read()
-            result = json.loads(resp_body)
-            resp.close()
-            send_json(handler, result)
-            usage = result.get("usage", {})
-            # Normalize usage keys: Baidu Anthropic returns input_tokens/output_tokens,
-            # OpenAI returns prompt_tokens/completion_tokens. Unify to OpenAI naming.
-            if "input_tokens" in usage and "prompt_tokens" not in usage:
-                usage["prompt_tokens"] = usage.get("input_tokens", 0)
-            if "output_tokens" in usage and "completion_tokens" not in usage:
-                usage["completion_tokens"] = usage.get("output_tokens", 0)
-            return CloudResult(
-                status=200,
-                usage=usage,
-                ttft_ms=(first_byte_time - start) * 1000,
-                duration_ms=(time.monotonic() - start) * 1000,
-            )
-    except _HTTPError as e:
-        error_body = e.read().decode("utf-8", errors="replace")
-        e.close()
-        log.error("Cloud %s returned HTTP %d: %s", provider_cfg.name, e.code, error_body[:200])
-        # Propagate upstream status code (429→429, 404→404) instead of always 502
-        status = e.code if 400 <= e.code < 500 else 502
-        err_msg = f"Cloud provider error ({e.code}): {error_body[:500]}"
-        send_json(handler, {"error": err_msg}, status)
-        return CloudResult(
-            status=status,
-            error=err_msg,
-            duration_ms=(time.monotonic() - start) * 1000,
-        )
-    except Exception as e:
-        log.error("Cloud %s request failed: %s", provider_cfg.name, e)
-        err_msg = f"Cloud provider unreachable: {e}"
-        send_json(handler, {"error": err_msg}, 503)
-        return CloudResult(
-            status=503,
-            error=err_msg,
-            duration_ms=(time.monotonic() - start) * 1000,
-        )
+        except Exception as e:
+            if attempt < max_retries - 1:
+                log.warning(
+                    "Cloud %s request failed (attempt %d/%d), retrying in %.1fs...",
+                    provider_cfg.name, attempt + 1, max_retries,
+                    exponential_backoff(attempt),
+                )
+                time.sleep(exponential_backoff(attempt))
+                continue
+            last_error = e
+
+    # All retries exhausted
+    log.error("Cloud %s request failed after %d attempts: %s",
+              provider_cfg.name, max_retries, last_error)
+    err_msg = f"Cloud provider unreachable: {last_error}"
+    send_json(handler, {"error": err_msg}, 503)
+    return CloudResult(
+        status=503,
+        error=err_msg,
+        duration_ms=(time.monotonic() - start) * 1000,
+    )
 
 
 # ── Local forward with retry chain ──

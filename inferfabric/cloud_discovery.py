@@ -97,7 +97,7 @@ class ProviderConfig:
     api_key: str = ""
     openai_base: str = ""
     anthropic_base: str = ""
-    timeout: int = 60
+    timeout: int = 600
     enabled: bool = True
     # Discovery
     discovery_enabled: bool = True
@@ -255,7 +255,7 @@ class CloudDiscovery:
                 anthropic_base=pdata.get("anthropic_base", ""),
                 env_var=pdata.get("env_var", ""),
                 discovery=pdata.get("discovery", True),
-                timeout=pdata.get("timeout", 60),
+                timeout=pdata.get("timeout", 600),
                 models=pdata.get("models", {}),
             )
         return result
@@ -583,7 +583,7 @@ class CloudDiscovery:
                 api_key=raw_api_key,
                 openai_base=pcfg.get("openai_base", ""),
                 anthropic_base=pcfg.get("anthropic_base", ""),
-                timeout=pcfg.get("timeout", 60),
+                timeout=pcfg.get("timeout", 600),
                 enabled=pcfg.get("enabled", True),
                 discovery_enabled=discovery.get("enabled", True),
                 discovery_endpoint=discovery.get("endpoint", "/models"),
