@@ -325,9 +325,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                  len(data.get("tools", [])),
                  len(json.dumps(data)))
 
-        # PR-6e/PR-2b: SWITCHING guard — only 503 if request is for a DIFFERENT local model
-        # Cloud models (or any model with no local service) are NOT blocked — they
-        # don't depend on the local vLLM being ready.
+        # PR-6e/PR-2b: SWITCHING guard — only 503 if request is NOT for the switching target
         from inferfabric.state import ServiceState
         profile_state = pm.mgr.state.get("profile_state", "")
         requested_model = data.get("model", "")
@@ -337,9 +335,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if target_model and target_model.name == switching_target:
                 # Request is for the switching target → let it proceed (will route once active)
                 log.info("/v1/messages → target %s is switching, proceeding", switching_target)
-            elif not target_model:
-                # Cloud model or unknown — not blocked by local model switch
-                log.info("/v1/messages → cloud model %s not blocked by local switch", requested_model)
             else:
                 # Not the switching target → 503
                 log.info("/v1/messages → 503 (switching to %s, not %s)", switching_target, requested_model)
@@ -421,7 +416,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                         {"error": f"Auto-switch to {target_model.name} failed, retry later",
                          "status": "switch_failed", "retry_after": 10},
                         503,
-                        extra_headers={"Retry-After": "10"},
+                        extra_headers={"Retry-After": "10"},  # R0: match ensure_service cooldown
                     )
                     return
             else:
@@ -1443,13 +1438,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             resp_body = resp.read()
             self.send_response(resp.status)
             for k, v in resp.getheaders():
-                # HTTP/1.1 keep-alive 下不要透传上游 Content-Length / Transfer-Encoding：
-                # 上游 vLLM 可能以 chunked 编码返回，但我们用 _safe_write 写完整 body（无 chunked 分帧），
-                # 严格客户端（reqwest）会报 "unexpected transfer-encoding parsed"
-                if k.lower() in ("content-length", "transfer-encoding"):
-                    continue
                 self.send_header(k, v)
-            self.send_header("Content-Length", str(len(resp_body)))
             self.end_headers()
             self._safe_write(resp_body)
         except Exception as e:
@@ -1513,13 +1502,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             resp_body = resp.read()
             self.send_response(resp.status)
             for k, v in resp.getheaders():
-                # HTTP/1.1 keep-alive 下不要透传上游 Content-Length / Transfer-Encoding：
-                # 上游 vLLM 可能以 chunked 编码返回，但我们用 _safe_write 写完整 body（无 chunked 分帧），
-                # 严格客户端（reqwest）会报 "unexpected transfer-encoding parsed"
-                if k.lower() in ("content-length", "transfer-encoding"):
-                    continue
                 self.send_header(k, v)
-            self.send_header("Content-Length", str(len(resp_body)))
             self.end_headers()
             self._safe_write(resp_body)
         except Exception as e:
@@ -1586,6 +1569,12 @@ def _create_server(retries: int = 5, retry_delay: float = 2.0):
 
 
 def main():
+    # R7: --async flag → aiohttp async server
+    if "--async" in sys.argv:
+        from inferfabric.proxy.async_server import start_async
+        start_async()
+        return
+
     import traceback
 
     def _global_excepthook(exc_type, exc_value, exc_tb):
