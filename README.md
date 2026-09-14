@@ -29,6 +29,8 @@ InferFabric is a single-GPU LLM inference gateway. It treats every model—local
 
 ![Architecture](docs/diagrams/architecture.svg)
 
+> **Detailed flow diagrams**: [docs/diagrams/architecture-flow.md](docs/diagrams/architecture-flow.md) — covers overall architecture, local model routing, cloud routing, anomaly event flow, response cache flow, and metrics pipeline.
+
 ---
 
 ## Architecture
@@ -59,7 +61,7 @@ The value stream spans from YAML model definition to inference response, with fi
 | **Request Routing** | Unified protocol gateway | OpenAI + Anthropic dual-protocol at `:8999` |
 | **GPU State Management** | Safe concurrent model execution | idle → exclusive/shared → idle state machine |
 | **Local Inference** | Zero-latency local execution | vLLM/SGLang/Ollama with GPU affinity allocation |
-| **Cloud Fallback** | Guaranteed model availability | 9 cloud presets with auto-discovery and failover |
+| **Cloud Proxy** | Zero-protocol-translation transparent proxy | OpenAI + Anthropic dual-protocol at `:8999` |
 | **Multi-modal** | Extended media pipeline | TTS, ASR, embedding, reranker services |
 
 ### Model as Plugin
@@ -81,13 +83,17 @@ vllm:
 
 ### Dual-Protocol Routing
 
-All requests arrive as standard OpenAI `/v1/chat/completions`. The gateway:
+All requests arrive as standard OpenAI `/v1/chat/completions` or Anthropic `/v1/messages`. The gateway:
 
-1. Checks if the model is a local service → routes to vLLM/SGLang port
-2. Checks cloud provider route → proxies through provider API (OpenAI/Anthropic compatible)
-3. If AUTO_SWITCH is on and the model is configured but stopped → starts it automatically
+1. **Auth** — API key validation via `AuthManager`
+2. **Cache** — `ResponseCache` lookup (R5): exact-match on `(model + body hash)`, `temperature=0` only
+3. **SWITCHING Guard** — If a local model is being switched, cloud models pass through; other local models get `503 + Retry-After: 30`
+4. **Local routing** — `find_model_by_served_name()` → active? → forward to vLLM/SGLang port; inactive? → auto-switch on demand (R0 cooldown: failed switch blocks 10s, `Retry-After: 10`)
+5. **Multi-replica load balancing** (R7) — `ReplicaSelector` with `least_busy`/`round_robin` when `replicas` configured
+6. **Cloud routing** — `resolve_route()` → `CloudDiscovery` → zero-protocol-translation proxy to baidu/deepseek/etc.
+7. **Unknown model** (R8) — No match? → explicit `404` + `AnomalyEvent`; no silent fallback to random models
 
-No client configuration changes needed. You ask for a model, InferFabric figures out where it lives.
+Every request path writes `RequestLog` (R1) and records structured `AnomalyEvent` (R9) on errors. Cloud retries (R2): 3 attempts with exponential backoff. Timeout (R3): 600s default.
 
 ### Cloud Provider Presets
 
@@ -163,6 +169,10 @@ iff switch idle
 | `GET`  | `/` | macOS Dashboard |
 | `GET`  | `/status` | GPU state, active services, health |
 | `GET`  | `/models` | All configured models |
+| `GET`  | `/api/metrics` | Aggregated request metrics (JSON) |
+| `GET`  | `/metrics` | Prometheus text format (R6) |
+| `GET`  | `/api/request_log` | Request log history (R1) |
+| `GET`  | `/api/anomalies` | Structured anomaly events (R9) |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat |
 | `POST` | `/v1/messages` | Anthropic-compatible messages |
 | `POST` | `/v1/embeddings` | Embedding requests |
@@ -243,6 +253,8 @@ iff reconcile                      # Fix state.db
 | **v5.4.0** | **2026-08** | **macOS Dashboard: sidebar, chat, 12 SVG icons, dark mode** |
 | **v5.5.0** | **2026-08** | GPU state computed property (no drift), HealthMonitor de-reconciled, SIGHUP ConfigReloader, global exception guardrail + 15 `except:pass` fixes, `/reload-config` button, dead code cleanup (forward_to_baidu → unified cloud_provider.yaml), `/local-models` disk-scan guard, UI polish: typography hierarchy + 4px spacing system + WCAG AA contrast, model card macOS icon-box layout, perfPanel stay-visible fix |
 | **v5.5.1** | **2026-08** | OpenAPI 3.1.0 specification (1014 lines, 37 endpoints, shared schemas), `/api/openapi.json` endpoint with live version injection, Dashboard 📖 OpenAPI link in top bar, asr-sensevoice rename, state management refactoring + 10 dead code cleanup items |
+| **v5.6.7** | **2026-09** | R0: `ensure_service` cooldown fix — failed switch arms 10s cooldown, ends infinite 503 storm |
+| **v5.6.8** | **2026-09** | **Gateway Hardening Complete**: R1 request_log blind spots, R2 cloud retry (3x backoff), R3 timeout 60s→600s, R4 per-model concurrency pool, R5 response cache (cachetools LRU), R6 Prometheus /metrics, R7 async server + multi-replica + least_busy load balancing, R8 remove silent fallback (unknown model → 404), R9 AnomalyCollector + /api/anomalies, R10 anomaly dashboard tab. Full architecture flow at `docs/diagrams/architecture-flow.md` |
 
 ---
 
