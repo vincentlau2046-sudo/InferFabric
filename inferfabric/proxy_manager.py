@@ -23,6 +23,13 @@ from inferfabric.proxy.auth import AuthManager
 from inferfabric.cloud_discovery import CloudDiscovery, CloudModel
 from inferfabric.ratelimit import DualGateLimiter, RateLimiterV2
 from inferfabric.metrics_aggregator import CloudModelPrice
+
+# R5: 添加 _deps 到路径（cachetools 等额外依赖）
+_deps_path = os.path.join(os.path.dirname(__file__), "..", "_deps")
+if os.path.isdir(_deps_path):
+    import sys as _sys
+    _sys.path.insert(0, _deps_path)
+
 from pathlib import Path as _Path
 
 # IFF data directory (consistent with config.py / token_stats.py)
@@ -93,6 +100,9 @@ class ProxyManager:
         # R9: AnomalyCollector — 结构化异常事件（线程安全环形缓冲）
         from inferfabric.anomaly_collector import AnomalyCollector
         self.anomalies = AnomalyCollector()
+        # R5: ResponseCache — 精确匹配响应缓存
+        from inferfabric.proxy.response_cache import ResponseCache
+        self.response_cache = ResponseCache(maxsize=self._runtime_config.get("cache", {}).get("max_entries", 500))
         # D-2: Build served_name → friendly_name mapping for dashboard
         self._metrics_name_map = {}
         for m in self.mgr._models.values():

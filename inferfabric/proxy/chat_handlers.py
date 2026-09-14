@@ -231,6 +231,25 @@ def handle_chat(handler, pm, data):
 
     stream = data.get("stream", False)
 
+    # R5: 响应缓存查找
+    cache_enabled = getattr(pm, '_runtime_config', {}).get("cache", {}).get("enabled", True)
+    if cache_enabled and not stream and data.get("temperature", 0) in (0, None):
+        cached = getattr(pm, 'response_cache', None)
+        if cached is not None:
+            cached_resp = cached.get(model, data)
+            if cached_resp is not None:
+                log.info("/v1/chat/completions → cache HIT for %s", model)
+                handler._send_json(cached_resp["body"], 200)
+                pm.logger.log(RequestLog(
+                    req_id=req_id, key_name=key_name, model=model,
+                    status=200, error=None, route="local",
+                    tokens_in=cached_resp["usage"].get("prompt_tokens", 0),
+                    tokens_out=cached_resp["usage"].get("completion_tokens", 0),
+                    ttft_ms=0,
+                    duration_ms=(time.monotonic() - handler._req_start) * 1000,
+                ))
+                return
+
     # Auto-switch
     service_name = pm.model_to_service(model)
     if service_name and AUTO_SWITCH:

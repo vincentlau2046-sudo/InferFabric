@@ -142,8 +142,8 @@ def pipe_stream_response(handler, resp, sse_buf=None):
 # ── JSON response handling ──
 
 
-def handle_json_response(handler, resp, model_obj, original_model, data, auth_header):
-    """Handle non-streaming JSON response; returns error on non-200."""
+def handle_json_response(handler, resp, model_obj, original_model, data, auth_header, response_cache=None):
+    """Handle non-streaming JSON response; caches on success (R5)."""
     resp_status = resp.status
     resp_body = resp.read()
     if resp_status != 200:
@@ -155,7 +155,6 @@ def handle_json_response(handler, resp, model_obj, original_model, data, auth_he
         return
     try:
         result = json.loads(resp_body)
-        # G-1b: 提取 usage 并存入 handler._usage（Anthropic 命名 input/output_tokens 归一化为 prompt/completion_tokens）
         usage = result.get("usage")
         if usage and isinstance(usage, dict):
             u = getattr(handler, '_usage', None) or {"prompt_tokens": 0, "completion_tokens": 0}
@@ -163,6 +162,13 @@ def handle_json_response(handler, resp, model_obj, original_model, data, auth_he
             u["completion_tokens"] = usage.get("completion_tokens") or usage.get("output_tokens") or 0
             handler._usage = u
         send_json(handler, result)
+        # R5: 缓存成功的非流式响应
+        if response_cache is not None and resp_status == 200:
+            try:
+                cached_model = original_model or data.get("model", "")
+                response_cache.put(cached_model, data, result, handler._usage or {})
+            except Exception:
+                log.debug("Cache put failed (non-critical)")
     except json.JSONDecodeError:
         send_json(handler, {"error": "invalid response from local model"}, 502)
 
@@ -349,7 +355,8 @@ def forward_anthropic_local(handler, pm, data, auth_header, model_obj, original_
                 pipe_stream_response(handler, resp, sse_buf)
                 handler._usage = dict(sse_buf.usage)
             else:
-                handle_json_response(handler, resp, model_obj, original_model, data, auth_header)
+                handle_json_response(handler, resp, model_obj, original_model, data, auth_header,
+                                     response_cache=getattr(pm, 'response_cache', None))
             return resp.status
 
         except (ConnectionRefusedError, ConnectionResetError, OSError, BrokenPipeError) as e:

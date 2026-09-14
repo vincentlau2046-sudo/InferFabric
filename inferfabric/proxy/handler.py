@@ -300,6 +300,24 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"error": auth_reason, "status": "unauthorized"}, 401)
                 return
 
+        # R5: 响应缓存查找（stream=false + temperature=0 的请求）
+        cache_enabled = getattr(pm, '_runtime_config', {}).get("cache", {}).get("enabled", True)
+        if cache_enabled and not data.get("stream", False) and data.get("temperature", 0) in (0, None):
+            response_cache = getattr(pm, 'response_cache', None)
+            cached = response_cache.get(original_model, data) if response_cache is not None else None
+            if cached is not None:
+                log.info("/v1/messages → cache HIT for %s", original_model)
+                self._send_json(cached["body"], 200)
+                pm.logger.log(RequestLog(
+                    req_id=req_id, key_name=key_name, model=original_model,
+                    status=200, error=None, route="local",
+                    tokens_in=cached["usage"].get("prompt_tokens", 0),
+                    tokens_out=cached["usage"].get("completion_tokens", 0),
+                    ttft_ms=0,
+                    duration_ms=(time.monotonic() - req_start) * 1000,
+                ))
+                return
+
         log.info("/v1/messages body: max_tokens=%s, model=%s, messages_count=%d, tools_count=%d, body_size=%d",
                  data.get("max_tokens"), data.get("model"),
                  len(data.get("messages", [])),
