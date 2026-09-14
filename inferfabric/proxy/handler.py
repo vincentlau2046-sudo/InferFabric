@@ -79,6 +79,7 @@ _GET_ROUTES = {
     "/api/token-stats":         lambda h, pm: h._handle_token_stats(pm),
     "/api/token-curve":         lambda h, pm: h._handle_token_curve(pm),
     "/api/snapshot":            lambda h, pm: h._handle_snapshot(pm),
+    "/api/anomalies":           lambda h, pm: h._handle_anomalies(pm),
     "/history":                 lambda h, pm: h._send_json(pm.mgr.state.get_history(limit=30)),
     "/vllm_metrics":            lambda h, pm: h._handle_vllm_metrics(pm),
     "/watchdog_status":         lambda h, pm: h._handle_watchdog_status(),
@@ -619,6 +620,35 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             log.error("/api/request_log failed: %s", e)
             self._send_json({"error": "request log unavailable"}, 500)
+
+    def _handle_anomalies(self, pm):
+        """GET /api/anomalies — 返回异常事件 (R9)。"""
+        try:
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            since = float(qs.get("since", ["0"])[0])
+            limit = min(int(qs.get("limit", ["100"])[0]), 500)
+            category = qs.get("category", [None])[0]
+            severity = qs.get("severity", [None])[0]
+            events = pm.anomalies.query(since=since, limit=limit,
+                                         category=category, severity=severity)
+            self._send_json({
+                "events": [{
+                    "id": e.id,
+                    "ts": e.ts,
+                    "category": e.category,
+                    "severity": e.severity,
+                    "model": e.model,
+                    "message": e.message,
+                    "status_code": e.status_code,
+                    "possible_cause": e.possible_cause,
+                    "detail": e.detail,
+                } for e in events],
+                "count": len(events),
+            })
+        except Exception as e:
+            log.error("/api/anomalies failed: %s", e)
+            self._send_json({"error": "anomalies unavailable"}, 500)
 
     def _handle_token_stats(self, pm):
         """返回 token 用量统计 (v5.x: API endpoint for live polling)"""

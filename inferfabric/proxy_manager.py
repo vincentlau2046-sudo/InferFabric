@@ -90,6 +90,9 @@ class ProxyManager:
         self.telemetry = TelemetryHub(IFF_DATA_DIR, self._runtime_config)
         self.logger = self.telemetry.logger
         self.metrics = self.telemetry.metrics
+        # R9: AnomalyCollector — 结构化异常事件（线程安全环形缓冲）
+        from inferfabric.anomaly_collector import AnomalyCollector
+        self.anomalies = AnomalyCollector()
         # D-2: Build served_name → friendly_name mapping for dashboard
         self._metrics_name_map = {}
         for m in self.mgr._models.values():
