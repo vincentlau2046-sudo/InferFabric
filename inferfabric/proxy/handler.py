@@ -81,6 +81,7 @@ _GET_ROUTES = {
     "/api/token-curve":         lambda h, pm: h._handle_token_curve(pm),
     "/api/snapshot":            lambda h, pm: h._handle_snapshot(pm),
     "/api/anomalies":           lambda h, pm: h._handle_anomalies(pm),
+    "/metrics":                 lambda h, pm: h._handle_metrics(pm),
     "/history":                 lambda h, pm: h._send_json(pm.mgr.state.get_history(limit=30)),
     "/vllm_metrics":            lambda h, pm: h._handle_vllm_metrics(pm),
     "/watchdog_status":         lambda h, pm: h._handle_watchdog_status(),
@@ -689,6 +690,30 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             log.error("/api/anomalies failed: %s", e)
             self._send_json({"error": "anomalies unavailable"}, 500)
+
+    def _handle_metrics(self, pm):
+        """GET /metrics — Prometheus 文本格式 (R6)。"""
+        try:
+            from inferfabric.proxy.metrics_exporter import generate_metrics
+            text = generate_metrics(pm.telemetry, pm.anomalies)
+            self._send_text(text, 200, content_type="text/plain; version=0.0.4; charset=utf-8")
+        except Exception as e:
+            log.error("/metrics failed: %s", e)
+            self._send_text("metrics error", 500)
+
+    def _send_text(self, text: str, status: int = 200, content_type: str = "text/plain; charset=utf-8"):
+        """发送纯文本响应。"""
+        body = text.encode("utf-8")
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
     def _handle_token_stats(self, pm):
         """返回 token 用量统计 (v5.x: API endpoint for live polling)"""

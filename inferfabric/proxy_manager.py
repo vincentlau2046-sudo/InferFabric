@@ -75,6 +75,7 @@ class ProxyManager:
             max_concurrent = self._compute_max_concurrent()
         else:
             max_concurrent = int(max_concurrent_cfg)
+        global_max_concurrent = int(rate_cfg.get("global_max_concurrent", 0))
         self.dual_gate = DualGateLimiter(
             rpm_limiter=RateLimiterV2(
                 server_rpm=server_rpm,
@@ -84,10 +85,11 @@ class ProxyManager:
             max_concurrent=max_concurrent,
             mode=rate_mode,
             timeout=rate_timeout,
+            global_max_concurrent=global_max_concurrent,
         )
         log.info(
-            "Rate limit: mode=%s server_rpm=%s model_rpm_default=%s max_concurrent=%d timeout=%ds",
-            rate_mode, server_rpm, model_rpm_default, max_concurrent, rate_timeout,
+            "Rate limit: mode=%s server_rpm=%s model_rpm_default=%s max_concurrent=%d global_max=%d timeout=%ds",
+            rate_mode, server_rpm, model_rpm_default, max_concurrent, global_max_concurrent, rate_timeout,
         )
         # v5.2: HealthMonitor — delegated health checking
         from inferfabric.health_monitor import HealthMonitor
