@@ -225,13 +225,17 @@
 
 <script>
 window.switchTab = function(tabId) {
+  if (window.store && window.store.switchTab) {
+    window.store.switchTab(tabId);
+    return;
+  }
+  // Fallback: direct DOM (before Store loads)
   document.querySelectorAll('.tab-content').forEach(function(t) { t.classList.remove('active'); });
   document.querySelectorAll('.if-nav-item').forEach(function(t) { t.classList.remove('active'); });
   var tab = document.getElementById(tabId);
   if (tab) tab.classList.add('active');
   var btn = document.querySelector('[data-tab="' + tabId + '"]');
   if (btn) btn.classList.add('active');
-  if (window.store) window.store.set('tab_active', tabId);
 };
 <!-- JS:bindings -->
 <!-- JS:state -->

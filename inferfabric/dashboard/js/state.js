@@ -239,7 +239,8 @@ class StateStore {
   restoreTab() {
     try {
       const saved = localStorage.getItem('iff_active_tab');
-      if (saved) this.switchTab(saved);
+      // Only restore known tabs; skip 'tab-anomaly' (hidden by default)
+      if (saved && !saved.startsWith('tab-anomaly')) this.switchTab(saved);
     } catch(e) {}
   }
 
