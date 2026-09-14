@@ -304,7 +304,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                  len(data.get("tools", [])),
                  len(json.dumps(data)))
 
-        # PR-6e/PR-2b: SWITCHING guard — only 503 if request is NOT for the switching target
+        # PR-6e/PR-2b: SWITCHING guard — only 503 if request is for a DIFFERENT local model
+        # Cloud models (or any model with no local service) are NOT blocked — they
+        # don't depend on the local vLLM being ready.
         from inferfabric.state import ServiceState
         profile_state = pm.mgr.state.get("profile_state", "")
         requested_model = data.get("model", "")
@@ -314,6 +316,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if target_model and target_model.name == switching_target:
                 # Request is for the switching target → let it proceed (will route once active)
                 log.info("/v1/messages → target %s is switching, proceeding", switching_target)
+            elif not target_model:
+                # Cloud model or unknown — not blocked by local model switch
+                log.info("/v1/messages → cloud model %s not blocked by local switch", requested_model)
             else:
                 # Not the switching target → 503
                 log.info("/v1/messages → 503 (switching to %s, not %s)", switching_target, requested_model)
