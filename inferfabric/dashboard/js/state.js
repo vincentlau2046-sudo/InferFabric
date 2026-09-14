@@ -262,7 +262,7 @@ window.restoreTab = () => store.restoreTab();
 store.on('gpu_mode', () => store._scheduleRender());
 
 // Expose switchTab globally (replaces old app.js version)
-window.switchTab = (tabId) => store.switchTab(tabId);
+window.switchTab = window.switchTab || ((tabId) => store.switchTab(tabId));
 
 /* ── Switch Overlay (P5.4) ── */
 store.on('switch_target', (val) => {
