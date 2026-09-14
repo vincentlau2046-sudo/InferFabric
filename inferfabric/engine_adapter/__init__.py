@@ -29,7 +29,8 @@ from inferfabric.engine_adapter.ollama_cpp import OllamaCppAdapter
 from inferfabric.engine_adapter.comfyui import ComfyUIAdapter
 from inferfabric.engine_adapter.tts import TTSAdapter
 from inferfabric.engine_adapter.asr import ASRAdapter
+from inferfabric.engine_adapter.ninfer import NInferAdapter  # noqa: F401 — registers itself at import time
 
 __all__ = ["EngineAdapter", "get_adapter", "register",
            "SGLangAdapter", "VLLMAdapter", "OllamaCppAdapter",
-           "OllamaAdapter", "OllamaDaemonAdapter"]
+           "OllamaAdapter", "OllamaDaemonAdapter", "NInferAdapter"]

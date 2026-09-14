@@ -284,6 +284,31 @@ class OllamaCppConfig:
 
 
 @dataclass
+class NInferConfig:
+    """NInfer Docker inference engine."""
+    served_name: str = ""  # proxy 路由名，为空时 fallback 到 model name
+    model_id: str = "qwen38-27b-text"  # NInfer --model-id 参数，覆盖 artifact identity，使 proxy 模型名匹配
+    weight_path: str = ""
+    docker_image: str = "ninfer:qwen38-nvfp4-cuda13"
+    port: int = 8007
+    container_name: str = ""
+    max_context: int = 262144    # 单请求最大上下文（tokens）
+    kv_capacity: int = 262144    # KV cache 池大小（tokens）
+    kv_dtype: str = "int8"      # KV cache 精度: int8 | bf16
+    weight_precision: str = "NVFP4"  # 权重量化精度
+    max_concurrency: int = 3
+    default_max_tokens: int = 32000
+    pending_timeout_ms: int = 600000
+    prefill_chunk: int = 4096
+    startup_timeout: int = 120
+    enable_mtp: bool = True
+    draft_tokens: int = 4
+    enable_lm_head_draft: bool = False
+    extra_flags: str = ""
+    log_file: str = ""
+
+
+@dataclass
 class OllamaDaemonConfig:
     """Ollama 守护进程 — 基础设施服务."""
     port: int = 11434
@@ -357,6 +382,7 @@ class ModelConfig:
     ollama: Optional[OllamaModelConfig] = None
     ollama_cpp: Optional[OllamaCppConfig] = None
     ollama_daemon: Optional[OllamaDaemonConfig] = None
+    ninfer: Optional[NInferConfig] = None
     tts: Optional[TTSConfig] = None
     asr: Optional[ASRConfig] = None
     typical_vram_pct: float = 0.0
@@ -415,6 +441,8 @@ class ModelConfig:
             return self.ollama_cpp.port
         if self.comfyui:
             return self.comfyui.port
+        if self.ninfer:
+            return self.ninfer.port
         return None
 
     @property
@@ -428,6 +456,8 @@ class ModelConfig:
             return self.ollama.model_ref
         if self.ollama_cpp:
             return self.name
+        if self.ninfer:
+            return self.ninfer.served_name or self.name
         return self.name
 
     @property
@@ -473,6 +503,10 @@ class ModelConfig:
     @property
     def is_asr_server(self) -> bool:
         return self.type == "asr_server" and self.asr is not None
+
+    @property
+    def is_ninfer(self) -> bool:
+        return self.type == "ninfer" and self.ninfer is not None
 
     @property
     def health_url(self) -> Optional[str]:
@@ -698,6 +732,20 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             if daemon_fields:
                 ollama_daemon_cfg = OllamaDaemonConfig(**daemon_fields)
 
+        # Parse ninfer config if present
+        ninfer_cfg = None
+        if raw.get("ninfer"):
+            ninfer_cfg = NInferConfig(**raw["ninfer"])
+
+        # For type=ninfer, parse top-level ninfer fields
+        if model_type == "ninfer" and not ninfer_cfg:
+            ninfer_fields = {}
+            for f in ("weight_path", "docker_image", "port", "max_context", "kv_dtype"):
+                if f in raw:
+                    ninfer_fields[f] = raw[f]
+            if ninfer_fields:
+                ninfer_cfg = NInferConfig(**ninfer_fields)
+
         # Backward compat: YAML 'mode' → gpu_role
         mode_val = raw.get("mode", raw.get("gpu_role", "none"))
         result[model_name] = ModelConfig(
@@ -713,6 +761,7 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             ollama_daemon=ollama_daemon_cfg,
             tts=tts_cfg,
             asr=asr_cfg,
+            ninfer=ninfer_cfg,
             typical_vram_pct=float(raw.get("typical_vram_pct", 0)),
             peak_vram_mb=int(raw.get("peak_vram_mb", 0)),
             model_type=raw.get("model_type", "llm"),

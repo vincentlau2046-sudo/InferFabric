@@ -147,6 +147,10 @@ class ModelLifecycle:
                 tts_port = model.tts.port
             elif model.is_asr_server:
                 asr_port = model.asr.port
+            elif model.is_ninfer:
+                import subprocess as _subprocess
+                container = model.ninfer.container_name or f"ninfer-{model.ninfer.port}"
+                _subprocess.run(["docker", "stop", container], timeout=30, capture_output=True)
             self._proc.stop_all(
                 comfyui_cfg=model.comfyui if model.is_comfyui else None,
                 vllm_ports=ports if model.is_vllm else [],
@@ -439,6 +443,10 @@ class ModelLifecycle:
                         tts_port = m.tts.port
                     elif m.is_asr_server:
                         asr_port = m.asr.port
+                    elif m.is_ninfer:
+                        import subprocess as _subprocess
+                        container = m.ninfer.container_name or f"ninfer-{m.ninfer.port}"
+                        _subprocess.run(["docker", "stop", container], timeout=30, capture_output=True)
             self._proc.stop_all(
                 comfyui_cfg=comfyui_cfg,
                 vllm_ports=[p for t, p in ports if t == "vllm"],
