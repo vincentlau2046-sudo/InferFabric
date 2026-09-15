@@ -128,5 +128,5 @@ class SGLangProcessManager(BaseProcessManager):
     def is_sglang_alive(self, port: int) -> bool:
         return check_http_status(f"http://localhost:{port}/health", timeout=2) == "✅"
 
-    # ─── vLLM ────────────────────────────────────────────────────
+    # ─── SGLang ────────────────────────────────────────────────────
 

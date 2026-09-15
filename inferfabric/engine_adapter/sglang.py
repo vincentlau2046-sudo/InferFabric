@@ -3,12 +3,15 @@ SGLangAdapter — Docker-based SGLang server.
 Health: /health 200  |  Metrics: /metrics (--enable-metrics)
 """
 from __future__ import annotations
+import logging
 from typing import TYPE_CHECKING
 from inferfabric.engine_adapter.base import EngineAdapter
 from inferfabric.engine_adapter import register
 from inferfabric.health import check_http_status
 if TYPE_CHECKING:
     from inferfabric.config import ModelConfig
+
+log = logging.getLogger("inferfabric.sglang_adapter")
 
 class SGLangAdapter(EngineAdapter):
     def __init__(self, process_manager=None):
@@ -70,10 +73,9 @@ class SGLangAdapter(EngineAdapter):
             from urllib.request import urlopen
             with urlopen(f"http://127.0.0.1:{model.sglang.port}/metrics", timeout=10) as r:
                 text = r.read().decode("utf-8")
-        except Exception:
+        except Exception as e:
+            log.warning("sglang metrics fetch failed for %s: %s", model.name, e)
             return None
-        _g, counters, histos = parse_prometheus_text(text)
-        ph = histos.get("sglang:request_prompt_tokens") or histos.get("vllm:request_prompt_tokens")
         gh = histos.get("sglang:request_generation_tokens") or histos.get("vllm:request_generation_tokens")
         rt = counters.get("sglang:num_requests_completed") or counters.get("vllm:num_requests_completed")
         result = {}

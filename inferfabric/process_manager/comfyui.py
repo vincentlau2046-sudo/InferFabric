@@ -262,7 +262,7 @@ class ComfyUIProcessManager(BaseProcessManager):
         self._wait_gpu_idle()
         return {"status": "ok", "message": "pkill fallback"}
 
-    # ─── Ollama.cpp ───────────────────────────────────────────
+    # ─── ComfyUI ───────────────────────────────────────────
 
     def is_comfyui_alive(self, port: int = 8188) -> bool:
         """Check if ComfyUI process is still alive (by PID or HTTP)."""
@@ -276,5 +276,4 @@ class ComfyUIProcessManager(BaseProcessManager):
         health_url = f"http://localhost:{port}/system_stats"
         return check_http_status(health_url) != "❌"
 
-    # ─── GPU Cleanup ─────────────────────────────────────────────
-
+    

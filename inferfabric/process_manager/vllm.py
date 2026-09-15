@@ -258,9 +258,8 @@ class VLLMProcessManager(BaseProcessManager):
             for m in load_models(MODELS_DIR).values():
                 if m.vllm:
                     vllm_ports.append(m.vllm.port)
-        except Exception:
-            pass
-        if not vllm_ports:
+        except Exception as e:
+            log.warning("load_models failed, falling back to hardcoded ports: %s", e)
             vllm_ports = [8000, 8001, 8002]
 
         for port in vllm_ports:
@@ -272,7 +271,7 @@ class VLLMProcessManager(BaseProcessManager):
         self._wait_gpu_idle()
         return {"status": "ok", "message": "pkill fallback"}
 
-    # ─── ComfyUI ─────────────────────────────────────────────────
+    # ─── vLLM ─────────────────────────────────────────────────
 
     def sleep_vllm(self, port: int) -> dict:
         """Put vLLM server to L2 sleep (discard weights, free VRAM)."""

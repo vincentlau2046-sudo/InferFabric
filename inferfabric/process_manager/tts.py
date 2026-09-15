@@ -186,5 +186,5 @@ class TTSProcessManager(BaseProcessManager):
             self._pkill_by_port(port)
         return {"status": "ok", "message": "killed (SIGKILL)"}
 
-    # ─── ASR Server ──────────────────────────────────────────────
+    # ─── TTS Server ──────────────────────────────────────────────
 

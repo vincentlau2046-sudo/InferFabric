@@ -95,10 +95,9 @@ class BaseProcessManager:
 
         try:
             cmdline = raw.decode("utf-8", errors="replace")
-        except Exception:
+        except Exception as e:
+            log.warning("pid cmdline decode failed: %s", e)
             return False
-
-        return expected_substring.lower() in cmdline.lower()
 
     # ─── Internal Helpers ────────────────────────────────────────
 
@@ -307,10 +306,8 @@ class BaseProcessManager:
                 "timestamp": time.time(),
             }))
             log.info("GPU baseline updated: %d MB", baseline)
-        except Exception:
-            pass
+        except Exception as e:
+            log.error("failed to write GPU baseline: %s", e)
 
         return baseline
-
-    # ─── PID Validation ────────────────────────────────────────────
 

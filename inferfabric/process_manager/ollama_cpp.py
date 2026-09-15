@@ -153,5 +153,5 @@ class OllamaCppProcessManager(BaseProcessManager):
             "message": f"ollama run failed: {result.stderr.strip() or result.stdout.strip()}",
         }
 
-    # ─── TTS Server ──────────────────────────────────────────────
+    # ─── Ollama.cpp ──────────────────────────────────────────────
 

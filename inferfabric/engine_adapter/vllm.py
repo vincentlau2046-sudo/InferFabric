@@ -3,12 +3,15 @@
 Health: /health 200  |  Metrics: /metrics (vllm:* Prometheus)
 """
 from __future__ import annotations
+import logging
 from typing import TYPE_CHECKING
 from inferfabric.engine_adapter.base import EngineAdapter
 from inferfabric.engine_adapter import register
 from inferfabric.health import check_http_status
 if TYPE_CHECKING:
     from inferfabric.config import ModelConfig
+
+log = logging.getLogger("inferfabric.vllm_adapter")
 
 class VLLMAdapter(EngineAdapter):
     def __init__(self, process_manager=None):
@@ -69,10 +72,9 @@ class VLLMAdapter(EngineAdapter):
             from urllib.request import urlopen
             with urlopen(f"http://127.0.0.1:{model.vllm.port}/metrics", timeout=10) as r:
                 text = r.read().decode("utf-8")
-        except Exception:
+        except Exception as e:
+            log.warning("vllm metrics fetch failed for %s: %s", model.name, e)
             return None
-        _g, counters, histos = parse_prometheus_text(text)
-        ph = histos.get("vllm:request_prompt_tokens")
         gh = histos.get("vllm:request_generation_tokens")
         rt = counters.get("vllm:num_requests_completed")
         result = {}
