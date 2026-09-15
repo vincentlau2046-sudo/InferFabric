@@ -485,7 +485,7 @@ async function loadOverview() {
   }
 }
 
-// ── vLLM 实时性能（总览，60s 轮询，仅总览 tab 激活时刷新）──
+// ── 模型实时性能（总览，60s 轮询，仅总览 tab 激活时刷新）──
 let ovPerfTimer = null;
 async function ovPerfTick() {
   const st = store.get('status') || {};
@@ -494,16 +494,16 @@ async function ovPerfTick() {
   const perfEl = document.getElementById('ovPerf');
   const portEl = document.getElementById('ovPerfPort');
   if (!perfEl) return;
-  const vllmSvc = svcs.find(n => sInfo[n] && sInfo[n].type === 'vllm');
-  if (!vllmSvc) {
+  const engineTypes = ['vllm', 'ninfer', 'sglang'];
+  const engSvc = svcs.find(n => sInfo[n] && engineTypes.includes(sInfo[n].type));
+  if (!engSvc) {
     if (portEl) portEl.textContent = '—';
-    perfEl.innerHTML = '<div class="if-empty">无活跃 vLLM 服务</div>';
+    perfEl.innerHTML = '<div class="if-empty">无活跃推理服务</div>';
     return;
   }
-  const port = sInfo[vllmSvc] ? sInfo[vllmSvc].port : null;
-  if (portEl) portEl.textContent = 'port ' + port;
+  if (portEl) portEl.textContent = sInfo[engSvc] ? 'port ' + sInfo[engSvc].port : '—';
   try {
-    const m = await j('/vllm_metrics?port=' + port);
+    const m = await j('/engine_metrics?model=' + encodeURIComponent(engSvc));
     if (m.error) {
       perfEl.innerHTML = '<div class="if-empty">指标暂不可用（' + m.error + '）</div>';
       return;
