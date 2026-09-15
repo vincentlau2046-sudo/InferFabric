@@ -21,6 +21,8 @@ class ModelWatchdog:
       - fail_threshold_alert: consecutive failures before alert (default 3)
       - fail_threshold_restart: consecutive failures before auto-restart (default 5)
       - auto_restart: whether to attempt auto-restart on persistent failure (default True)
+      - max_restarts: max consecutive restarts per model before giving up (default 3)
+      - restart_cooldown_step: base cooldown in seconds, grows exponentially (default 30)
     """
 
     def __init__(
@@ -30,16 +32,22 @@ class ModelWatchdog:
         fail_threshold_alert: int = 3,
         fail_threshold_restart: int = 5,
         auto_restart: bool = True,
+        max_restarts: int = 3,
+        restart_cooldown_step: float = 30.0,
     ):
         self._manager = manager
         self._check_interval = check_interval
         self._fail_threshold_alert = fail_threshold_alert
         self._fail_threshold_restart = fail_threshold_restart
         self._auto_restart = auto_restart
+        self._max_restarts = max_restarts
+        self._restart_cooldown_step = restart_cooldown_step
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._fail_counts: dict[str, int] = {}  # model_name → consecutive_failures
         self._restarting: set[str] = set()  # models currently being restarted
+        self._total_restarts: dict[str, int] = {}  # model_name → total restart attempts
+        self._restart_cooldowns: dict[str, float] = {}  # model_name → cooldown deadline (monotonic)
         self._lock = threading.Lock()
 
     def start(self):
@@ -97,15 +105,43 @@ class ModelWatchdog:
 
             with self._lock:
                 if status == "✅":
+                    old_count = self._fail_counts.get(svc_name, 0)
+                    if old_count >= self._fail_threshold_alert:
+                        log.info("Watchdog: %s recovered after %d consecutive failures", svc_name, old_count)
                     self._fail_counts[svc_name] = 0
+                    self._total_restarts.pop(svc_name, None)  # reset on recovery
+                    self._restart_cooldowns.pop(svc_name, None)
                 elif status in ("⏳", "❌"):
                     self._fail_counts[svc_name] = self._fail_counts.get(svc_name, 0) + 1
                     count = self._fail_counts[svc_name]
 
                     if count >= self._fail_threshold_restart and self._auto_restart:
-                        log.warning("Watchdog: %s failed %d times — auto-restarting", svc_name, count)
+                        # P2-2: Check cooldown
+                        now = time.monotonic()
+                        cooldown_deadline = self._restart_cooldowns.get(svc_name, 0)
+                        if cooldown_deadline and now < cooldown_deadline:
+                            remaining = int(cooldown_deadline - now)
+                            log.debug("Watchdog: %s in cooldown (%ds remaining), skipping restart", svc_name, remaining)
+                            continue
+
+                        # P2-2: Check max_restarts
+                        total = self._total_restarts.get(svc_name, 0)
+                        if total >= self._max_restarts:
+                            log.error(
+                                "Watchdog: %s exceeded max_restarts (%d) — giving up",
+                                svc_name, self._max_restarts,
+                            )
+                            self._manager.state.set("profile_state", ServiceState.ERROR)
+                            continue
+
+                        log.warning("Watchdog: %s failed %d times (attempt %d/%d) — auto-restarting",
+                                    svc_name, count, total + 1, self._max_restarts)
                         self._restarting.add(svc_name)
-                        # Don't clear fail_counts yet — only on successful restart
+                        self._total_restarts[svc_name] = total + 1
+                        # P2-2: Set cooldown with exponential backoff
+                        cooldown = min(300, self._restart_cooldown_step * (2 ** total))
+                        self._restart_cooldowns[svc_name] = now + cooldown
+                        log.info("Watchdog: %s cooldown set to %ds", svc_name, cooldown)
                         # Trigger restart in a separate thread to avoid blocking watchdog
                         threading.Thread(
                             target=self._restart_model,

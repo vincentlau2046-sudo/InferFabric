@@ -1233,6 +1233,49 @@ function updateCacheStatus() {
     const on = snap.local_models.cache_enabled;
     el.textContent = on ? 'ON' : 'OFF';
     el.style.color = on ? 'var(--if-c-green)' : 'var(--if-c-orange)';
+    store.set('cache_enabled', on);
+  } else {
+    // Fallback: read from local store if snapshot unavailable
+    const cachedOn = store.get('cache_enabled');
+    if (cachedOn !== undefined) {
+      el.textContent = cachedOn ? 'ON' : 'OFF';
+      el.style.color = cachedOn ? 'var(--if-c-green)' : 'var(--if-c-orange)';
+    }
+  }
+}
+
+async function doGpuClear() {
+  var btn = event.target; if (!btn) btn = document.activeElement;
+  if (!confirm('清理 CUDA 显存碎片？\n\n这会尝试 nvidia-smi --gpu-reset 或持久模式切换。\n仅在 GPU 空闲时有效。')) return;
+  if (btn) { btn.disabled = true; btn.textContent = '清理中…'; }
+  try {
+    var r = await fetch('/admin/gpu-clear', {method:'POST', headers: adminHeaders()});
+    var d = await r.json();
+    if (d.status === 'ok') {
+      window.showToast('显存已清理: ' + (d.before_mb || '?') + ' MB → ' + (d.after_mb || '?') + ' MB', 'ok');
+    } else {
+      window.showToast('清理失败: ' + (d.message || d.status), 'err');
+    }
+  } catch(e) { window.showToast('清理失败: ' + e.message, 'err'); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = '清理显存'; } }
+  await store.forceRefresh();
+}
+
+async function toggleCache() {
+  const el = document.getElementById('inf-cache-status');
+  if (!el) return;
+  el.textContent = '…';
+  try {
+    const r = await fetch('/admin/cache/toggle', {method:'POST', headers:adminHeaders()});
+    const d = await r.json();
+    const on = d.cache_enabled;
+    store.set('cache_enabled', on);
+    el.textContent = on ? 'ON' : 'OFF';
+    el.style.color = on ? 'var(--if-c-green)' : 'var(--if-c-orange)';
+    window.showToast('缓存已'+(on?'开启':'关闭')+' ✓', 'ok');
+  } catch(e) {
+    el.textContent = 'ERR';
+    window.showToast('切换失败: '+e.message, 'err');
   }
 }
 window.refreshPanels = refreshPanels;

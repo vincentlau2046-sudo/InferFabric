@@ -104,6 +104,8 @@ _POST_ROUTES = {
     "/reconcile":               _admin(lambda h, pm: h._handle_reconcile(pm)),
     "/deploy":                  _admin(lambda h, pm: h._handle_deploy(pm)),
     "/pull":                    _admin(lambda h, pm: h._handle_pull(pm)),
+    "/admin/cache/toggle":     _admin(lambda h, pm: h._handle_cache_toggle(pm)),
+    "/admin/gpu-clear":        _admin(lambda h, pm: h._handle_gpu_clear(pm)),
     "/reload-config":          _admin(lambda h, pm: h._handle_reload_config(pm)),
     "/admin/cloud/reload":      _admin(lambda h, pm: h._handle_cloud_reload(pm)),
     "/admin/cloud/discover":    _admin(lambda h, pm: h._handle_cloud_discover(pm)),
@@ -1047,6 +1049,32 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
         result = pm.mgr.pull_model(name, framework)
         self._send_json(result)
+
+    def _handle_cache_toggle(self, pm):
+        """POST /admin/cache/toggle — 切换响应缓存开关。"""
+        from inferfabric.proxy.response_cache import ResponseCache
+        enabled = getattr(pm, 'response_cache', None) is not None
+        if enabled:
+            pm.response_cache = None
+        else:
+            pm.response_cache = ResponseCache(maxsize=getattr(pm, '_runtime_config', {}).get("cache", {}).get("max_entries", 500))
+        new_state = pm.response_cache is not None
+        log.info("Cache toggled: %s → %s", enabled, new_state)
+        self._send_json({"cache_enabled": new_state})
+
+    def _handle_gpu_clear(self, pm):
+        """POST /admin/gpu-clear — 清理 GPU CUDA 状态（修复显存碎片）。"""
+        try:
+            result = pm.mgr._proc.clear_gpu_cuda_state(gpu_index=0, force=True)
+            self._send_json({
+                "status": result.get("status", "unknown"),
+                "before_mb": result.get("before_mb"),
+                "after_mb": result.get("after_mb"),
+                "method": result.get("method"),
+            })
+        except Exception as e:
+            log.error("gpu-clear failed: %s", e)
+            self._send_json({"status": "error", "message": str(e)}, 500)
 
     # ─── Admin: Cloud Provider Management (PR-D) ─────────────────
 
