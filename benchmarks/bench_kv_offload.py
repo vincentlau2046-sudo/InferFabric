@@ -317,19 +317,59 @@ def get_gpu():
 
 
 def get_vllm_kv():
-    """Get KV cache block counts from vLLM metrics."""
+    """Get KV cache block counts from vLLM metrics.
+
+    vLLM 0.24+ renamed Prometheus metrics:
+      - vllm:num_gpu_cache_blocks → vllm:gpu_cache_blocks
+      - vllm:num_cpu_cache_blocks → vllm:cpu_cache_blocks
+    Also added percentage gauges: vllm:gpu_cache_usage_perc / vllm:cpu_cache_usage_perc
+
+    This function tries new names first, falls back to old names, and finally
+    attempts percentage metrics as a last resort.
+    """
     try:
         with urllib.request.urlopen(f"{VLLM_URL}/metrics", timeout=5) as resp:
             text = resp.read().decode()
-        gpu_blocks = cpu_blocks = 0
-        for line in text.splitlines():
-            if line.startswith("vllm:num_gpu_cache_blocks"):
-                gpu_blocks = float(line.split()[-1])
-            elif line.startswith("vllm:num_cpu_cache_blocks"):
-                cpu_blocks = float(line.split()[-1])
-        return {"gpu_blocks": gpu_blocks, "cpu_blocks": cpu_blocks}
-    except:
+    except Exception as e:
+        print(f"  [WARN] metrics fetch failed: {e}")
         return {}
+
+    gpu_blocks = cpu_blocks = 0
+    found = False
+
+    for line in text.splitlines():
+        # vLLM 0.24+: vllm:gpu_cache_blocks (dropped "num_" prefix)
+        if line.startswith("vllm:gpu_cache_blocks"):
+            gpu_blocks = float(line.split()[-1])
+            found = True
+        elif line.startswith("vllm:cpu_cache_blocks"):
+            cpu_blocks = float(line.split()[-1])
+            found = True
+        # vLLM <0.24: vllm:num_gpu_cache_blocks
+        elif line.startswith("vllm:num_gpu_cache_blocks") and not found:
+            gpu_blocks = float(line.split()[-1])
+            found = True
+        elif line.startswith("vllm:num_cpu_cache_blocks") and not found:
+            cpu_blocks = float(line.split()[-1])
+            found = True
+
+    # Fallback: percentage-based gauges (vLLM 0.24+ only)
+    if not found:
+        gpu_pct, cpu_pct = 0.0, 0.0
+        for line in text.splitlines():
+            if line.startswith("vllm:gpu_cache_usage_perc"):
+                gpu_pct = float(line.split()[-1])
+            elif line.startswith("vllm:cpu_cache_usage_perc"):
+                cpu_pct = float(line.split()[-1])
+        if gpu_pct > 0 or cpu_pct > 0:
+            print(f"  [WARN] block-count metrics unavailable; using percentage gauges "
+                  f"(GPU={gpu_pct:.1f}%, CPU={cpu_pct:.1f}%)")
+            return {"gpu_blocks": gpu_pct, "cpu_blocks": cpu_pct, "unit": "percent"}
+
+    if not found and (gpu_blocks == 0 and cpu_blocks == 0):
+        print("  [WARN] No KV cache block metrics found — metric names may have changed")
+
+    return {"gpu_blocks": gpu_blocks, "cpu_blocks": cpu_blocks}
 
 
 def main():
