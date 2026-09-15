@@ -8,19 +8,20 @@ peak_vram_mb: 19000
 ninfer:
   served_name: Qwen38-27B-TXT
   weight_path: ~/models/ninfer-nvfp4/qwen3_8_27b_nvfp4.ninfer
-  docker_image: ninfer:latest
+  docker_image: ninfer:auto
   port: 8007
   container_name: iff-ninfer-qwen38
   max_context: 262144
   kv_capacity: 0
   kv_dtype: nvfp4
   weight_precision: NVFP4
-  max_concurrency: 2
+  max_concurrency: 3
   default_max_tokens: 32000
   prefill_chunk: 4096
   pending_timeout_ms: 600000
   enable_mtp: true
   draft_tokens: 4
+  mtp_max_context: 50000  # 超过此上下文长度自动禁用 MTP（长上下文时 MTP 效果下降）
   enable_lm_head_draft: false
   startup_timeout: 120
   model_id: Qwen38-27B-TXT

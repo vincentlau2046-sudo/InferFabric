@@ -95,7 +95,12 @@ class NInferAdapter(EngineAdapter):
             "--prefill-chunk", str(cfg.prefill_chunk),
         ]
         if cfg.enable_mtp:
-            cmd.extend(["--spec", "mtp", "--draft-tokens", str(cfg.draft_tokens)])
+            mtp_disabled = bool(cfg.mtp_max_context and cfg.max_context > cfg.mtp_max_context)
+            if mtp_disabled:
+                log.info("NInfer MTP disabled: max_context=%d > mtp_max_context=%d",
+                         cfg.max_context, cfg.mtp_max_context)
+            else:
+                cmd.extend(["--spec", "mtp", "--draft-tokens", str(cfg.draft_tokens)])
         if cfg.enable_lm_head_draft:
             cmd.append("--lm-head-draft")
 

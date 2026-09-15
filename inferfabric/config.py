@@ -303,6 +303,7 @@ class NInferConfig:
     startup_timeout: int = 120
     enable_mtp: bool = True
     draft_tokens: int = 4
+    mtp_max_context: int = 0  # 超过此上下文长度（tokens）自动禁用 MTP；0 = 不限制
     enable_lm_head_draft: bool = False
     extra_flags: str = ""
     log_file: str = ""
