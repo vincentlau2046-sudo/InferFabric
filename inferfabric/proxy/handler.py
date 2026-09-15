@@ -104,9 +104,11 @@ _POST_ROUTES = {
     "/reconcile":               _admin(lambda h, pm: h._handle_reconcile(pm)),
     "/deploy":                  _admin(lambda h, pm: h._handle_deploy(pm)),
     "/pull":                    _admin(lambda h, pm: h._handle_pull(pm)),
+    "/reload-config":          _admin(lambda h, pm: h._handle_reload_config(pm)),
     "/admin/cache/toggle":     _admin(lambda h, pm: h._handle_cache_toggle(pm)),
     "/admin/gpu-clear":        _admin(lambda h, pm: h._handle_gpu_clear(pm)),
-    "/reload-config":          _admin(lambda h, pm: h._handle_reload_config(pm)),
+
+    # ─── Admin: Cloud Provider Management (PR-D) ─────────────────
     "/admin/cloud/reload":      _admin(lambda h, pm: h._handle_cloud_reload(pm)),
     "/admin/cloud/discover":    _admin(lambda h, pm: h._handle_cloud_discover(pm)),
     "/admin/cloud/test":        _admin(lambda h, pm: h._handle_cloud_test(pm)),

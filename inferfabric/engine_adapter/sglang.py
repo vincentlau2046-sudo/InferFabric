@@ -66,9 +66,9 @@ class SGLangAdapter(EngineAdapter):
         return ["--enable-metrics"]
 
     def fetch_engine_metrics(self, model: ModelConfig) -> dict | None:
-        from inferfabric.token_stats import parse_prometheus_text
         if not model.sglang:
             return None
+        from inferfabric.prometheus import VllmMetricsCollector, parse_prometheus_text
         try:
             from urllib.request import urlopen
             with urlopen(f"http://127.0.0.1:{model.sglang.port}/metrics", timeout=10) as r:
@@ -76,14 +76,13 @@ class SGLangAdapter(EngineAdapter):
         except Exception as e:
             log.warning("sglang metrics fetch failed for %s: %s", model.name, e)
             return None
-        gh = histos.get("sglang:request_generation_tokens") or histos.get("vllm:request_generation_tokens")
-        rt = counters.get("sglang:num_requests_completed") or counters.get("vllm:num_requests_completed")
-        result = {}
-        if ph: result["prompt_sum"] = int(ph["sum"])
-        if gh: result["gen_sum"] = int(gh["sum"])
-        if rt is not None: result["req_total"] = int(rt)
-        return result if result else None
-
+        gauges, counters, histos = parse_prometheus_text(text)
+        prefix = "sglang:"
+        if not histos.get(prefix + "request_prompt_tokens") and histos.get("vllm:request_prompt_tokens"):
+            prefix = "vllm:"
+        result = VllmMetricsCollector.compute(model.sglang.port, gauges, counters, histos, prefix=prefix)
+        result["sleep_state"] = 0
+        return result if result else {"sleep_state": 0}
 
     def get_port(self, model: ModelConfig) -> int | None:
         return model.sglang.port if model.sglang else None

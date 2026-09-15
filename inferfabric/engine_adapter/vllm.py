@@ -65,9 +65,9 @@ class VLLMAdapter(EngineAdapter):
         return self.check_health(model) == "\u2705"
 
     def fetch_engine_metrics(self, model: ModelConfig) -> dict | None:
-        from inferfabric.token_stats import parse_prometheus_text
         if not model.vllm:
             return None
+        from inferfabric.prometheus import VllmMetricsCollector, parse_prometheus_text
         try:
             from urllib.request import urlopen
             with urlopen(f"http://127.0.0.1:{model.vllm.port}/metrics", timeout=10) as r:
@@ -75,13 +75,10 @@ class VLLMAdapter(EngineAdapter):
         except Exception as e:
             log.warning("vllm metrics fetch failed for %s: %s", model.name, e)
             return None
-        gh = histos.get("vllm:request_generation_tokens")
-        rt = counters.get("vllm:num_requests_completed")
-        result = {}
-        if ph: result["prompt_sum"] = int(ph["sum"])
-        if gh: result["gen_sum"] = int(gh["sum"])
-        if rt is not None: result["req_total"] = int(rt)
-        return result if result else None
+        gauges, counters, histos = parse_prometheus_text(text)
+        result = VllmMetricsCollector.compute(model.vllm.port, gauges, counters, histos, prefix="vllm:")
+        result["sleep_state"] = 0
+        return result if result else {"sleep_state": 0}
 
     def sleep(self, model: ModelConfig) -> dict:
         """Suspend vLLM process (L2 sleep)."""

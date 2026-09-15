@@ -21,7 +21,6 @@ ninfer:
   pending_timeout_ms: 600000
   enable_mtp: true
   draft_tokens: 4
-  mtp_max_context: 0  # 超过此 max_context 自动禁用 MTP；0 = MTP 始终开启
   enable_lm_head_draft: false
   startup_timeout: 120
   model_id: Qwen38-27B-TXT

@@ -150,7 +150,11 @@ class ModelLifecycle:
             elif model.is_ninfer:
                 import subprocess as _subprocess
                 container = model.ninfer.container_name or f"ninfer-{model.ninfer.port}"
-                _subprocess.run(["docker", "stop", container], timeout=30, capture_output=True)
+                res = _subprocess.run(["docker", "stop", container], timeout=30, capture_output=True)
+                if res.returncode != 0:
+                    logging.getLogger("inferfabric.model_lifecycle").warning(
+                        "NInfer docker stop %s exit %d: %s",
+                        container, res.returncode, res.stderr.decode()[:200])
             self._proc.stop_all(
                 comfyui_cfg=model.comfyui if model.is_comfyui else None,
                 vllm_ports=ports if model.is_vllm else [],
@@ -446,7 +450,11 @@ class ModelLifecycle:
                     elif m.is_ninfer:
                         import subprocess as _subprocess
                         container = m.ninfer.container_name or f"ninfer-{m.ninfer.port}"
-                        _subprocess.run(["docker", "stop", container], timeout=30, capture_output=True)
+                        res = _subprocess.run(["docker", "stop", container], timeout=30, capture_output=True)
+                        if res.returncode != 0:
+                            logging.getLogger("inferfabric.model_lifecycle").warning(
+                                "NInfer docker stop %s exit %d: %s",
+                                container, res.returncode, res.stderr.decode()[:200])
             self._proc.stop_all(
                 comfyui_cfg=comfyui_cfg,
                 vllm_ports=[p for t, p in ports if t == "vllm"],

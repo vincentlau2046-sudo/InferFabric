@@ -282,20 +282,21 @@ if (window.store) {
 }
 async function j(p,o) { return (await fetch(p,o)).json(); }
 
-// 从 store 重新检测 vLLM 服务并启动/刷新指标轮询（监控 tab 用）
-function refreshVllmMetrics() {
+// 从 store 重新检测活跃推理服务并启动/刷新指标轮询
+function refreshEngineMetrics() {
   const s = store.get('status');
   if (!s) return;
   const svcInfo = s.services_info || {};
-  let vPort = null, vName = null;
+  const engineTypes = ['vllm', 'ninfer', 'sglang'];
+  let vName = null;
   for (const n of (s.active_services || [])) {
     const info = svcInfo[n] || {};
-    if (info.type === 'vllm' && info.port) { vPort = info.port; vName = n; break; }
+    if (engineTypes.includes(info.type) && info.port) { vName = n; break; }
   }
-  if (vPort) {
+  if (vName) {
     clearInterval(vllmTimer);
-    loadVllmMetrics(vPort, vName);
-    vllmTimer = setInterval(() => loadVllmMetrics(vPort, vName), 10000);
+    loadEngineMetrics(vName);
+    vllmTimer = setInterval(() => loadEngineMetrics(vName), 10000);
   } else {
     clearInterval(vllmTimer);
     vllmTimer = null;
@@ -325,7 +326,7 @@ async function load() {
     return '<div class="hrow"><span class="h-time">'+ts+'</span><span class="h-from">'+esc(h.from||'—')+'</span><span class="h-arrow">→</span><span class="h-to">'+esc(h.to)+'</span><span class="h-dur">'+d+'</span><span>'+st+'</span></div>';
   }).join('');}
 
-  refreshVllmMetrics();
+  refreshEngineMetrics();
 
   // Active services row layout
   const svcs=s.active_services||[];
@@ -570,15 +571,15 @@ function ovPerfStart() {
 let _tput={pt:0,gt:0,ts:0};
 let vllmTimer=null;
 
-async function loadVllmMetrics(port,modelName) {
+async function loadEngineMetrics(modelName) {
   const panel=document.getElementById('perfPanel');
   try {
-    const m=await j('/vllm_metrics?port='+port);
-    if(m.error){ panel.style.display='none'; return; }
+    const m=await j('/engine_metrics?model='+encodeURIComponent(modelName));
+    if(!m || m.error){ panel.style.display='none'; return; }
     panel.style.display='';
     document.getElementById('perfTitle').textContent=modelName+' 性能';
 
-    const sleeping=m.sleep_state===1;
+    const sleeping=m.sleep_state===1 || m.sleep_state===1;
     panel.className='perf-panel'+(sleeping?' sleeping':'');
     document.getElementById('sleepBadge').style.display=sleeping?'inline-block':'none';
 
@@ -1197,7 +1198,7 @@ function init() {
     store.on('version', loadOverview);
     store.on('status', function() {
       // 修复：快照首次到达/更新时自动刷新性能卡片，解决 60s 空白窗口
-      refreshVllmMetrics();
+      refreshEngineMetrics();
       const tab = document.getElementById('tab-overview');
       if (tab && tab.classList.contains('active')) ovPerfTick();
     });

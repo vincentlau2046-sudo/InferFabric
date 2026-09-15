@@ -92,7 +92,7 @@ class VllmMetricsCollector:
     throughput_ema: dict = {}
 
     @classmethod
-    def compute(cls, port, gauges, counters, histos):
+    def compute(cls, port, gauges, counters, histos, prefix='vllm:'):
         """Parse gauges/counter/histos into result dict and update EMA state.
 
         Returns (result_dict, port_is_new: bool).
@@ -101,12 +101,12 @@ class VllmMetricsCollector:
         result = {}
 
         # KV cache
-        kv = gauges.get("vllm:kv_cache_usage_perc")
+        kv = gauges.get(prefix + "kv_cache_usage_perc")
         if kv is not None:
             result["kv_cache_usage_perc"] = round(kv * 100, 1)
 
         # TTFT
-        ttft = histos.get("vllm:time_to_first_token_seconds")
+        ttft = histos.get(prefix + "time_to_first_token_seconds")
         if ttft and ttft["count"] > 0:
             result["ttft_seconds"] = {
                 "p50": round(quantile(ttft["buckets"], ttft["count"], 0.50), 3),
@@ -118,7 +118,7 @@ class VllmMetricsCollector:
             result["ttft_cum_n"] = ttft["count"]
 
         # TPOT
-        tpot = histos.get("vllm:request_time_per_output_token_seconds")
+        tpot = histos.get(prefix + "request_time_per_output_token_seconds")
         if tpot and tpot["count"] > 0:
             result["tpot_seconds"] = {
                 "p50": round(quantile(tpot["buckets"], tpot["count"], 0.50), 3),
@@ -130,8 +130,8 @@ class VllmMetricsCollector:
             result["tpot_cum_n"] = tpot["count"]
 
         # Seq length
-        prompt_h = histos.get("vllm:request_prompt_tokens")
-        gen_h = histos.get("vllm:request_generation_tokens")
+        prompt_h = histos.get(prefix + "request_prompt_tokens")
+        gen_h = histos.get(prefix + "request_generation_tokens")
         total_reqs = 0
         if prompt_h:
             total_reqs = prompt_h.get("count", 0)
@@ -150,7 +150,7 @@ class VllmMetricsCollector:
             result["generation_tokens_sum"] = int(gen_h["sum"])
 
         # Throughput (EMA)
-        gen_key = "vllm:generation_tokens"
+        gen_key = prefix + "generation_tokens"
         gen_counter = counters.get(gen_key)
         cur_ts = time.time()
         prev_state = cls.gen_counters.get(port)
