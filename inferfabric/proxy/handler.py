@@ -41,6 +41,7 @@ from inferfabric.proxy_manager import (
 from inferfabric import forwarder, __version__
 from inferfabric.proxy.chat_handlers import handle_chat, handle_ollama_native
 from inferfabric.proxy.metrics import handle_vllm_metrics
+from inferfabric.engine_adapter import get_adapter
 from inferfabric.token_stats import TokenStatsCollector
 from inferfabric.watchdog import ModelWatchdog
 
@@ -84,6 +85,7 @@ _GET_ROUTES = {
     "/metrics":                 lambda h, pm: h._handle_metrics(pm),
     "/history":                 lambda h, pm: h._send_json(pm.mgr.state.get_history(limit=30)),
     "/vllm_metrics":            lambda h, pm: h._handle_vllm_metrics(pm),
+    "/engine_metrics":         lambda h, pm: h._handle_engine_metrics(pm),
     "/watchdog_status":         lambda h, pm: h._handle_watchdog_status(),
     "/admin/cloud/providers":   _admin(lambda h, pm: h._handle_cloud_providers(pm)),
     "/admin/cloud/presets":     _admin(lambda h, pm: h._handle_cloud_presets(pm)),
@@ -643,6 +645,25 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": str(e)}, 502)
             return
         self._send_json(result, status)
+
+    def _handle_engine_metrics(self, pm):
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(self.path).query)
+        name = (qs.get("model") or [None])[0]
+        if not name or name not in pm.mgr._models:
+            self._send_json({"error": "unknown model"}, 404)
+            return
+        model = pm.mgr._models[name]
+        try:
+            adapter = get_adapter(model.type)
+            result = adapter.fetch_engine_metrics(model)
+            if result is None:
+                self._send_json({"sleep_state": 0}, 200)
+                return
+            self._send_json(result, 200)
+        except Exception as e:
+            log.error("engine_metrics failed for %s: %s", name, e)
+            self._send_json({"error": str(e)}, 502)
 
     def _handle_request_log(self, pm):
         """返回最近请求日志 (D-1)"""
