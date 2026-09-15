@@ -30,9 +30,25 @@ pkill -9 -f "vllm.*8002" 2>/dev/null || true
 pkill -9 -f "python.*vllm" 2>/dev/null || true
 sleep 2
 
+# Step 2a: Stop Docker containers (NInfer, SGLang)
+echo "[2a/6] Stopping GPU Docker containers..."
+docker ps -q --filter name=iff-ninfer --filter name=ninfer- --filter name=sglang- 2>/dev/null | xargs -r docker stop 2>/dev/null || true
+docker ps -q --filter name=iff-ninfer --filter name=ninfer- --filter name=sglang- 2>/dev/null | xargs -r docker rm -f 2>/dev/null || true
+
+# Step 2b: Kill other GPU-holding processes
+echo "[2b/6] Killing other GPU processes..."
+pkill -9 -f "llama-server" 2>/dev/null || true          # ollama.cpp (CUDA build)
+pkill -9 -f "python.*inferfabric.*tts" 2>/dev/null || true
+pkill -9 -f "python.*inferfabric.*asr" 2>/dev/null || true
+pkill -9 -f "ollama" 2>/dev/null || true                 # ollama daemon
+sleep 2
+
 # Step 3: Kill ComfyUI processes
 echo "[3/6] Killing ComfyUI processes..."
-pkill -9 -f "python main.py" 2>/dev/null || true
+COMFYUI_DIR="${COMFYUI_DIR:-$HOME/ComfyUI}"
+if [ -d "$COMFYUI_DIR" ]; then
+    pkill -9 -f "python.*${COMFYUI_DIR}/main.py" 2>/dev/null || true
+fi
 pkill -9 -f "ComfyUI" 2>/dev/null || true
 sleep 2
 

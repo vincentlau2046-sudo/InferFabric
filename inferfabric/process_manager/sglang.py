@@ -119,8 +119,8 @@ class SGLangProcessManager(BaseProcessManager):
         if port:
             try:
                 wait_gpu_free()
-            except Exception:
-                pass
+            except Exception as e:
+                log.error("GPU did not free after SGLang stop (port %s): %s", port, e)
         self._set_sglang_pid(None)
         self._set_sglang_container(None)
         return {"status": "ok", "message": "SGLang container stopped"}

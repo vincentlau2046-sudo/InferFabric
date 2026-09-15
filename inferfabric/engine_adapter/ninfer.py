@@ -1,6 +1,7 @@
 """NInferAdapter — NInfer Docker inference engine.
 """
 from __future__ import annotations
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -9,6 +10,8 @@ from inferfabric.engine_adapter import register
 
 if TYPE_CHECKING:
     from inferfabric.config import ModelConfig
+
+log = logging.getLogger("inferfabric.ninfer_adapter")
 
 
 class NInferAdapter(EngineAdapter):
@@ -24,7 +27,8 @@ class NInferAdapter(EngineAdapter):
             if port:
                 return check_http_status(f"http://localhost:{port}/v1/models")
             return "?"
-        except Exception:
+        except Exception as e:
+            log.warning("[ninfer] health check failed for %s: %s", model.name, e)
             return "?"
 
     def get_context_window(self, model: ModelConfig) -> int | None:

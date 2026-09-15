@@ -7,10 +7,12 @@
 - **风险显式化**：每个变更必须声明风险爆炸链 + 缓解措施
 
 ## 质量门禁
-- 180 pytest 全量通过
+- **678** pytest 全量通过（`tests/unit/ + tests/integration/`，2026-09-15 实测）
 - `python3 -c "import inferfabric"` 启动冒烟
-- AtomCode GLM-5.2 交叉 review
-- 运行时冒烟：核心 API 端点 200
+- 运行时冒烟：`GET /` 和 `GET /status` 返回 200
+- Dashboard 每个面板必须有功能实现（不允许 placeholder）
+- 失败数据不得污染成功指标的统计
+- 版本号在 `__init__.py` 中更新
 
 ## 技术约束
 - Python 3.10+
