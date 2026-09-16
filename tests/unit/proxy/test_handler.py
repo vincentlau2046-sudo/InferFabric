@@ -45,7 +45,6 @@ def _make_handler(monkeypatch, headers=None, admin_token=""):
     h.command = "GET"
     h._send_json = MagicMock()
     h._read_body = MagicMock(return_value=None)
-    h._serve_static = MagicMock()
     h._serve_dashboard = MagicMock()
     return h, handler_module
 

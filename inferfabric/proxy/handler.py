@@ -66,9 +66,6 @@ def _serve_api_spec(handler, pm):
 
 _GET_ROUTES = {
     "/":                        lambda h, pm: h._serve_dashboard(),
-    "/static/style.css":        lambda h, pm: h._serve_static("css"),
-    "/static/app.js":           lambda h, pm: h._serve_static("js"),
-    "/static/monitor.js":       lambda h, pm: h._serve_static("monitor"),
     "/health":                  lambda h, pm: h._send_json({"status": "ok", "gpu_mode": pm.mgr.gpu_mode}),
     "/status":                  lambda h, pm: h._send_json(pm.mgr.status()),
     "/models":                  lambda h, pm: h._send_json(pm.mgr.list_models()),
