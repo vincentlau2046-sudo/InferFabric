@@ -853,7 +853,7 @@ class TestForwarderHelpers:
     def test_read_body_too_large(self):
         from inferfabric.forwarder import read_body
         handler = MagicMock()
-        handler.headers.get.return_value = str(11 * 1024 * 1024)
+        handler.headers.get.return_value = str(101 * 1024 * 1024)
         result = read_body(handler)
         assert result is None
 

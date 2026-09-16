@@ -115,10 +115,10 @@ class TestReadBody:
 
     @patch("inferfabric.forwarder.send_json")
     def test_payload_too_large(self, mock_send):
-        """超过 10MB 返回 None 并发送 413。"""
+        """超过 100MB 返回 None 并发送 413。"""
         from inferfabric.forwarder import read_body
         h = _make_handler()
-        h.headers["Content-Length"] = str(11 * 1024 * 1024)  # 11MB
+        h.headers["Content-Length"] = str(101 * 1024 * 1024)  # 101MB
 
         result = read_body(h)
         assert result is None

@@ -54,6 +54,7 @@ def send_json(handler, body_d, status=200, extra_headers=None):
                 handler.send_header(k, str(v))
         handler.send_header("Content-Type", "application/json; charset=utf-8")
         handler.send_header("Content-Length", str(len(body)))
+        handler.send_header("Connection", "close")
         handler.send_header("Access-Control-Allow-Origin", "*")
         handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         handler.send_header("Access-Control-Allow-Headers", "Content-Type")
@@ -67,13 +68,18 @@ def send_json(handler, body_d, status=200, extra_headers=None):
 def read_body(handler):
     """Read and parse JSON request body. Returns dict or None on error."""
     try:
-        content_length = int(handler.headers.get("Content-Length", 0))
-        if content_length == 0:
+        cl = handler.headers.get("Content-Length")
+        if cl is None:
+            # No Content-Length (e.g. chunked transfer encoding) — read all
+            raw = handler.rfile.read()
+            return json.loads(raw) if raw else {}
+        size = int(cl)
+        if size == 0:
             return {}
-        if content_length > 10 * 1024 * 1024:  # 10MB limit
-            send_json(handler, {"error": "payload too large (max 10MB)"}, 413)
+        if size > 100 * 1024 * 1024:  # 100MB limit (matches engine capability)
+            send_json(handler, {"error": "payload too large (max 100MB)"}, 413)
             return None
-        raw = handler.rfile.read(content_length)
+        raw = handler.rfile.read(size)
         return json.loads(raw)
     except (json.JSONDecodeError, ValueError) as e:
         send_json(handler, {"error": f"Invalid JSON: {e}"}, 400)
