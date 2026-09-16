@@ -15,7 +15,7 @@ ninfer:
   kv_capacity: 0
   kv_dtype: nvfp4
   weight_precision: NVFP4
-  max_concurrency: 3
+  max_concurrency: 4
   default_max_tokens: 32000
   prefill_chunk: 4096
   pending_timeout_ms: 600000
