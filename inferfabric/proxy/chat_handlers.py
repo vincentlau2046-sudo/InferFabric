@@ -16,6 +16,15 @@ from inferfabric.anomaly_collector import AnomalyEvent
 
 log = logging.getLogger("inferfabric.proxy.chat")
 
+# 引擎类型 → 上游聊天 API 路径（YAML model type 驱动，非硬编码）
+# 所有非 Ollama LLM 引擎统一归一化到 OpenAI /v1/chat/completions
+_ENGINE_API_PATHS = {
+    "ninfer":    "/v1/chat/completions",
+    "vllm":      "/v1/chat/completions",
+    "sglang":    "/v1/chat/completions",
+    "ollama_cpp":"/v1/chat/completions",
+}
+
 
 def _normalize_tools_for_openai(data):
     """Rewrite Anthropic-format tool definitions into OpenAI function format.
@@ -345,12 +354,19 @@ def handle_chat(handler, pm, data):
         handle_ollama_native(handler, pm, data, target_port, ollama_model_obj)
         return
 
-    # vLLM path — apply dynamic rate limiter
+    # vLLM/NInfer path — apply dynamic rate limiter
     # Normalize Anthropic-style tools (input_schema) to OpenAI function format
     # before forwarding to vLLM's /v1/chat/completions (prevents per-tool
     # "Field required: function" 400s that Claude Code does not retry).
     _normalize_tools_for_openai(data)
     body = json.dumps(data).encode("utf-8")
+
+    # 路径归一化：将 incoming 路径（/v1/completions, /api/chat, /api/generate）
+    # 统一映射到引擎支持的聊天端点。由 model YAML type 字段驱动，
+    # 不硬编码模型名或端口（PR-19 预存死路由修复）。
+    upstream_path = _ENGINE_API_PATHS.get(model_obj.type, "/v1/chat/completions")
+    log.debug("%s → upstream %s (engine=%s)", handler.path, upstream_path, model_obj.type)
+
     # v4.6.3: 使用配置的 timeout (observe 模式下不会 429)
     gate = pm.dual_gate.acquire(model)
     if not gate.ok:
@@ -366,7 +382,7 @@ def handle_chat(handler, pm, data):
         return
     try:
         for attempt in range(3):
-            if _forward_request(handler, pm, target_port, body, stream, model_name=model):
+            if _forward_request(handler, pm, target_port, body, stream, model_name=model, upstream_path=upstream_path):
                 # PR-B: Log successful request with TTFT + usage
                 ttft = getattr(handler, '_ttft_ms', None)
                 usage = getattr(handler, '_usage', {})
@@ -390,18 +406,24 @@ def handle_chat(handler, pm, data):
         gate.release()
 
 
-def _forward_request(handler, pm, target_port, body, stream, model_name=""):
+def _forward_request(handler, pm, target_port, body, stream, model_name="", upstream_path=None):
     """Forward a request to an upstream service.
+
+    Args:
+        upstream_path: 上游 API 路径（由模型引擎 YAML type 字段驱动）。
+                       为 None 时回退 handler.path（兼容旧调用方）。
 
     Returns True if the response was fully sent to the client.
     Returns False if the caller should retry (headers not yet sent).
     """
+    if upstream_path is None:
+        upstream_path = handler.path
     headers_sent = False
     conn = None
     resp = None
     try:
         conn = pm.make_conn(target_port)
-        conn.request("POST", handler.path, body=body,
+        conn.request("POST", upstream_path, body=body,
                       headers={"Content-Type": "application/json"})
         resp = conn.getresponse()
 

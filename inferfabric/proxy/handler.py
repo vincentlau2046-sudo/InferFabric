@@ -83,7 +83,7 @@ _GET_ROUTES = {
     "/history":                 lambda h, pm: h._send_json(pm.mgr.state.get_history(limit=30)),
     "/vllm_metrics":            lambda h, pm: h._handle_vllm_metrics(pm),
     "/engine_metrics":         lambda h, pm: h._handle_engine_metrics(pm),
-    "/watchdog_status":         lambda h, pm: h._handle_watchdog_status(),
+    "/watchdog_status":         lambda h, pm: _handle_watchdog_status(h),
     "/admin/cloud/providers":   _admin(lambda h, pm: h._handle_cloud_providers(pm)),
     "/admin/cloud/presets":     _admin(lambda h, pm: h._handle_cloud_presets(pm)),
     "/api/openapi.json":        _serve_api_spec,
