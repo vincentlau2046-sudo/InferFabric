@@ -327,3 +327,108 @@ def test_theme_state_hooked_in_store():
     # charts.js 订阅 store.on('theme')
     assert "store.on('theme'" in html or "window.store.on('theme'" in html
 
+
+# ── Task 5: 监控 TAB（纯遥测，只读） ────────────────────────────────
+
+
+def test_monitor_structure():
+    """监控页 DOM 契约：7 个面板 id 必须在 get_html() 中出现（spec §4.3）。"""
+    html = _html()
+    for panel_id in (
+        'id="monGpuChart"',     # GPU vram+util 时间曲线
+        'id="monTokenChart"',   # Token prompt/completion 堆叠条
+        'id="monLatencyChart"', # 延迟 P50/P95 双线
+        'id="monKpis"',         # 五联 KPI
+        'id="monLogTable"',     # 请求日志表
+        'id="monHistTable"',    # 切换历史表
+        'id="monCostCard"',     # 费用概览卡
+    ):
+        assert panel_id in html, "missing monitor panel id: %s" % panel_id
+    # 窗口/粒度切换按钮 data-win / data-gran 契约（display filter）
+    for win in ('1h', '24h', '7d'):
+        assert 'data-win="%s"' % win in html, "missing GPU window toggle: %s" % win
+    for gran in ('hour', 'day', 'month'):
+        assert 'data-gran="%s"' % gran in html, "missing token granularity toggle: %s" % gran
+
+
+def test_monitor_js_present():
+    """monitor.js 模块存在并被 get_html() 内联装配（tabRenderers 注册）。
+
+    断言：文件存在；get_html() 含 tabRenderers['tab-monitor'] 注册；
+    三图通过 IFCharts.create 创建（null-check）；store sync_meta 订阅。"""
+    js_path = ROOT / "inferfabric" / "dashboard" / "js" / "monitor.js"
+    assert js_path.exists(), "monitor.js missing"
+    html = _html()
+    assert "window.tabRenderers['tab-monitor'] = renderMonitor" in html, (
+        "monitor.js tab renderer registration not inlined into HTML"
+    )
+    js = js_path.read_text(encoding="utf-8")
+    # 三图均通过 IFCharts.create 创建（null-check each）
+    assert "IFCharts.create('monGpuChart')" in js
+    assert "IFCharts.create('monTokenChart')" in js
+    assert "IFCharts.create('monLatencyChart')" in js
+    # 订阅 store sync_meta（snapshot 到达时刷新）
+    assert "store.on('sync_meta'" in js
+    # 事件委托：窗口/粒度切换
+    assert "data-win" in js and "data-gran" in js
+
+
+def test_monitor_readonly():
+    """监控 TAB 必须只读：monitor.js 不得包含任何 method:"POST" /
+    method: "POST" 引用（spec §4.3：纯遥测、零操作）。
+
+    窗口/粒度切换是 display filter（客户端过滤），不触达服务端状态。
+    所有 fetch 调用必须为 GET（不指定 method = GET）。"""
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "monitor.js").read_text(encoding="utf-8")
+    # 不得出现 POST method（含空格变体）
+    assert 'method:"POST"' not in js, "monitor.js contains method:\"POST\" — read-only violation"
+    assert 'method: "POST"' not in js, "monitor.js contains method: \"POST\" — read-only violation"
+    assert "'POST'" not in js, "monitor.js references 'POST' — read-only violation"
+    assert '"POST"' not in js, "monitor.js references \"POST\" — read-only violation"
+    # HTML fragment 同样不得有 form action 或 method
+    frag = (_DASHBOARD_DIR / "fragments" / "monitor.html").read_text(encoding="utf-8")
+    assert "method=" not in frag, "monitor.html contains method= — read-only violation"
+    assert "<form" not in frag, "monitor.html contains <form> — read-only violation"
+
+
+def test_monitor_js_node_syntax():
+    """monitor.js 必须通过 node --check 语法校验（零构建工具链，CI 前置门）。"""
+    import shutil
+    import subprocess
+    import pytest
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available")
+    js = ROOT / "inferfabric" / "dashboard" / "js" / "monitor.js"
+    proc = subprocess.run([node, "--check", str(js)],
+                          capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, \
+        "node --check monitor.js failed:\nstdout:%s\nstderr:%s" % (proc.stdout, proc.stderr)
+
+
+def test_monitor_chart_series_limit():
+    """每张图表系列数 ≤4（spec §7 / Task 4 review 约束：
+    IFCharts 不折叠第 5 系列，会循环回蓝色，故调用方必须自行限制 ≤4）。
+
+    断言 monitor.js 中 series 数组字面量每处 ≤4 个元素。这里用保守启发：
+    检查每处 'series:' 后的数组，确认没有超过 4 个 { type: 行。"""
+    import re
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "monitor.js").read_text(encoding="utf-8")
+    # 找所有 series: [ ... ] 块，统计每块内的 type: 出现次数
+    for m in re.finditer(r'series:\s*\[', js):
+        # 取到匹配的 ] 为止（简单扫描）
+        start = m.end()
+        depth = 1
+        i = start
+        while i < len(js) and depth > 0:
+            if js[i] == '[':
+                depth += 1
+            elif js[i] == ']':
+                depth -= 1
+            i += 1
+        block = js[start:i - 1]
+        type_count = len(re.findall(r'type:\s*[\'"]', block))
+        assert type_count <= 4, (
+            "monitor.js series block has %d series (>4): %s" % (type_count, block[:120])
+        )
+

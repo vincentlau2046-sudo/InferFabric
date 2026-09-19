@@ -801,9 +801,94 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
 .sys-ops { gap: var(--sp-1); }
 .sys-ops .btn { width: 100%; justify-content: flex-start; }
 
+/* ── 监控 TAB（tab-monitor，纯遥测只读） ──────────────────────── */
+
+/* 图表容器：固定高度，ECharts 需要显式高度才能 init */
+.mon-chart {
+  width: 100%;
+  height: 260px;
+  min-height: 200px;
+}
+
+/* 分段切换按钮组（display filter，不改变服务端状态） */
+.mon-seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.mon-seg-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  color: var(--ink-3);
+  background: var(--surface);
+  border: none;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.mon-seg-btn:last-child { border-right: none; }
+.mon-seg-btn:hover { background: var(--surface-2); color: var(--ink-2); }
+.mon-seg-btn.active {
+  background: var(--surface-2);
+  color: var(--ink);
+  font-weight: 600;
+}
+.mon-seg-btn:focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: -2px;
+}
+
+/* KPI 五联网格：窄卡内自适应换行 */
+.mon-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--sp-1);
+}
+.mon-kpi-grid .kpi { padding: var(--sp-1); }
+.mon-kpi-grid .kpi-val { font-size: var(--fs-body); }
+
+/* 紧凑表：13px 行高更密（.if-table 已 13px，这里收紧行距） */
+.mon-tbl th, .mon-tbl td { padding: 5px var(--sp-1); }
+.mon-tbl { table-layout: auto; }
+
+/* 费用卡行 */
+.mon-cost-total {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  padding-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+}
+.mon-cost-total .val { font-size: var(--fs-lg); color: var(--ink); }
+.mon-cost-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 4px 0;
+  font-size: var(--fs-table);
+}
+.mon-cost-row .model { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mon-cost-row .amt { color: var(--ink); }
+
+/* 图表空态覆盖（居中提示，不遮挡坐标轴） */
+.mon-chart-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-3);
+  font-size: var(--fs-table);
+  pointer-events: none;
+}
+.mon-chart-wrap { position: relative; }
+
 /* ── 响应式：窄屏折叠遥测带 ───────────────────────────────────── */
 @media (max-width: 720px) {
   .if-telemetry { grid-template-columns: repeat(2, 1fr); }
   .if-grid-2, .if-grid-3 { grid-template-columns: 1fr; }
   .if-sidebar span { display: none; }
+  .mon-chart { height: 200px; }
 }

@@ -1,12 +1,142 @@
 <div class="tab-content" id="tab-monitor">
-  <div class="if-card">
-    <div class="if-card-hdr">
-      <span class="if-card-title">监控</span>
-      <span class="if-card-sub">纯遥测 · 零操作</span>
+
+  <!-- Row 1: GPU 曲线卡 (col 8) + 五联 KPI (col 4) -->
+  <div class="if-grid">
+
+    <!-- GPU 显存/利用率时间曲线（1h/24h/7d 切换 — display filter） -->
+    <div class="col-8">
+      <div class="if-card">
+        <div class="if-card-hdr">
+          <span class="if-card-title">GPU 显存 / 利用率</span>
+          <div class="mon-seg" data-seg="win">
+            <button type="button" class="mon-seg-btn" data-win="1h">1h</button>
+            <button type="button" class="mon-seg-btn active" data-win="24h">24h</button>
+            <button type="button" class="mon-seg-btn" data-win="7d">7d</button>
+          </div>
+        </div>
+        <div class="if-card-body">
+          <div class="mon-chart-wrap">
+            <div id="monGpuChart" class="mon-chart"></div>
+            <div id="monGpuEmpty" class="mon-chart-empty" style="display:none">采集积累中（页面打开后开始记录）</div>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="if-card-body" id="monShell">
-      <!-- UI.skeleton(monShell, 6) — 由 monitor 任务接管：GPU 曲线 / token / 延迟 / KPI / 日志 / 费用 -->
-      <div class="if-empty">加载中…</div>
+
+    <!-- 五联 KPI：KV Cache / Seq Length / TPOT / TTFT / Throughput -->
+    <div class="col-4">
+      <div class="if-card">
+        <div class="if-card-hdr">
+          <span class="if-card-title">引擎指标</span>
+          <span class="if-card-sub" id="monKpiModel"></span>
+        </div>
+        <div class="if-card-body" id="monKpis">
+          <div class="skeleton">
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Row 2: Token 用量卡 (col 8) + 费用卡 (col 4) -->
+  <div class="if-grid">
+
+    <!-- Token 用量：prompt/completion 堆叠条（小时/天/月） -->
+    <div class="col-8">
+      <div class="if-card">
+        <div class="if-card-hdr">
+          <span class="if-card-title">Token 用量</span>
+          <div class="mon-seg" data-seg="gran">
+            <button type="button" class="mon-seg-btn active" data-gran="hour">小时</button>
+            <button type="button" class="mon-seg-btn" data-gran="day">天</button>
+            <button type="button" class="mon-seg-btn" data-gran="month">月</button>
+          </div>
+        </div>
+        <div class="if-card-body">
+          <div class="mon-chart-wrap">
+            <div id="monTokenChart" class="mon-chart"></div>
+            <div id="monTokenEmpty" class="mon-chart-empty" style="display:none">暂无 Token 数据</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 费用概览卡 -->
+    <div class="col-4">
+      <div class="if-card" id="monCostCard">
+        <div class="if-card-hdr">
+          <span class="if-card-title">费用概览</span>
+          <span class="if-card-sub">24h</span>
+        </div>
+        <div class="if-card-body" id="monCostBody">
+          <div class="skeleton">
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Row 3: 延迟 P50/P95 双线 (col 12) -->
+  <div class="if-grid">
+    <div class="col-12">
+      <div class="if-card">
+        <div class="if-card-hdr">
+          <span class="if-card-title">延迟分布 P50 / P95</span>
+          <span class="if-card-sub">TTFT · 24h 窗口</span>
+        </div>
+        <div class="if-card-body">
+          <div class="mon-chart-wrap">
+            <div id="monLatencyChart" class="mon-chart"></div>
+            <div id="monLatencyEmpty" class="mon-chart-empty" style="display:none">暂无延迟数据</div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
+
+  <!-- Row 4: 请求日志表 (col 8) + 切换历史表 (col 4) -->
+  <div class="if-grid">
+
+    <!-- 请求日志表（13px 紧凑） -->
+    <div class="col-8">
+      <div class="if-card">
+        <div class="if-card-hdr">
+          <span class="if-card-title">请求日志</span>
+          <span class="if-card-sub" id="monLogTs"></span>
+        </div>
+        <div class="if-card-body" id="monLogTable">
+          <div class="skeleton">
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 切换历史表（13px 紧凑） -->
+    <div class="col-4">
+      <div class="if-card">
+        <div class="if-card-hdr">
+          <span class="if-card-title">切换历史</span>
+        </div>
+        <div class="if-card-body" id="monHistTable">
+          <div class="skeleton">
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
 </div>
