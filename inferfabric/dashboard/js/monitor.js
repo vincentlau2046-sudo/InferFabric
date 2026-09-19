@@ -37,7 +37,6 @@
   // 后端无历史 GPU 时间序列 API；此处客户端采样积累，页面打开后开始记录。
   var _gpuBuf = [];
   var _GPU_BUF_CAP = 2880;       // ~2.4h @3s 轮询；超出后移除最旧
-  var _gpuBufSeeded = false;
 
   // 引擎指标节流（避免每 3s 轮询都打 /api/engine_metrics）
   var _engineCache = null;
@@ -115,15 +114,14 @@
       util: utilPct != null ? +Number(utilPct).toFixed(1) : 0,
     });
     if (_gpuBuf.length > _GPU_BUF_CAP) _gpuBuf.shift();
-    _gpuBufSeeded = true;
   }
 
   function renderGpuChart() {
     ensureCharts();
     if (!_charts.gpu) return;
 
-    pushGpuSample();
-
+    // 采样由 sync_meta handler 统一负责（每次 snapshot 到达 push 一次），
+    // 此处不重复采样，避免 tab 活跃时双倍写入。
     var winMs = { '1h': 3600000, '24h': 86400000, '7d': 604800000 }[_gpuWin] || 86400000;
     var cutoff = Date.now() - winMs;
     var pts = [];
@@ -546,10 +544,11 @@
   window.tabRenderers['tab-monitor'] = renderMonitor;
 
   /* ── 订阅：sync_meta → 仅 monitor tab 活跃时刷新 ──
-   * GPU ring buffer 在每次 sync_meta（snapshot 到达）时积累样本。 */
+   * GPU ring buffer 在每次 sync_meta（snapshot 到达）时积累样本。
+   * 无条件 push（不限定 tab 活跃、无 one-shot 种子标志）——保证切回
+   * monitor tab 时 ring buffer 已有跨会话时长的连续数据。 */
   store.on('sync_meta', function () {
-    // 即便不在 monitor tab，也积累 GPU 样本（保证切回时有数据）
-    if (store.get('gpu') && !_gpuBufSeeded) pushGpuSample();
+    if (store.get('gpu')) pushGpuSample();
     if (isMonitorActive()) renderMonitor();
   });
 

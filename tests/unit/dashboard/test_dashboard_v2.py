@@ -432,3 +432,69 @@ def test_monitor_chart_series_limit():
             "monitor.js series block has %d series (>4): %s" % (type_count, block[:120])
         )
 
+
+def test_monitor_gpu_ring_buffer_continuous_accumulation():
+    """GPU ring buffer 必须在每次 sync_meta（snapshot 到达）时持续积累样本，
+    而非一次性种子后停止。
+
+    回归守卫（fix round 1）：原实现用 _gpuBufSeeded one-shot 标志守护
+    sync_meta handler 的 pushGpuSample()，且 renderGpuChart 内另有一次
+    无条件 pushGpuSample()。结果：背景积累只触发一次（种子），之后仅
+    monitor tab 活跃时才采样——切到 24h/7d 窗口只能看到几分钟会话数据。
+
+    断言（源文本级，逻辑为订阅驱动难以隔离单测）：
+    1. 不得存在 _gpuBufSeeded（或任何 *Seeded one-shot 种子标志）。
+    2. renderGpuChart 函数体内不得调用 pushGpuSample（采样统一由
+       sync_meta handler 负责，避免 tab 活跃时双倍写入）。
+    3. sync_meta 订阅 handler 必须（无条件或仅 gpu 存在性检查后）调用
+       pushGpuSample——不得被 one-shot 标志门控。"""
+    import re
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "monitor.js").read_text(encoding="utf-8")
+
+    # 1. 无 one-shot 种子标志（_gpuBufSeeded 或任何 *Seeded 变量）
+    seeded_refs = re.findall(r'\b\w*Seeded\b', js)
+    assert not seeded_refs, (
+        "monitor.js contains one-shot seed flag(s) %r — background GPU "
+        "accumulation must be continuous, not gated by a seed flag" % seeded_refs
+    )
+
+    # 2. renderGpuChart 函数体内不得调用 pushGpuSample
+    #    提取 renderGpuChart 函数体（到下一个顶层 function/window. 为止）
+    m = re.search(r'function\s+renderGpuChart\s*\(\)\s*\{', js)
+    assert m, "renderGpuChart function not found in monitor.js"
+    body_start = m.end()
+    # 扫描到匹配的 } （跟踪花括号深度）
+    depth = 1
+    i = body_start
+    while i < len(js) and depth > 0:
+        if js[i] == '{':
+            depth += 1
+        elif js[i] == '}':
+            depth -= 1
+        i += 1
+    render_body = js[body_start:i - 1]
+    assert 'pushGpuSample' not in render_body, (
+        "renderGpuChart calls pushGpuSample — sampling must be solely via "
+        "the sync_meta handler to avoid double-sampling when tab is active"
+    )
+
+    # 3. sync_meta 订阅 handler 必须调用 pushGpuSample，且不得被种子标志门控
+    #    （允许 gpu 存在性检查，但不允许 !seeded 之类的 one-shot 守卫）
+    sync_block = re.search(
+        r"store\.on\('sync_meta'[^}]*?pushGpuSample[^}]*?\}", js, re.S
+    )
+    assert sync_block, (
+        "sync_meta handler does not call pushGpuSample — GPU ring buffer "
+        "won't accumulate on snapshot polls"
+    )
+    sync_text = sync_block.group(0)
+    # 不得含 one-shot 守卫（!seeded / && !flag 之类）
+    assert not re.search(r'!\s*\w*Seeded', sync_text), (
+        "sync_meta handler gates pushGpuSample with a one-shot seed guard — "
+        "background accumulation must fire on EVERY snapshot: %s" % sync_text
+    )
+    # 确认 handler 确实调用了 pushGpuSample
+    assert 'pushGpuSample()' in sync_text, (
+        "sync_meta handler does not invoke pushGpuSample(): %s" % sync_text
+    )
+
