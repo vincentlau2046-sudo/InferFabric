@@ -41,8 +41,7 @@
 
   /* ── 进度态 helpers ──
    *   showProgress(msg)   — in-flight：不定 spinner + 消息
-   *   showResult(title, detail) — 完成/失败：替换 spinner 为结果文本（保留可见）
-   *   clearProgress()     — 重置为空态并隐藏进度卡 */
+   *   showResult(title, detail) — 完成/失败：替换 spinner 为结果文本（保留可见） */
   function showProgress(msg) {
     var card = $('depProgressCard');
     var box = $('deployProgress');
@@ -65,13 +64,6 @@
     box.innerHTML = '<div class="dep-progress-result"></div>';
     var el = box.querySelector('.dep-progress-result');
     if (el) el.textContent = title + (detail ? ' · ' + detail : '');
-  }
-
-  function clearProgress() {
-    var card = $('depProgressCard');
-    var box = $('deployProgress');
-    if (box) box.innerHTML = '<div class="if-empty">暂无任务</div>';
-    if (card) card.style.display = 'none';
   }
 
   function setBtnBusy(action, busy) {
@@ -104,7 +96,13 @@
           var msg = (j && (j.error || j.message)) || ('HTTP ' + res.status);
           throw new Error(msg);
         }
-        // switched / already_active / already_configured(后端已自动 switch) → 成功
+        // 后端对逻辑失败也返回 HTTP 200（_handle_deploy 用 _send_json 默认 200），
+        // 必须查 j.status：成功仅 {switched, already_active}（model_lifecycle.py:333）；
+        // 其余（"Unsupported type for auto-deploy" / "Unknown model" / "Invalid transition"）为失败。
+        var st = j && j.status ? j.status : '';
+        if (st !== 'switched' && st !== 'already_active') {
+          throw new Error((j && j.message) || ('未知状态: ' + (st || '(空)')));
+        }
         showResult(name + ' 部署完成', engineLabel(type));
         UI.toast(name + ' 部署完成', 'ok');
         store.forceRefresh();

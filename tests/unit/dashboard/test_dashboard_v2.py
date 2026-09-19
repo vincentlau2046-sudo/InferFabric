@@ -641,9 +641,15 @@ def test_deploy_structure():
         'id="deployProgress"',   # 长任务进度态容器
     ):
         assert el in html, "missing deploy contract id: %s" % el
-    # 引擎类型选项契约（R12：vllm/sglang/ninfer/ollama）
-    for opt in ('value="vllm"', 'value="sglang"', 'value="ninfer"', 'value="ollama"'):
-        assert opt in html, "missing engine type option: %s" % opt
+    # 引擎类型选项契约（R14：仅 auto_deploy 支持的类型 vllm + ollama_cpp；
+    # sglang/ninfer/ollama 服务不被 auto_deploy 支持，提供即误导——会返回 200+error）
+    frag = (_DASHBOARD_DIR / "fragments" / "deploy.html").read_text(encoding="utf-8")
+    for opt in ('value="vllm"', 'value="ollama_cpp"'):
+        assert opt in frag, "missing auto-deployable engine option: %s" % opt
+    for bad in ('value="sglang"', 'value="ninfer"'):
+        assert bad not in frag, (
+            "deploy.html offers %r — auto_deploy rejects it (R14: only vllm/ollama_cpp)" % bad
+        )
 
 
 def test_deploy_js_present():
@@ -720,4 +726,157 @@ def test_deploy_js_node_syntax():
                           capture_output=True, text=True, timeout=15)
     assert proc.returncode == 0, \
         "node --check deploy.js failed:\nstdout:%s\nstderr:%s" % (proc.stdout, proc.stderr)
+
+
+# ── Task 8: 云端 TAB（预设网格 + provider 表 + 手动配置，零 emoji） ──
+
+# 常见 emoji 区段（U+1F300-1FAFF 符号 + U+2600-27BF 杂项/制表符号，
+# 覆盖 legacy 的 ✓ ✗ 🔍 👁 🔧 与 preset icon 的 🟦🌋🐋🌙🟢🟠🔗）
+_CLOUD_EMOJI_RE = __import__("re").compile(r"[\U0001F300-\U0001FAFF☀-➿]")
+_CLOUD_LEGACY_EMOJI = [
+    "\U0001F50D", "\U0001F441", "\U0001F527",   # 🔍 👁 🔧
+    "✓", "✗",                                       # 状态标记
+    "\U0001F7E6", "\U0001F30B", "\U0001F40B",     # 🟦 🌋 🐋
+    "\U0001F319", "\U0001F7E2", "\U0001F410",     # 🌙 🟢 🔗
+]
+
+
+def _cloud_sources():
+    frag = (_DASHBOARD_DIR / "fragments" / "cloud.html").read_text(encoding="utf-8")
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "cloud.js").read_text(encoding="utf-8")
+    return frag, js
+
+
+def test_cloud_structure():
+    """云端页 DOM 契约（spec §4.5）：预设网格 + 内联 Key 表单 + provider 表
+    + 手动配置表单 + 发现模型区。
+
+    断言 get_html() 含契约 id（presetGrid, presetForm, provTable, cpName,
+    cpApiKey, cpOpenaiBase, cpAnthropicBase, cloudModels）与静态 data-action 值
+    （行级 provider-test/provider-delete/preset-select 由 cloud.js 动态渲染）。"""
+    html = _html()
+    for el in (
+        'id="presetGrid"',       # 预设网格容器
+        'id="presetForm"',       # 内联 API Key 表单
+        'id="provTable"',        # provider 表
+        'id="cpName"',
+        'id="cpApiKey"',
+        'id="cpOpenaiBase"',
+        'id="cpAnthropicBase"',
+        'id="cloudModels"',      # 发现模型区
+    ):
+        assert el in html, "missing cloud contract id: %s" % el
+    # 静态 data-action 契约
+    for act in ("preset-add", "preset-cancel", "manual-test", "manual-add",
+                "reload", "provider-discover"):
+        assert 'data-action="%s"' % act in html, "missing cloud data-action: %s" % act
+
+
+def test_cloud_js_present():
+    """cloud.js 模块存在且被 get_html() 内联装配（tabRenderers 注册 + 5 端点
+    + 6 个暴露函数 + UI.adminHeaders）。"""
+    import re
+    js_path = ROOT / "inferfabric" / "dashboard" / "js" / "cloud.js"
+    assert js_path.exists(), "cloud.js missing"
+    html = _html()
+    assert "window.tabRenderers['tab-cloud'] = renderCloud" in html, (
+        "cloud.js tab renderer registration not inlined into HTML"
+    )
+    # 五个端点契约（API 冻结，不得新增）
+    for ep in ("'/admin/cloud/presets'", "'/admin/cloud/providers'",
+               "'/admin/cloud/test'", "'/admin/cloud/discover'", "'/admin/cloud/reload'"):
+        assert ep in html, "cloud.js missing endpoint: %s" % ep
+    assert "UI.adminHeaders()" in html, "cloud.js must use UI.adminHeaders()"
+    # 暴露的 6 个操作函数
+    for fn in ("window.doCloudAdd", "window.doCloudAddPreset", "window.doCloudTest",
+               "window.doCloudDiscover", "window.doCloudDelete", "window.doCloudReload"):
+        assert fn in html, "cloud.js missing global: %s" % fn
+    # 动态渲染的 data-action 契约（预设卡 / 行内 测试 / 行内 删除）
+    js = js_path.read_text(encoding="utf-8")
+    for act in ("preset-select", "provider-test", "provider-delete"):
+        assert 'data-action="%s"' % act in js or "'%s'" % act in js, (
+            "cloud.js missing data-action: %s" % act
+        )
+    # 请求体契约：preset 路径 {preset, api_key}；手动路径 {name, api_key, openai_base, anthropic_base}
+    assert "preset: preset.id, api_key: apiKey" in js or "preset: preset.id" in js, (
+        "cloud.js must POST {preset, api_key} for preset path"
+    )
+    assert re.search(r"openai_base:\s*openaiBase,\s*anthropic_base:\s*anthropicBase", js), (
+        "cloud.js must POST {name, api_key, openai_base, anthropic_base} for manual path"
+    )
+
+
+def test_cloud_no_emoji():
+    """cloud.html + cloud.js 零 emoji（R13）：无常见 emoji 区段码位、
+    无 legacy emoji（🔍👁🔧✓✗🟦🌋🐋🌙🟢🟠🔗）；
+    且预设卡不得渲染 preset 的 icon 字段（p.icon 不进入 innerHTML）。"""
+    import re
+    frag, js = _cloud_sources()
+    for src, name in ((frag, "cloud.html"), (js, "cloud.js")):
+        m = _CLOUD_EMOJI_RE.search(src)
+        assert not m, "%s contains emoji codepoint U+%04X" % (name, ord(m.group(0)))
+        for ch in _CLOUD_LEGACY_EMOJI:
+            assert ch not in src, "%s contains legacy emoji %r" % (name, ch)
+    # preset icon 字段（emoji）不得被渲染：p.icon / pr.icon 不得出现
+    assert "p.icon" not in js, "cloud.js renders preset icon field (p.icon)"
+    assert "pr.icon" not in js, "cloud.js renders preset icon field (pr.icon)"
+    # 除 UI.icon( SVG 助手外，不得出现 .icon 字段访问
+    assert not re.search(r"\.icon\b", js.replace("UI.icon", "")), (
+        "cloud.js renders .icon field into HTML (R13: preset icon is emoji)"
+    )
+
+
+def test_cloud_delete_uses_confirm():
+    """cloudDeleteProvider 必须走 UI.confirm danger 确认，不得使用原生 confirm()。"""
+    js = _cloud_sources()[1]
+    assert "UI.confirm(" in js, "cloud.js must use UI.confirm for provider deletion"
+    assert "danger: true" in js, "cloud.js deletion confirm must be danger"
+    # 移除 UI.confirm( 后不得残留任何 confirm( 调用（原生 confirm 违规）
+    stripped = js.replace("UI.confirm(", "")
+    assert "confirm(" not in stripped, (
+        "cloud.js uses native confirm() — must use UI.confirm (R13)"
+    )
+
+
+def test_cloud_no_inline_onclick():
+    """cloud.html 不得含任何 inline onclick= 属性（事件委托约束）。"""
+    frag = _cloud_sources()[0]
+    assert "onclick=" not in frag, (
+        "cloud.html contains inline onclick= — must use event delegation"
+    )
+
+
+def test_cloud_js_node_syntax():
+    """cloud.js 必须通过 node --check 语法校验（零构建工具链，CI 前置门）。"""
+    import shutil
+    import subprocess
+    import pytest
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available")
+    js = ROOT / "inferfabric" / "dashboard" / "js" / "cloud.js"
+    proc = subprocess.run([node, "--check", str(js)],
+                          capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, \
+        "node --check cloud.js failed:\nstdout:%s\nstderr:%s" % (proc.stdout, proc.stderr)
+
+
+def test_deploy_success_guard():
+    """doDeploy 不得仅凭 HTTP 200 判定成功——后端 _handle_deploy 对逻辑失败也返回
+    200（_send_json 默认 200）。必须查 j.status：成功仅 {switched, already_active}
+    （model_lifecycle.py:333 / manager.py:399）；其余（"Unsupported type for
+    auto-deploy" / "Unknown model" / "Invalid transition"）须走失败分支。
+
+    回归守卫：若有人改回 `if (res.ok)` 即成功，下面 'switched'/'already_active'
+    字面量与 j.status 检查会消失，测试失败。
+    """
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "deploy.js").read_text(encoding="utf-8")
+    # 必须检查响应体 status（不能只看 res.ok）
+    assert "j.status" in js, "doDeploy must inspect j.status (backend returns 200 on logical errors)"
+    # 成功状态白名单（与 model_lifecycle.py:333 一致）
+    assert "'switched'" in js, "doDeploy success set must include 'switched'"
+    assert "'already_active'" in js, "doDeploy success set must include 'already_active'"
+    # 非白名单状态须抛错走失败分支（不能静默成功）
+    assert "throw new Error" in js, "doDeploy must throw on non-success status"
+
 

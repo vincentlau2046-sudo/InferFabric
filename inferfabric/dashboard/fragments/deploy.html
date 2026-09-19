@@ -18,12 +18,10 @@
             <label class="if-field-label" for="depType">引擎类型</label>
             <select class="if-field-select" id="depType">
               <option value="vllm">vLLM</option>
-              <option value="sglang">SGLang</option>
-              <option value="ninfer">NInfer</option>
-              <option value="ollama">Ollama</option>
+              <option value="ollama_cpp">Ollama (GGUF)</option>
             </select>
           </div>
-          <p class="if-field-hint">后端自动生成 YAML 并分配端口与显存，无需手动指定。</p>
+          <p class="if-field-hint">后端自动生成 YAML 并分配端口与显存。其他引擎（SGLang / NInfer / Ollama 服务）请在 models.d/ 手动编写 YAML 后用 switch 加载。</p>
         </div>
         <div class="if-card-actions">
           <button type="button" class="btn btn-pri btn-sm" data-action="deploy">部署并切换</button>
