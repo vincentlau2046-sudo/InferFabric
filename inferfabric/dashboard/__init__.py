@@ -45,6 +45,17 @@ def get_html() -> str:
             base = base.replace("<!-- CSS:main -->", css)
         except FileNotFoundError:
             log.warning("Dashboard CSS missing: %s", css_path)
+        # 内联 ECharts vendor（在 JS_MODULES 之前，保证 echarts 先于 charts.js 加载）。
+        # 缺失文件 graceful 降级：清空占位符 + warning；charts.js 检测到 echarts 缺失
+        # 时 IFCharts.create 返回 null，调用方显示 empty state。
+        echarts_path = _DASHBOARD_DIR / "vendor" / "echarts.min.js"
+        try:
+            echarts_js = echarts_path.read_text(encoding="utf-8")
+            base = base.replace("<!-- JS:echarts -->", echarts_js)
+        except FileNotFoundError:
+            log.warning("ECharts vendor missing: %s (charts will degrade to empty state)",
+                        echarts_path)
+            base = base.replace("<!-- JS:echarts -->", "")
         # 替换 JS 占位符（缺失文件 graceful 降级：清空占位符 + warning，不残留标记）
         for js_name in JS_MODULES:
             js_path = _DASHBOARD_DIR / "js" / f"{js_name}.js"

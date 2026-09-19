@@ -359,9 +359,11 @@ function toggleTheme() {
   if (isLight) {
     html.removeAttribute('data-theme');          // → dark (:root 默认)
     localStorage.setItem('iff_theme', 'dark');
+    store.set('theme', 'dark');                  // 通知图表等订阅者（charts.js）
   } else {
     html.setAttribute('data-theme', 'light');
     localStorage.setItem('iff_theme', 'light');
+    store.set('theme', 'light');
   }
   updateThemeIcon();
 }
@@ -381,15 +383,21 @@ window.toggleTheme = toggleTheme;
 // Initialize theme from localStorage or system preference
 (function initTheme() {
   const saved = localStorage.getItem('iff_theme');
+  var th = 'dark';
   if (saved === 'light') {
     document.documentElement.setAttribute('data-theme', 'light');
+    th = 'light';
   } else if (saved === 'dark') {
     document.documentElement.removeAttribute('data-theme');   // dark = :root 默认
+    th = 'dark';
   } else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
     document.documentElement.setAttribute('data-theme', 'light');
+    th = 'light';
   } else {
     document.documentElement.removeAttribute('data-theme');   // dark 默认
+    th = 'dark';
   }
+  store.set('theme', th);                       // 初值：charts.js 订阅时即时回放
   updateThemeIcon();
 })();
 

@@ -236,3 +236,94 @@ def test_overview_no_fake_script():
     assert 'id="ovActiveCard"' in frag
     assert 'id="ovActiveBody"' in frag
     assert 'id="ovSpark24h"' in frag
+
+
+# ── Task 4: ECharts vendor + 主题图表工厂 + CVD 调色板 ────────────────
+
+
+def test_echarts_vendored():
+    """ECharts 5.5.1 vendor 文件存在，并被 __init__.py 内联进 get_html()。
+
+    断言：vendor 文件 > 900KB；get_html() 含 echarts UMD 标识且体积 > 1MB
+    （echarts.min.js 本体 ~1.03MB；未内联时 get_html 仅 ~94KB，故 >1MB 即证明已内联）；
+    无残留 <!-- JS:echarts --> 占位符。"""
+    vendor = ROOT / "inferfabric" / "dashboard" / "vendor" / "echarts.min.js"
+    assert vendor.exists(), "echarts.min.js vendor missing"
+    assert vendor.stat().st_size > 900_000, "echarts vendor too small (<900KB)"
+    html = _html()
+    # echarts UMD 包标识（5.5.1）——内联后必然出现在 HTML 中
+    assert "echarts" in html
+    assert "5.5.1" in html
+    # 内联后单文件体积 ~1.12MB（echarts 1.03MB + shell/css/js ~94KB）
+    assert len(html) > 1_000_000, "get_html() size %d < 1MB (echarts not inlined?)" % len(html)
+    # 占位符已被替换（test_no_leftover_placeholders 也覆盖）
+    assert "<!-- JS:echarts -->" not in html
+
+
+def test_echarts_loads_before_charts_module():
+    """echarts 必须在 charts.js 之前内联（charts.js 依赖 window.echarts）。"""
+    html = _html()
+    i_echarts = html.find("typeof exports")   # echarts UMD 头部特征
+    i_ifcharts = html.find("window.IFCharts")
+    assert i_echarts > 0 and i_ifcharts > 0, "echarts UMD head or IFCharts not found"
+    assert i_echarts < i_ifcharts, "echarts must be inlined before charts.js (IFCharts)"
+
+
+def test_charts_js_present():
+    """charts.js 模块存在并被 get_html() 内联装配（window.IFCharts 工厂）。"""
+    js_path = ROOT / "inferfabric" / "dashboard" / "js" / "charts.js"
+    assert js_path.exists(), "charts.js missing"
+    html = _html()
+    # IFCharts 工厂契约
+    assert "window.IFCharts" in html, "IFCharts factory not inlined"
+    for member in ("create:", "update:", "dispose:", "onThemeChange:", "palettes:"):
+        assert member in html, "IFCharts member not inlined: %s" % member
+    # spec §7 规则编码进工厂
+    assert "axisPointer" in html and "type: 'cross'" in html   # crosshair tooltip
+    assert "symbol = 'none'" in html                            # 无逐点标记
+    assert "lineStyle.width = 2" in html                        # 细线 2px
+
+
+def test_chart_palette_values():
+    """CVD 验证通过的 8 个系列色 hex（task-4-palette.md）必须逐字出现在 get_html()。
+
+    固定顺序 蓝→琥珀→青→紫；dark/light 两组。改动任一值须重跑
+    specs/dashboard-v2-console/tools/validate_palette.js 保持 ALL PASS。"""
+    html = _html()
+    dark = ['#3b82f6', '#b45309', '#0891b2', '#7c3aed']
+    light = ['#2563eb', '#b45309', '#0891b2', '#7c3aed']
+    # 8 个值（含重复）逐字出现
+    for hexv in dark + light:
+        assert hexv in html, "palette hex missing from charts.js: %s" % hexv
+    # 两组调色板作为连续数组字面量出现（强断言：顺序与分组正确）
+    assert ("dark:  ['#3b82f6', '#b45309', '#0891b2', '#7c3aed']" in html), \
+        "dark palette array literal not inlined verbatim"
+    assert ("light: ['#2563eb', '#b45309', '#0891b2', '#7c3aed']" in html), \
+        "light palette array literal not inlined verbatim"
+
+
+def test_charts_js_node_syntax():
+    """charts.js 必须通过 node --check 语法校验（零构建工具链，CI 前置门）。"""
+    import shutil
+    import subprocess
+    import pytest
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available")
+    js = ROOT / "inferfabric" / "dashboard" / "js" / "charts.js"
+    proc = subprocess.run([node, "--check", str(js)],
+                          capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, \
+        "node --check charts.js failed:\nstdout:%s\nstderr:%s" % (proc.stdout, proc.stderr)
+
+
+def test_theme_state_hooked_in_store():
+    """store.js 必须把主题状态注入 store('theme') 供 charts.js 订阅重建。"""
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "store.js").read_text(encoding="utf-8")
+    # toggleTheme 与 initTheme 都 set 'theme'
+    assert "store.set('theme', 'dark')" in js
+    assert "store.set('theme', 'light')" in js
+    html = _html()
+    # charts.js 订阅 store.on('theme')
+    assert "store.on('theme'" in html or "window.store.on('theme'" in html
+
