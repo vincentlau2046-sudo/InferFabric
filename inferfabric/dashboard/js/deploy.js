@@ -5,8 +5,9 @@
  *   - POST /deploy {name, type}     — 生成 YAML 并切换（admin header）
  *   - POST /pull  {name, framework} — 下载权重（admin header）
  *
- * 设计纪律（R12）：
- *   - 部署表单仅含 name + engine 类型选择（vllm/sglang/ninfer/ollama）。
+ * 设计纪律（R12 + R14）：
+ *   - 部署表单仅含 name + engine 类型选择（vllm / ollama_cpp——auto_deploy 仅支持
+ *     此两者，model_discovery.py:141；sglang/ninfer/ollama 服务需 models.d/ 手动 YAML）。
  *     旧 model_dir / port / gpu_mem slider 字段已删除——后端 auto_deploy
  *     自动生成 YAML，不读这些字段（handler.py:1055 _handle_deploy 仅取 name+type）。
  *   - 拉取表单仅含 name + framework。
@@ -32,7 +33,7 @@
   var $ = function (id) { return document.getElementById(id); };
 
   var ENGINE_LABEL = {
-    vllm: 'vLLM', sglang: 'SGLang', ninfer: 'NInfer', ollama: 'Ollama',
+    vllm: 'vLLM', ollama_cpp: 'Ollama (GGUF)',
   };
 
   function engineLabel(type) {
