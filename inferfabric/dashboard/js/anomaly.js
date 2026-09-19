@@ -43,6 +43,7 @@
 
   var _events = [];      // 已加载事件缓存（服务端过滤后、搜索过滤前）
   var _searchTimer = null;
+  var _loadCtrl = null;  // 在途请求 AbortController（review fix#1：快速连切过滤时丢弃 stale 响应）
 
   /* ── XSS-safe 转义（与 cloud.js esc 一致） ── */
   function esc(s) {
@@ -146,16 +147,20 @@
     if (count) count.textContent = '—';
   }
 
-  /* ── 拉取：category/severity 作为 query 参数（服务端过滤，减小载荷） ── */
+  /* ── 拉取：category/severity 作为 query 参数（服务端过滤，减小载荷） ──
+   *   review fix#1：快速连切过滤/搜索会并发多请求，慢的旧响应可能后到覆盖新结果。
+   *   用 AbortController 丢弃 stale 响应——每次发新请求前 abort 前一个。 */
   async function loadAnomalies() {
     var cat = ($('anomCatFilter') || {}).value || '';
     var sev = ($('anomSevFilter') || {}).value || '';
     var url = EVENTS_URL + '?since=0&limit=' + LIMIT;
     if (cat) url += '&category=' + encodeURIComponent(cat);
     if (sev) url += '&severity=' + encodeURIComponent(sev);
+    if (_loadCtrl) { try { _loadCtrl.abort(); } catch (_) {} }
+    _loadCtrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
     showSkeleton();
     try {
-      var res = await fetch(url);
+      var res = await fetch(url, _loadCtrl ? { signal: _loadCtrl.signal } : undefined);
       var d = null;
       try { d = await res.json(); } catch (_) {}
       if (!res.ok || !d || d.error) {
@@ -168,6 +173,8 @@
       });
       renderRows();
     } catch (e) {
+      // 被新请求 abort 掉的旧响应：静默丢弃，不显示错误（新请求会接管渲染）
+      if (e && (e.name === 'AbortError' || _loadCtrl && _loadCtrl.signal && _loadCtrl.signal.aborted)) return;
       showFail(e.message || String(e));
     }
   }
