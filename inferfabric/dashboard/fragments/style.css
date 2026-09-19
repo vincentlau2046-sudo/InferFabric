@@ -949,6 +949,38 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
 .gw-label-title { font-size: var(--fs-body); color: var(--ink); font-weight: 600; }
 .gw-label-sub { font-size: var(--fs-table); color: var(--ink-3); }
 
+/* ── 部署表单字段 ─────────────────────────────────────────────── */
+.if-form-row { display: flex; flex-direction: column; gap: 4px; }
+.if-field-label { font-size: var(--fs-table); color: var(--ink-2); font-weight: 600; }
+.if-field-input,
+.if-field-select {
+  height: 30px;
+  padding: 0 8px;
+  font-size: var(--fs-body);
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.if-field-input.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.if-field-select { font-family: var(--font-sans); cursor: pointer; }
+.if-field-input:focus,
+.if-field-select:focus { outline: none; border-color: var(--accent); }
+.if-field-hint { font-size: var(--fs-table); color: var(--ink-3); margin: 0; }
+
+/* 部署长任务进度态（不定 spinner + 结果文本） */
+.dep-progress-row { display: flex; align-items: center; gap: var(--sp-1); }
+.dep-spinner {
+  width: 18px; height: 18px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: var(--radius-pill);
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+.dep-progress-msg { font-size: var(--fs-body); color: var(--ink-2); }
+.dep-progress-result { font-size: var(--fs-table); color: var(--ink-3); }
+
 /* ── 响应式：窄屏折叠遥测带 ───────────────────────────────────── */
 @media (max-width: 720px) {
   .if-telemetry { grid-template-columns: repeat(2, 1fr); }
@@ -956,4 +988,5 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
   .if-sidebar span { display: none; }
   .mon-chart { height: 200px; }
   .inf-card-grid { grid-template-columns: 1fr; }
+  .if-grid { grid-template-columns: 1fr; }
 }

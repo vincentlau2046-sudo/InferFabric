@@ -616,3 +616,108 @@ def test_inference_no_new_api():
             "inference.js fetches non-allowed endpoint %r (API must stay frozen)" % u
         )
 
+
+# ── Task 7: 部署 TAB（部署表单 + 拉取表单 + 长任务进度态） ──────────
+
+
+def test_deploy_structure():
+    """部署页 DOM 契约：部署表单卡 + 拉取表单卡 + 长任务进度态。
+
+    断言 get_html() 含（R12：仅 name + engine 类型，无 dead fields）：
+      - 部署表单：#depName（name input）、#depType（engine type select）、
+        data-action="deploy"（部署按钮）
+      - 拉取表单：#pullName（name input）、#pullFw（framework select）、
+        data-action="pull"（拉取按钮）
+      - #deployProgress（长任务进度态容器）
+    """
+    html = _html()
+    for el in (
+        'id="depName"',          # 部署表单：模型名称输入
+        'id="depType"',          # 部署表单：引擎类型选择
+        'data-action="deploy"',  # 部署表单：部署按钮
+        'id="pullName"',         # 拉取表单：模型名称输入
+        'id="pullFw"',           # 拉取表单：框架选择
+        'data-action="pull"',    # 拉取表单：拉取按钮
+        'id="deployProgress"',   # 长任务进度态容器
+    ):
+        assert el in html, "missing deploy contract id: %s" % el
+    # 引擎类型选项契约（R12：vllm/sglang/ninfer/ollama）
+    for opt in ('value="vllm"', 'value="sglang"', 'value="ninfer"', 'value="ollama"'):
+        assert opt in html, "missing engine type option: %s" % opt
+
+
+def test_deploy_js_present():
+    """deploy.js 模块存在并被 get_html() 内联装配（tabRenderers 注册 + doDeploy/doPull）。
+
+    断言：文件存在；get_html() 含 tabRenderers['tab-deploy'] 注册；
+    doDeploy / doPull 全局函数；两个端点契约；admin header 调用。"""
+    js_path = ROOT / "inferfabric" / "dashboard" / "js" / "deploy.js"
+    assert js_path.exists(), "deploy.js missing"
+    html = _html()
+    assert "window.tabRenderers['tab-deploy'] = renderDeploy" in html, (
+        "deploy.js tab renderer registration not inlined into HTML"
+    )
+    assert "window.doDeploy" in html, "window.doDeploy not inlined into HTML"
+    assert "window.doPull" in html, "window.doPull not inlined into HTML"
+    # 两个端点契约
+    assert "'/deploy'" in html, "deploy.js missing /deploy endpoint"
+    assert "'/pull'" in html, "deploy.js missing /pull endpoint"
+    # admin header 调用（R6）
+    assert "UI.adminHeaders()" in html
+    # 请求体契约：{name, type} 与 {name, framework}（R12）
+    assert "name: name, type: type" in html or "name:name,type:type" in html, (
+        "deploy.js must POST {name, type} (R12)"
+    )
+    assert "name: name, framework: fw" in html or "name:name,framework:fw" in html, (
+        "deploy.js must POST {name, framework} (R12)"
+    )
+    # UI.confirm 在部署与拉取前调用（破坏性/长操作确认）
+    js = js_path.read_text(encoding="utf-8")
+    assert js.count("UI.confirm(") >= 2, (
+        "deploy.js must call UI.confirm before both deploy and pull"
+    )
+    # 成功后跳转推理 TAB（spec §4.4）
+    assert "switchTab('tab-inference')" in js, (
+        "deploy.js must switch to inference tab on success"
+    )
+
+
+def test_deploy_no_dead_fields():
+    """部署表单不得含旧 dead fields（R12）：model_dir / port / gpu_mem / slider。
+    后端 auto_deploy 自动生成 YAML，不读这些字段（handler.py:1055 _handle_deploy
+    仅取 name + type）。旧字段误导用户以为可配置部署参数。"""
+    import re
+    frag = (_DASHBOARD_DIR / "fragments" / "deploy.html").read_text(encoding="utf-8")
+    # dead field 标识符不得出现（含 id= / name= 形式或裸标识符）
+    for dead in ("model_dir", "gpu_mem", "slider"):
+        assert dead not in frag, (
+            "deploy.html contains dead field %r (R12: removed — backend auto-generates)" % dead
+        )
+    # port 不得作为表单字段标识出现（id="...port" / name="port"）
+    assert not re.search(r'(id|name)\s*=\s*"[^"]*port[^"]*"', frag, re.I), (
+        "deploy.html contains a 'port' form field (R12: dead field removed)"
+    )
+
+
+def test_deploy_no_inline_onclick():
+    """deploy.html 不得含任何 inline onclick= 属性（事件委托约束）。"""
+    frag = (_DASHBOARD_DIR / "fragments" / "deploy.html").read_text(encoding="utf-8")
+    assert "onclick=" not in frag, (
+        "deploy.html contains inline onclick= — must use event delegation"
+    )
+
+
+def test_deploy_js_node_syntax():
+    """deploy.js 必须通过 node --check 语法校验（零构建工具链，CI 前置门）。"""
+    import shutil
+    import subprocess
+    import pytest
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available")
+    js = ROOT / "inferfabric" / "dashboard" / "js" / "deploy.js"
+    proc = subprocess.run([node, "--check", str(js)],
+                          capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, \
+        "node --check deploy.js failed:\nstdout:%s\nstderr:%s" % (proc.stdout, proc.stderr)
+
