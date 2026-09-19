@@ -60,12 +60,17 @@
       if (e.key === 'Escape') close();
       if (e.key === 'Enter') { close(); if (typeof opts.onOk === 'function') opts.onOk(); }
     }
-    holder.addEventListener('click', function (e) {
+    // Click listener attaches to the backdrop child (destroyed by holder.innerHTML=''
+    // in close()), NOT the persistent holder — otherwise each confirm() accumulates
+    // a listener on #confirmModal and stale onOk closures re-fire on later confirms.
+    var backdrop = holder.querySelector('.if-modal-backdrop');
+    function onBackdropClick(e) {
       var act = e.target.getAttribute && e.target.getAttribute('data-act');
       if (act === 'ok') { close(); if (typeof opts.onOk === 'function') opts.onOk(); }
       else if (act === 'cancel') { close(); }
-      else if (e.target === holder.querySelector('.if-modal-backdrop')) { close(); }
-    });
+      else if (e.target === backdrop) { close(); }
+    }
+    if (backdrop) backdrop.addEventListener('click', onBackdropClick);
     document.addEventListener('keydown', onKey);
     var okBtn = holder.querySelector('[data-act="ok"]');
     if (okBtn) okBtn.focus();

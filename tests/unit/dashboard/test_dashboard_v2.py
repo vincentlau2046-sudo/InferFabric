@@ -68,3 +68,122 @@ def test_new_js_present():
     """ui.js / store.js 已创建。"""
     assert (ROOT / "inferfabric" / "dashboard" / "js" / "ui.js").exists()
     assert (ROOT / "inferfabric" / "dashboard" / "js" / "store.js").exists()
+
+
+# ── UI.confirm 监听器泄漏回归测试（Node 行为级 harness） ──────────
+# 手写 mock DOM：每个 El 记录 addEventListener；holder.innerHTML 被赋值时
+# 清空子缓存（模拟子节点销毁）。验证两次连续 confirm 后，仅当前 onOk 触发。
+_CONFIRM_LEAK_HARNESS = r"""
+const fs = require('fs');
+const vm = require('vm');
+
+function El() {
+  this._html = '';
+  this._childCache = {};
+  this._listeners = {};
+  this.style = {};
+  this.textContent = '';
+  this.className = '';
+  this._attrs = {};
+  var self = this;
+  Object.defineProperty(this, 'innerHTML', {
+    get: function () { return self._html; },
+    set: function (v) { self._html = v; self._childCache = {}; }
+  });
+}
+El.prototype.addEventListener = function (type, fn) {
+  (this._listeners[type] = this._listeners[type] || []).push(fn);
+};
+El.prototype.removeEventListener = function (type, fn) {
+  var arr = this._listeners[type]; if (!arr) return;
+  var i = arr.indexOf(fn); if (i >= 0) arr.splice(i, 1);
+};
+El.prototype.getAttribute = function (k) { return this._attrs[k] != null ? this._attrs[k] : null; };
+El.prototype.setAttribute = function (k, v) { this._attrs[k] = v; };
+El.prototype.focus = function () {};
+El.prototype.querySelector = function (sel) {
+  if (!this._html) return null;
+  if (!this._childCache[sel]) this._childCache[sel] = new El();
+  return this._childCache[sel];
+};
+El.prototype.querySelectorAll = function (sel) {
+  var el = this.querySelector(sel); return el ? [el] : [];
+};
+El.prototype.clickListeners = function () { return this._listeners['click'] || []; };
+
+var holder = new El();
+var docListeners = {};
+var document = {
+  getElementById: function (id) { return id === 'confirmModal' ? holder : new El(); },
+  addEventListener: function (type, fn) { (docListeners[type] = docListeners[type] || []).push(fn); },
+  removeEventListener: function (type, fn) {
+    var arr = docListeners[type]; if (!arr) return;
+    var i = arr.indexOf(fn); if (i >= 0) arr.splice(i, 1);
+  }
+};
+
+global.window = global;
+global.document = document;
+global.setTimeout = function () {};
+global.confirm = function () { return true; };
+
+var code = fs.readFileSync(process.argv[2], 'utf8');
+vm.runInThisContext(code);
+
+var onOk1 = 0, onOk2 = 0;
+
+// Cycle 1: open confirm, then close via Escape (must NOT fire onOk)
+global.UI.confirm({ title: 't1', body: 'b1', onOk: function () { onOk1++; } });
+(docListeners['keydown'] || []).slice().forEach(function (fn) { fn({ key: 'Escape' }); });
+
+// Cycle 2: open confirm (the current one)
+global.UI.confirm({ title: 't2', body: 'b2', onOk: function () { onOk2++; } });
+var backdrop2 = holder.querySelector('.if-modal-backdrop');
+
+// Simulate an OK click bubbling to wherever the listener lives (holder or backdrop)
+var okEvent = { target: { getAttribute: function (k) { return k === 'data-act' ? 'ok' : null; } } };
+holder.clickListeners().slice().forEach(function (fn) { fn(okEvent); });
+if (backdrop2) backdrop2.clickListeners().slice().forEach(function (fn) { fn(okEvent); });
+
+console.log(JSON.stringify({
+  onOk1: onOk1,
+  onOk2: onOk2,
+  holderClickListeners: holder.clickListeners().length,
+  backdropClickListeners: backdrop2 ? backdrop2.clickListeners().length : 0
+}));
+"""
+
+
+def test_ui_confirm_no_listener_leak(tmp_path):
+    """UI.confirm 不得在持久 #confirmModal holder 上累积 click 监听器（否则
+    会重复触发先前已关闭 confirm 的 onOk 闭包）。
+
+    行为级测试：在 node harness 中加载 ui.js + mock DOM，跑两轮 confirm，
+    断言仅第二轮 onOk 触发，且 holder 上无残留 click 监听器。"""
+    import json
+    import shutil
+    import subprocess
+
+    import pytest
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available")
+    ui_js = ROOT / "inferfabric" / "dashboard" / "js" / "ui.js"
+    harness = tmp_path / "confirm_leak_harness.js"
+    harness.write_text(_CONFIRM_LEAK_HARNESS, encoding="utf-8")
+    proc = subprocess.run(
+        [node, str(harness), str(ui_js)],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert proc.returncode == 0, (
+        "node harness failed:\nstdout:%s\nstderr:%s" % (proc.stdout, proc.stderr)
+    )
+    result = json.loads(proc.stdout.strip())
+    # 仅当前（第二轮）onOk 触发；第一轮的 onOk 不得因泄漏重复触发
+    assert result["onOk1"] == 0, "stale onOk leaked (re-fired): %s" % result
+    assert result["onOk2"] == 1, "current onOk did not fire exactly once: %s" % result
+    # holder 上不得残留 click 监听器（泄漏的特征）
+    assert result["holderClickListeners"] == 0, (
+        "click listener leaked onto persistent holder: %s" % result
+    )
