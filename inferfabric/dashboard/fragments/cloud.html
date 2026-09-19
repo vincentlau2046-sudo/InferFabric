@@ -1,12 +1,116 @@
 <div class="tab-content" id="tab-cloud">
-  <div class="if-card">
+
+  <!-- 预设厂商：9 预设网格 + 内联 API Key 表单（cloud.js 按 id 填充） -->
+  <div class="if-card" id="cpPresetCard">
     <div class="if-card-hdr">
-      <span class="if-card-title">云端</span>
-      <span class="if-card-sub">Provider · 9 preset</span>
+      <span class="if-card-title">预设厂商</span>
+      <span class="if-card-sub">点击预设展开 Key 配置，再次点击取消</span>
     </div>
-    <div class="if-card-body" id="cloudShell">
-      <!-- UI.skeleton(cloudShell, 4) — 由 cloud 任务接管：preset 网格 + provider 表 + 手动配置 -->
-      <div class="if-empty">加载中…</div>
+    <div class="if-card-body">
+      <div class="cp-grid" id="presetGrid">
+        <div class="if-empty">加载中…</div>
+      </div>
+      <!-- 内联 API Key 表单（选中预设后由 cloud.js 展开） -->
+      <div class="cp-preset-form" id="presetForm" style="display:none">
+        <div class="cp-form-row">
+          <span class="cp-form-label">已选预设</span>
+          <span class="cp-form-value" id="presetSelected"></span>
+        </div>
+        <div class="if-form-row">
+          <label class="if-field-label" for="cpPresetApiKey">API Key</label>
+          <input class="if-field-input mono" id="cpPresetApiKey" type="password"
+                 placeholder="填入后保存" autocomplete="off" spellcheck="false">
+          <p class="if-field-hint" id="presetEnvHint"></p>
+        </div>
+        <div class="cp-form-actions">
+          <button type="button" class="btn btn-sec btn-sm" data-action="preset-cancel">取消</button>
+          <button type="button" class="btn btn-pri btn-sm" data-action="preset-add">添加 Provider</button>
+        </div>
+      </div>
     </div>
   </div>
+
+  <!-- Provider 表：行内 测试 / 发现 / 删除（事件委托 data-action + data-provider） -->
+  <div class="if-card" id="cpProvCard">
+    <div class="if-card-hdr">
+      <span class="if-card-title">云端 Provider</span>
+      <span class="if-card-sub">已配置厂商与发现模型</span>
+      <div class="cp-card-tools">
+        <button type="button" class="btn btn-sec btn-sm" data-action="provider-discover">发现全部</button>
+        <button type="button" class="btn btn-sec btn-sm" data-action="reload">重载配置</button>
+      </div>
+    </div>
+    <div class="if-card-body">
+      <div class="cp-table-wrap">
+        <table class="if-table" id="provTable">
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>状态</th>
+              <th>协议</th>
+              <th class="num">模型数</th>
+              <th>Key 状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="provTbody">
+            <tr class="cp-row-loading"><td colspan="6"><div class="if-empty">加载中…</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 手动配置表单 + 发现模型（紧凑列表） -->
+  <div class="if-grid">
+    <div class="col-6">
+      <div class="if-card" id="cpManualCard">
+        <div class="if-card-hdr">
+          <span class="if-card-title">手动配置 Provider</span>
+          <span class="if-card-sub">自定义 / 中转站</span>
+        </div>
+        <div class="if-card-body">
+          <div class="if-form-row">
+            <label class="if-field-label" for="cpName">Provider 名称</label>
+            <input class="if-field-input mono" id="cpName" type="text"
+                   placeholder="如 my-relay" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="if-form-row">
+            <label class="if-field-label" for="cpApiKey">API Key</label>
+            <input class="if-field-input mono" id="cpApiKey" type="password"
+                   placeholder="留空则仅引用 ENV 变量" autocomplete="off" spellcheck="false">
+            <p class="if-field-hint">留空表示引用环境变量（形如 IFF_MY_RELAY_KEY）。</p>
+          </div>
+          <div class="if-form-row">
+            <label class="if-field-label" for="cpOpenaiBase">OpenAI Base URL</label>
+            <input class="if-field-input mono" id="cpOpenaiBase" type="text"
+                   placeholder="https://…/v1" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="if-form-row">
+            <label class="if-field-label" for="cpAnthropicBase">Anthropic Base URL</label>
+            <input class="if-field-input mono" id="cpAnthropicBase" type="text"
+                   placeholder="https://…/v1" autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+        <div class="if-card-actions">
+          <button type="button" class="btn btn-sec btn-sm" data-action="manual-test">测试连接</button>
+          <button type="button" class="btn btn-pri btn-sm" data-action="manual-add">添加 Provider</button>
+        </div>
+      </div>
+    </div>
+    <div class="col-6">
+      <div class="if-card" id="cloudModels">
+        <div class="if-card-hdr">
+          <span class="if-card-title">发现模型</span>
+          <span class="if-card-sub mono" id="cloudModelCount">0 个模型</span>
+        </div>
+        <div class="if-card-body">
+          <div class="cp-models-list" id="cloudModelsList">
+            <div class="if-empty">暂无模型 — 在 Provider 行点击「发现」或「发现全部」</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div>
