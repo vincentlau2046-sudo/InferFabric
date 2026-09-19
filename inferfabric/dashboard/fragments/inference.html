@@ -1,12 +1,76 @@
 <div class="tab-content" id="tab-inference">
-  <div class="if-card">
-    <div class="if-card-hdr">
-      <span class="if-card-title">推理</span>
-      <span class="if-card-sub">模型卡片 · 网关控制</span>
+
+  <!-- 独占模型组 -->
+  <section class="inf-group" id="infExclGroup">
+    <div class="inf-group-hdr">
+      <span class="inf-group-title">独占模型</span>
+      <span class="badge" id="infExclCount">0</span>
     </div>
-    <div class="if-card-body" id="infShell">
-      <!-- UI.skeleton(infShell, 4) — 由 inference 任务接管：独占/共享/空闲分组 + 网关控制卡 -->
-      <div class="if-empty">加载中…</div>
+    <div class="inf-card-grid" id="infExclList">
+      <div class="skeleton"><div class="skeleton-row"></div><div class="skeleton-row"></div></div>
+    </div>
+  </section>
+
+  <!-- 共享模型组 -->
+  <section class="inf-group" id="infShrdGroup">
+    <div class="inf-group-hdr">
+      <span class="inf-group-title">共享模型</span>
+      <span class="badge" id="infShrdCount">0</span>
+    </div>
+    <div class="inf-card-grid" id="infShrdList">
+      <div class="skeleton"><div class="skeleton-row"></div><div class="skeleton-row"></div></div>
+    </div>
+  </section>
+
+  <!-- 空闲模型组（gpu_role: none — CPU-only / 无 GPU 占用） -->
+  <section class="inf-group" id="infFreeGroup">
+    <div class="inf-group-hdr">
+      <span class="inf-group-title">空闲模型</span>
+      <span class="badge" id="infFreeCount">0</span>
+    </div>
+    <div class="inf-card-grid" id="infFreeList">
+      <div class="skeleton"><div class="skeleton-row"></div><div class="skeleton-row"></div></div>
+    </div>
+  </section>
+
+  <!-- 网关控制卡 + 部署入口 -->
+  <div class="if-grid">
+    <div class="col-8">
+      <div class="if-card" id="gwCard">
+        <div class="if-card-hdr">
+          <span class="if-card-title">网关控制</span>
+          <span class="if-card-sub">响应缓存 · 速率限制</span>
+        </div>
+        <div class="if-card-body">
+          <div class="gw-row">
+            <div class="gw-label">
+              <span class="gw-label-title">LRU 响应缓存</span>
+              <span class="gw-label-sub mono" id="cacheHits">LRU 缓存 · 上限 500 条</span>
+            </div>
+            <button type="button" class="btn btn-sec btn-sm" id="cacheToggle" data-action="cache-toggle">—</button>
+          </div>
+          <div class="gw-row">
+            <div class="gw-label">
+              <span class="gw-label-title">速率限制</span>
+              <span class="gw-label-sub" id="rlMeta">配置见 iff.yaml</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-4">
+      <div class="if-card" id="infDeployCard">
+        <div class="if-card-hdr">
+          <span class="if-card-title">部署模型</span>
+        </div>
+        <div class="if-card-body">
+          <p class="muted">未找到目标模型？前往部署页配置或拉取新模型。</p>
+        </div>
+        <div class="if-card-actions">
+          <button type="button" class="btn btn-pri btn-sm" data-action="goto-deploy">前往部署</button>
+        </div>
+      </div>
     </div>
   </div>
+
 </div>

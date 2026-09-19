@@ -498,3 +498,121 @@ def test_monitor_gpu_ring_buffer_continuous_accumulation():
         "sync_meta handler does not invoke pushGpuSample(): %s" % sync_text
     )
 
+
+# ── Task 6: 推理 TAB（模型卡片 + 网关控制卡） ──────────────────────
+
+
+def test_inference_structure():
+    """推理页 DOM 契约：网关控制卡 + 缓存控件 + 速率限制 + 三组模型容器。
+
+    断言 get_html() 含：
+      - #gwCard（网关控制卡）
+      - #cacheToggle（LRU 缓存开关按钮）
+      - #cacheHits（缓存信息标签）
+      - #rlMeta（速率限制元信息）
+      - 三组模型容器（独占/共享/空闲）
+    """
+    html = _html()
+    for el in (
+        'id="gwCard"',
+        'id="cacheToggle"',
+        'id="cacheHits"',
+        'id="rlMeta"',
+        'id="infExclGroup"',
+        'id="infShrdGroup"',
+        'id="infFreeGroup"',
+    ):
+        assert el in html, "missing inference contract id: %s" % el
+    # 部署入口按钮（data-action 契约）
+    assert 'data-action="goto-deploy"' in html, "missing deploy entry button"
+    # 缓存开关 data-action 契约
+    assert 'data-action="cache-toggle"' in html, "missing cache toggle data-action"
+
+
+def test_inference_js_present():
+    """inference.js 模块存在并被 get_html() 内联装配（tabRenderers 注册 + doModelAction）。
+
+    断言：文件存在；get_html() 含 tabRenderers['tab-inference'] 注册；
+    doModelAction 全局函数；四个操作端点契约；store sync_meta 订阅。"""
+    js_path = ROOT / "inferfabric" / "dashboard" / "js" / "inference.js"
+    assert js_path.exists(), "inference.js missing"
+    html = _html()
+    assert "window.tabRenderers['tab-inference'] = renderInference" in html, (
+        "inference.js tab renderer registration not inlined into HTML"
+    )
+    assert "window.doModelAction" in html, (
+        "window.doModelAction not inlined into HTML"
+    )
+    # 四个模型操作端点契约
+    for ep in ("'/switch'", "'/stop'", "'/sleep'", "'/wake'"):
+        assert ep in html, "inference.js missing endpoint: %s" % ep
+    # 缓存开关端点契约
+    assert "'/admin/cache/toggle'" in html, "inference.js missing cache toggle endpoint"
+    # sync_meta 订阅（snapshot 到达时刷新）
+    assert "store.on('sync_meta'" in html or "window.store.on('sync_meta'" in html
+    # admin header 调用（UI.adminHeaders，R6）
+    assert "UI.adminHeaders()" in html
+
+
+def test_inference_no_inline_onclick():
+    """inference.html 不得含任何 inline onclick= 属性（事件委托约束）。"""
+    frag = (_DASHBOARD_DIR / "fragments" / "inference.html").read_text(encoding="utf-8")
+    assert "onclick=" not in frag, (
+        "inference.html contains inline onclick= — must use event delegation"
+    )
+
+
+def test_inference_js_node_syntax():
+    """inference.js 必须通过 node --check 语法校验（零构建工具链，CI 前置门）。"""
+    import shutil
+    import subprocess
+    import pytest
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available")
+    js = ROOT / "inferfabric" / "dashboard" / "js" / "inference.js"
+    proc = subprocess.run([node, "--check", str(js)],
+                          capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, \
+        "node --check inference.js failed:\nstdout:%s\nstderr:%s" % (proc.stdout, proc.stderr)
+
+
+def test_inference_no_fabricated_cache_hits():
+    """#cacheHits 不得臆造命中计数 / 命中率（R10：后端不暴露）。
+
+    inference.js 只展示缓存状态（开/关，来自 snapshot cache_enabled）+ 上限 500。
+    不得出现 hit_rate / 命中率 / 命中数 等臆造字段，也不得从 /api/metrics
+    读取命中计数。"""
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "inference.js").read_text(encoding="utf-8")
+    # 不得出现命中率字段
+    assert "hit_rate" not in js, "inference.js fabricates hit_rate (R10 violation)"
+    # 不得从 /api/metrics 读取 cache 命中数据（后端无此字段）
+    import re
+    metrics_fetch = re.findall(r"fetch\([^)]*api/metrics", js)
+    assert not metrics_fetch, (
+        "inference.js fetches /api/metrics for cache data (R10: no hits field exists)"
+    )
+    # cacheHits 文本必须含"上限"+ maxsize（信息性标签）
+    assert "上限" in js, "cacheHits label missing maxsize info (R10)"
+    assert "500" in js, "cacheHits label missing maxsize value 500"
+    # cacheHits 文本只含状态 + 上限，不得含命中数变量插值
+    # （合法文本：'LRU 缓存 · 开/关 · 上限 500 条'）
+    assert "条" in js, "cacheHits label missing unit suffix"
+
+
+def test_inference_no_new_api():
+    """推理 TAB 不得新增任何 API 端点（R10/R11：API 冻结）。
+
+    inference.js 的 fetch 调用必须仅指向既有端点：
+    /switch /stop /sleep /wake /admin/cache/toggle。
+    不得出现 /api/cache-hits /api/rate-limit 等新端点。"""
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "inference.js").read_text(encoding="utf-8")
+    import re
+    # 提取所有 fetch 调用的 URL
+    urls = re.findall(r"fetch\(\s*['\"]([^'\"]+)['\"]", js)
+    allowed = {'/switch', '/stop', '/sleep', '/wake', '/admin/cache/toggle'}
+    for u in urls:
+        assert u in allowed, (
+            "inference.js fetches non-allowed endpoint %r (API must stay frozen)" % u
+        )
+

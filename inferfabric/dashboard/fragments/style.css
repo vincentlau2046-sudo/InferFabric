@@ -885,10 +885,75 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
 }
 .mon-chart-wrap { position: relative; }
 
+/* ── 推理 TAB（tab-inference） ─────────────────────────────────── */
+
+/* 模型分组：每组一个 section，含列头 + 计数徽标 */
+.inf-group { display: flex; flex-direction: column; gap: var(--sp-1); }
+.inf-group[style*="display: none"],
+.inf-group.hidden { display: none !important; }
+.inf-group-hdr {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-1);
+}
+.inf-group-title {
+  font-size: var(--fs-table);
+  font-weight: 600;
+  color: var(--ink-2);
+  text-transform: none;
+}
+
+/* 模型卡片网格：自适应列数 */
+.inf-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--sp-2);
+}
+
+/* 单张模型卡（复用 .if-card 基底，此处仅微调） */
+.inf-card .if-card-hdr { flex-wrap: wrap; }
+.inf-card .if-card-title {
+  font-size: var(--fs-body);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 卡片内统计列表（dt/dd 横排） */
+.inf-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  margin: 0;
+}
+.inf-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.inf-stat dt { font-size: var(--fs-table); color: var(--ink-3); margin: 0; }
+.inf-stat dd {
+  margin: 0;
+  font-size: var(--fs-table);
+  color: var(--ink);
+}
+
+/* 网关控制卡：行式布局 */
+.gw-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0;
+  border-bottom: 1px solid var(--border);
+}
+.gw-row:last-child { border-bottom: none; }
+.gw-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.gw-label-title { font-size: var(--fs-body); color: var(--ink); font-weight: 600; }
+.gw-label-sub { font-size: var(--fs-table); color: var(--ink-3); }
+
 /* ── 响应式：窄屏折叠遥测带 ───────────────────────────────────── */
 @media (max-width: 720px) {
   .if-telemetry { grid-template-columns: repeat(2, 1fr); }
   .if-grid-2, .if-grid-3 { grid-template-columns: 1fr; }
   .if-sidebar span { display: none; }
   .mon-chart { height: 200px; }
+  .inf-card-grid { grid-template-columns: 1fr; }
 }
