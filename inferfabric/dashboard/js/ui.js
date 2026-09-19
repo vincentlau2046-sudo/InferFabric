@@ -1,0 +1,138 @@
+/* InferFabric Console — UI helpers (v2)
+ * window.UI: toast / confirm / skeleton / 格式化 / icon / adminHeaders
+ * 零 emoji（SVG 图标）、数字等宽 tabular-nums。
+ * 依赖：base.html 提供 #toast、#confirmModal 容器与 SVG symbol defs。
+ */
+(function () {
+  'use strict';
+
+  var TOAST_KEY = 'toast';
+  var _toastTimer = null;
+
+  /* ── Toast（DOM 与旧 showToast 一致：#toast，2.8s 自动消失） ── */
+  function toast(msg, kind) {
+    var el = document.getElementById(TOAST_KEY);
+    if (!el) return;
+    el.textContent = msg;
+    var cls = kind || 'info';
+    if (cls === 'success') cls = 'ok';   // 别名归一
+    el.className = 'toast-banner ' + cls + ' show';
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(function () {
+      el.classList.remove('show');
+    }, 2800);
+  }
+
+  /* ── 确认弹窗（渲染进 #confirmModal，danger → 红色主按钮） ── */
+  function confirm(opts) {
+    opts = opts || {};
+    var holder = document.getElementById('confirmModal');
+    if (!holder) { // 无容器兜底：原生确认
+      var ok = window.confirm(opts.title + (opts.body ? '\n' + opts.body : ''));
+      if (ok && typeof opts.onOk === 'function') opts.onOk();
+      return;
+    }
+    var danger = !!opts.danger;
+    holder.innerHTML =
+      '<div class="if-modal-backdrop">' +
+        '<div class="if-modal" role="dialog" aria-modal="true">' +
+          '<div class="if-modal-title"></div>' +
+          '<div class="if-modal-body"></div>' +
+          '<div class="if-modal-actions">' +
+            '<button class="btn btn-sec" data-act="cancel">取消</button>' +
+            '<button class="btn ' + (danger ? 'btn-danger' : 'btn-pri') + '" data-act="ok">' +
+              (danger ? '确认执行' : '确认') +
+            '</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    holder.style.display = '';
+    holder.querySelector('.if-modal-title').textContent = opts.title || '确认操作';
+    holder.querySelector('.if-modal-body').textContent = opts.body || '';
+    if (danger) holder.querySelector('.if-modal-title').style.color = 'var(--crit)';
+
+    function close() {
+      holder.style.display = 'none';
+      holder.innerHTML = '';
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') close();
+      if (e.key === 'Enter') { close(); if (typeof opts.onOk === 'function') opts.onOk(); }
+    }
+    holder.addEventListener('click', function (e) {
+      var act = e.target.getAttribute && e.target.getAttribute('data-act');
+      if (act === 'ok') { close(); if (typeof opts.onOk === 'function') opts.onOk(); }
+      else if (act === 'cancel') { close(); }
+      else if (e.target === holder.querySelector('.if-modal-backdrop')) { close(); }
+    });
+    document.addEventListener('keydown', onKey);
+    var okBtn = holder.querySelector('[data-act="ok"]');
+    if (okBtn) okBtn.focus();
+  }
+
+  /* ── Skeleton（shimmer 占位：rows 行） ── */
+  function skeleton(el, rows) {
+    if (!el) return;
+    var n = rows || 3;
+    var html = '<div class="skeleton">';
+    for (var i = 0; i < n; i++) html += '<div class="skeleton-row"></div>';
+    html += '</div>';
+    el.innerHTML = html;
+  }
+
+  /* ── 格式化 helper ── */
+  function fmtGB(mb) {
+    if (mb == null || isNaN(mb)) return '—';
+    return (Number(mb) / 1024).toFixed(1);
+  }
+
+  // = 旧 ovFormatUptime（行为不变）
+  function fmtDur(sec) {
+    if (sec == null || sec === undefined) return '—';
+    var d = Math.floor(sec / 86400),
+        h = Math.floor((sec % 86400) / 3600),
+        m = Math.floor((sec % 3600) / 60),
+        s = Math.floor(sec % 60);
+    var out = '';
+    if (d) out += d + 'd ';
+    if (h) out += h + 'h ';
+    out += m + 'm ' + s + 's';
+    return out;
+  }
+
+  function fmtNum(n) {
+    if (n == null || n === '' || isNaN(n)) return '—';
+    return Number(n).toLocaleString();
+  }
+
+  /* ── 内联 SVG 图标（<svg><use href="#s-...">） ── */
+  function icon(name, size) {
+    size = size || 16;
+    return '<svg width="' + size + '" height="' + size + '"><use href="#s-' + name + '"/></svg>';
+  }
+
+  /* ── adminHeaders（自 legacy app.js:269 逐字移植）
+   * 读 #adminToken 输入（若存在），否则取 ?token= URL 参数；
+   * 非空时附带 X-Admin-Token。 ── */
+  function adminHeaders() {
+    var h = { 'Content-Type': 'application/json' };
+    var tk = document.getElementById('adminToken')?.value || new URLSearchParams(location.search).get('token') || '';
+    if (tk) h['X-Admin-Token'] = tk;
+    return h;
+  }
+
+  window.UI = {
+    toast: toast,
+    confirm: confirm,
+    skeleton: skeleton,
+    fmtGB: fmtGB,
+    fmtDur: fmtDur,
+    fmtNum: fmtNum,
+    icon: icon,
+    adminHeaders: adminHeaders,
+  };
+
+  // 兼容别名：旧 showToast 调用点（app.js 在 Task 10 删除前仍可能引用）
+  window.showToast = toast;
+})();

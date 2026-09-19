@@ -14,6 +14,11 @@ log = logging.getLogger("inferfabric.dashboard")
 _DASHBOARD_DIR = Path(__file__).parent
 _cached_html: str | None = None
 
+# Dashboard v2 JS 模块加载顺序（缺失文件 graceful 跳过 + warning）。
+# 后续任务逐步填充 charts/overview/inference/deploy/cloud；monitor/anomaly 已存在。
+JS_MODULES = ["ui", "store", "charts", "overview", "inference",
+              "monitor", "deploy", "cloud", "anomaly"]
+
 
 def get_html() -> str:
     """组装 fragments → 返回完整 HTML。启动时缓存到内存。"""
@@ -40,14 +45,16 @@ def get_html() -> str:
             base = base.replace("<!-- CSS:main -->", css)
         except FileNotFoundError:
             log.warning("Dashboard CSS missing: %s", css_path)
-        # 替换 JS 占位符
-        for js_name in ("bindings", "state", "app", "monitor", "anomaly"):
+        # 替换 JS 占位符（缺失文件 graceful 降级：清空占位符 + warning，不残留标记）
+        for js_name in JS_MODULES:
             js_path = _DASHBOARD_DIR / "js" / f"{js_name}.js"
+            placeholder = f"<!-- JS:{js_name} -->"
             try:
                 js = js_path.read_text(encoding="utf-8")
-                base = base.replace(f"<!-- JS:{js_name} -->", js)
             except FileNotFoundError:
                 log.warning("Dashboard JS missing: %s", js_path)
+                js = ""
+            base = base.replace(placeholder, js)
         _cached_html = base
         return base
     except Exception as e:

@@ -1,15 +1,16 @@
-/* InferFabric Dashboard — State Store
- * Phase: P0 | Task: T.0-2 (v2: /api/snapshot upgrade)
- * Single-source polling: fetches /api/snapshot (3s), merges into a
- * normalized shape, and triggers bindings.render() on state change.
- *
- * Change detection: the endpoint supports ETag/If-None-Match → 304 when
- * the control plane (status + models) is unchanged. The store therefore
- * keeps its last known state on 304 — this eliminates the "state gap"
- * where stale poll responses used to overwrite fresh data.
- *
- * Exposed as window.store for app.js integration.
+/* InferFabric Console — State Store (v2)
+ * 自 state.js 全量移植：StateStore + /api/snapshot 轮询 + ETag + 乱序守卫
+ *   + 切换 overlay 订阅 + sync 指示器 + 主题初始化。
+ * 变更点：
+ *   - forceRefresh 调用 window.tabRenderers[tab_active]?.(snap) 替代 window.refreshPanels
+ *   - 顶栏绑定改为订阅式（gpu_mode→#modeBadge、sync_meta→#syncMeta、version→#navVer、
+ *     api_error→#apiErrorBanner、switch_target→UI.toast）；旧指标卡绑定作废（遥测带由后续任务接管）
+ *   - 主题：dark 为 :root 默认，[data-theme="light"] 覆盖；updateThemeIcon 改双 SVG
+ *   - 自举：app.js 不再加载，store 自行 restoreTab + startPolling
+ * 暴露为 window.store。
  */
+(function () {
+  'use strict';
 
 class StateStore {
   constructor(initial = {}) {
@@ -186,11 +187,15 @@ class StateStore {
     }
   }
 
-  /* Force a fresh snapshot (manual refresh / post-action refresh). */
+  /* Force a fresh snapshot (manual refresh / post-action refresh).
+   * v2: 按 TAB 注册的渲染器替代 window.refreshPanels。 */
   async forceRefresh() {
     const snap = await this.fetchSnapshot(true);
-    if (snap && typeof window.refreshPanels === 'function') {
-      try { window.refreshPanels(snap); } catch (e) { console.warn('[state] refreshPanels error:', e); }
+    if (snap) {
+      const fn = window.tabRenderers && window.tabRenderers[this.get('tab_active')];
+      if (typeof fn === 'function') {
+        try { fn(snap); } catch (e) { console.warn('[store] tabRenderer error:', e); }
+      }
     }
     return snap;
   }
@@ -259,19 +264,63 @@ window.store = store;
 window.startPolling = (ms) => store.startPolling(ms);
 window.restoreTab = () => store.restoreTab();
 
+// TAB 渲染器注册表（后续任务填充：tabRenderers['tab-overview'] = fn(snap)）
+window.tabRenderers = {};
+
 // Render on state changes (batched)
 store.on('gpu_mode', () => store._scheduleRender());
 
 // Expose switchTab globally (replaces old app.js version)
 window.switchTab = window.switchTab || ((tabId) => store.switchTab(tabId));
 
-/* ── Switch Overlay (P5.4) ── */
+/* ── 顶栏 / 外壳绑定（订阅式，R2） ──────────────────────────── */
+
+// GPU mode → #modeBadge（状态配色 + 文本）
+store.on('gpu_mode', (mode) => {
+  const el = document.getElementById('modeBadge');
+  if (!el) return;
+  const m = mode || 'idle';
+  el.className = 'if-mode ' + m;
+  const txt = el.querySelector('.mode-txt');
+  if (txt) txt.textContent = m;
+});
+
+// sync_meta → #syncMeta（顶栏同步文本）
+store.on('sync_meta', (m) => {
+  const el = document.getElementById('syncMeta');
+  if (!el || !m) return;
+  const t = m.ts ? new Date(m.ts * 1000).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'}) : '—';
+  el.textContent = m.stale ? '已断线' : '已同步 ' + t + ' · rev ' + (m.rev || '—');
+  el.title = m.stale ? '数据已断线' : '最近同步 ' + t;
+});
+
+// version → #navVer
+store.on('version', (v) => {
+  const el = document.getElementById('navVer');
+  if (el) el.textContent = v ? 'v' + v : '';
+});
+
+// api_error → #apiErrorBanner 可见性
+store.on('api_error', (err) => {
+  const el = document.getElementById('apiErrorBanner');
+  if (el) el.style.display = err ? '' : 'none';
+});
+
+// switch_target → UI.toast（切换通知）
+store.on('switch_target', (val) => {
+  if (val !== null && val !== '' && val !== undefined && window.UI) {
+    window.UI.toast('正在切换到 ' + val + '...', 'info');
+  }
+});
+
+/* ── Switch Overlay（P5.4，自 state.js 移植） ── */
 store.on('switch_target', (val) => {
   const overlay = document.getElementById('switchOverlay');
   if (!overlay) return;
   if (val) {
     overlay.style.display = '';
-    document.getElementById('switchOverlayMsg').textContent = `正在切换到 ${val}…`;
+    const msg = document.getElementById('switchOverlayMsg');
+    if (msg) msg.textContent = '正在切换到 ' + val + '…';
     // Lock sidebar nav
     document.querySelectorAll('.if-nav-item').forEach(el => el.classList.add('locked'));
     store.setSwitchLocked(true);
@@ -282,7 +331,7 @@ store.on('switch_target', (val) => {
   }
 });
 
-/* ── Sync / Freshness Indicator ── */
+/* ── Sync / Freshness Indicator（侧栏底部状态点，自 state.js 移植） ── */
 function updateSyncIndicator(meta) {
   if (!meta) return;
   const dot = document.getElementById('sidebarStatusDot');
@@ -292,22 +341,27 @@ function updateSyncIndicator(meta) {
     dot.className = 'sidebar-status-dot ' + (stale ? 'err' : 'ok');
   }
   if (txt) {
-    txt.textContent = stale ? '已断线' : (meta.rev ? '已同步 · rev ' + meta.rev : '运行中');
+    txt.textContent = stale ? '已断线' : (meta.rev ? 'rev ' + meta.rev : '运行中');
   }
-  // Note: top-bar #syncMeta text is owned by the sync_meta binding in bindings.js
 }
 store.on('sync_meta', updateSyncIndicator);
 
-/* ── Theme Toggle (P4) ── */
+/* ── 顶栏手动刷新（app.js 不再加载，store 自带） ── */
+window.refreshNow = async function () {
+  await store.forceRefresh();
+  if (window.UI) window.UI.toast('已刷新', 'ok');
+};
+
+/* ── Theme Toggle（dark 为 :root 默认，[data-theme="light"] 覆盖） ── */
 function toggleTheme() {
   const html = document.documentElement;
-  const isDark = html.getAttribute('data-theme') === 'dark';
-  if (isDark) {
-    html.removeAttribute('data-theme');
-    localStorage.setItem('iff_theme', 'light');
-  } else {
-    html.setAttribute('data-theme', 'dark');
+  const isLight = html.getAttribute('data-theme') === 'light';
+  if (isLight) {
+    html.removeAttribute('data-theme');          // → dark (:root 默认)
     localStorage.setItem('iff_theme', 'dark');
+  } else {
+    html.setAttribute('data-theme', 'light');
+    localStorage.setItem('iff_theme', 'light');
   }
   updateThemeIcon();
 }
@@ -315,19 +369,38 @@ function toggleTheme() {
 function updateThemeIcon() {
   const btn = document.getElementById('themeToggle');
   if (!btn) return;
-  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-  btn.textContent = isDark ? '🌙' : '☀️';
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  // light 模式显示月亮（切回深色）；dark 模式显示太阳（切到浅色）
+  btn.innerHTML = isLight
+    ? '<svg width="18" height="18"><use href="#s-moon"/></svg>'
+    : '<svg width="18" height="18"><use href="#s-sun"/></svg>';
+  btn.title = isLight ? '切换到深色主题' : '切换到浅色主题';
 }
+window.toggleTheme = toggleTheme;
 
 // Initialize theme from localStorage or system preference
 (function initTheme() {
   const saved = localStorage.getItem('iff_theme');
-  if (saved === 'dark') {
-    document.documentElement.setAttribute('data-theme', 'dark');
-  } else if (saved === 'light') {
-    document.documentElement.removeAttribute('data-theme');
-  } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    document.documentElement.setAttribute('data-theme', 'dark');
+  if (saved === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+  } else if (saved === 'dark') {
+    document.documentElement.removeAttribute('data-theme');   // dark = :root 默认
+  } else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+    document.documentElement.setAttribute('data-theme', 'light');
+  } else {
+    document.documentElement.removeAttribute('data-theme');   // dark 默认
   }
   updateThemeIcon();
+})();
+
+/* ── 自举：app.js 不再加载，store 启动轮询 + 恢复 TAB ── */
+function boot() {
+  try { store.restoreTab(); } catch (e) { console.warn('[store] restoreTab:', e); }
+  try { store.startPolling(); } catch (e) { console.warn('[store] startPolling:', e); }
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  boot();
+}
 })();

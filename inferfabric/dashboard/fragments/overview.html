@@ -1,66 +1,12 @@
 <div class="tab-content active" id="tab-overview">
-  <div class="if-grid-2">
-    <!-- 激活模型详情卡 -->
-    <div class="if-card">
-      <div class="if-card-hdr">
-        <div class="if-card-icon" style="background:var(--if-c-primary-soft);color:var(--if-c-primary)">
-          <svg width="15" height="15"><use href="#s-cube"/></svg>
-        </div>
-        <span class="if-card-title">激活模型详情</span>
-        <span class="if-card-badge" id="ovActiveCount">0</span>
-      </div>
-      <div id="ovActive"><div class="if-empty">加载中…</div></div>
-    </div>
-    <!-- GPU 综合 & 系统综合（纵向排列） -->
-    <div style="display:flex;flex-direction:column;gap:12px">
-      <div class="if-card">
-        <div class="if-card-hdr">
-          <div class="if-card-icon" style="background:var(--green-s);color:var(--green)">
-            <svg width="15" height="15"><use href="#s-gpu"/></svg>
-          </div>
-          <span class="if-card-title">GPU 综合信息</span>
-        </div>
-        <div id="ovGpu"><div class="if-empty">加载中…</div></div>
-      </div>
-      <div class="if-card">
-        <div class="if-card-hdr">
-          <div class="if-card-icon" style="background:var(--blue-s);color:var(--blue)">
-            <svg width="15" height="15"><use href="#s-monitor"/></svg>
-          </div>
-          <span class="if-card-title">系统综合信息</span>
-        </div>
-        <div id="ovSys"><div class="if-empty">加载中…</div></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- vLLM 实时性能（仅当存在活跃的 vLLM 服务时显示数据） -->
-  <div class="if-card" id="ovPerfCard" style="margin-top:12px">
+  <div class="if-card">
     <div class="if-card-hdr">
-      <div class="if-card-icon" style="background:var(--orange-s);color:var(--orange)">
-        <svg width="15" height="15"><use href="#s-bolt"/></svg>
-      </div>
-      <span class="if-card-title">vLLM 实时性能</span>
-      <span class="if-card-badge" id="ovPerfPort">—</span>
+      <span class="if-card-title">总览</span>
+      <span class="if-card-sub">活跃模型与系统操作</span>
     </div>
-    <div id="ovPerf"><div class="if-empty">无活跃 vLLM 服务</div></div>
-  </div>
-
-  <!-- 本地模型使用统计 (v5.7: Token 使用曲线) -->
-  <div class="if-card" id="ovTokenCurveCard" style="margin-top:12px">
-    <div class="if-card-hdr">
-      <div class="if-card-icon" style="background:var(--purple-s);color:var(--purple)">
-        <svg width="15" height="15"><use href="#s-chart"/></svg>
-      </div>
-      <span class="if-card-title">本地模型使用统计</span>
-      <div class="ov-g-toggle">
-        <button class="ov-g-btn active" data-g="hour">小时</button>
-        <button class="ov-g-btn" data-g="day">天</button>
-        <button class="ov-g-btn" data-g="month">月</button>
-      </div>
-    </div>
-    <div class="if-card-body">
-      <div id="ovTokenCurveChart"><div class="if-empty">加载中…</div></div>
+    <div class="if-card-body" id="ovShell">
+      <!-- UI.skeleton(ovShell, 4) — 由 overview 任务接管：活跃模型卡 + 24h 趋势 + 异常 top3 + 系统操作 -->
+      <div class="if-empty">加载中…</div>
     </div>
   </div>
 </div>
