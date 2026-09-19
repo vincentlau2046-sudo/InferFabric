@@ -117,7 +117,7 @@
     return '<svg width="' + size + '" height="' + size + '"><use href="#s-' + name + '"/></svg>';
   }
 
-  /* ── adminHeaders（自 legacy app.js:269 逐字移植）
+  /* ── adminHeaders（自 legacy 巨石模块逐字移植，原行 269）
    * 读 #adminToken 输入（若存在），否则取 ?token= URL 参数；
    * 非空时附带 X-Admin-Token。 ── */
   function adminHeaders() {
@@ -138,6 +138,6 @@
     adminHeaders: adminHeaders,
   };
 
-  // 兼容别名：旧 showToast 调用点（app.js 在 Task 10 删除前仍可能引用）
+  // 兼容别名：旧 showToast 调用点（legacy 调用方兼容）
   window.showToast = toast;
 })();

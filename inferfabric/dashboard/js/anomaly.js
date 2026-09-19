@@ -110,7 +110,9 @@
     if (!rows.length) {
       tbody.innerHTML = '<tr><td colspan="' + COLSPAN + '">' +
         '<div class="if-empty">' +
-        (_events.length ? '无匹配事件' : '暂无异常事件') +
+        (_events.length
+          ? '无匹配事件 — 清空搜索或调整过滤'
+          : '暂无异常事件 — 系统正常，性能指标见「监控」TAB') +
         '</div></td></tr>';
     } else {
       var html = '';

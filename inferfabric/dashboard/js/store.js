@@ -6,7 +6,7 @@
  *   - 顶栏绑定改为订阅式（gpu_mode→#modeBadge、sync_meta→#syncMeta、version→#navVer、
  *     api_error→#apiErrorBanner、switch_target→UI.toast）；旧指标卡绑定作废（遥测带由后续任务接管）
  *   - 主题：dark 为 :root 默认，[data-theme="light"] 覆盖；updateThemeIcon 改双 SVG
- *   - 自举：app.js 不再加载，store 自行 restoreTab + startPolling
+ *   - 自举：旧巨石模块已删除，store 自行 restoreTab + startPolling
  * 暴露为 window.store。
  */
 (function () {
@@ -142,7 +142,7 @@ class StateStore {
         },
         version: status.version || sys.version || '',
         switch_target: status.switch_target || null,
-        // Raw passthrough for app.js consumers
+        // Raw passthrough for legacy consumers
         active_services: status.active_services || [],
         services_info:   status.services_info || {},
         services_health: status.services_health || {},
@@ -270,7 +270,7 @@ window.tabRenderers = {};
 // Render on state changes (batched)
 store.on('gpu_mode', () => store._scheduleRender());
 
-// Expose switchTab globally (replaces old app.js version)
+// Expose switchTab globally (replaces legacy monolith version)
 window.switchTab = window.switchTab || ((tabId) => store.switchTab(tabId));
 
 /* ── 顶栏 / 外壳绑定（订阅式，R2） ──────────────────────────── */
@@ -300,10 +300,24 @@ store.on('version', (v) => {
   if (el) el.textContent = v ? 'v' + v : '';
 });
 
-// api_error → #apiErrorBanner 可见性
+// api_error → #apiErrorBanner 可见性 + "最后数据更新于 X"（spec §5：断连 banner 带最后同步时间）
+// sync_meta.ts 为最近一次成功同步的 epoch 秒（断连时 store 仍持有 _lastTs）；
+// 从未成功同步过则 ts=0 → 显示 "—"。
 store.on('api_error', (err) => {
   const el = document.getElementById('apiErrorBanner');
-  if (el) el.style.display = err ? '' : 'none';
+  if (!el) return;
+  const txt = el.querySelector('span');
+  if (err) {
+    const meta = store.get('sync_meta') || {};
+    const t = meta.ts
+      ? new Date(meta.ts * 1000).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'})
+      : '—';
+    if (txt) txt.textContent = 'API 连接异常 · 最后数据更新于 ' + t;
+    el.style.display = '';
+  } else {
+    if (txt) txt.textContent = 'API 连接异常';
+    el.style.display = 'none';
+  }
 });
 
 // switch_target → UI.toast（切换通知）
@@ -346,7 +360,7 @@ function updateSyncIndicator(meta) {
 }
 store.on('sync_meta', updateSyncIndicator);
 
-/* ── 顶栏手动刷新（app.js 不再加载，store 自带） ── */
+/* ── 顶栏手动刷新（store 自带，旧巨石已删除） ── */
 window.refreshNow = async function () {
   await store.forceRefresh();
   if (window.UI) window.UI.toast('已刷新', 'ok');
@@ -401,7 +415,7 @@ window.toggleTheme = toggleTheme;
   updateThemeIcon();
 })();
 
-/* ── 自举：app.js 不再加载，store 启动轮询 + 恢复 TAB ── */
+/* ── 自举：store 启动轮询 + 恢复 TAB（旧巨石已删除） ── */
 function boot() {
   try { store.restoreTab(); } catch (e) { console.warn('[store] restoreTab:', e); }
   try { store.startPolling(); } catch (e) { console.warn('[store] startPolling:', e); }

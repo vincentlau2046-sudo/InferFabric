@@ -345,7 +345,7 @@
     if (data.sleep_state === 0 && data.kv_cache_usage_perc == null &&
         data.seq_length == null && data.throughput == null &&
         data.ttft_seconds == null && data.tpot_seconds == null) {
-      el.innerHTML = '<div class="if-empty">模型休眠中，无实时指标</div>';
+      el.innerHTML = '<div class="if-empty">模型休眠中，无实时指标 — 到推理 TAB 唤醒</div>';
       return;
     }
 
@@ -384,7 +384,7 @@
     if (!active.length) {
       _engineCache = null;
       _engineModel = null;
-      el.innerHTML = '<div class="if-empty">无活跃模型</div>';
+      el.innerHTML = '<div class="if-empty">无活跃模型 — 到推理 TAB 启动一个</div>';
       var mLabel = $('monKpiModel');
       if (mLabel) mLabel.textContent = '';
       return;
@@ -425,7 +425,7 @@
     if (!el) return;
     var logs = store.get('request_log') || [];
     if (!logs.length) {
-      el.innerHTML = '<div class="if-empty">暂无请求日志</div>';
+      el.innerHTML = '<div class="if-empty">暂无请求日志 — 经代理发起请求后在此记录</div>';
       return;
     }
     var rows = '';
@@ -466,7 +466,7 @@
     if (!el) return;
     var hist = store.get('history') || [];
     if (!hist.length) {
-      el.innerHTML = '<div class="if-empty">暂无切换历史</div>';
+      el.innerHTML = '<div class="if-empty">暂无切换历史 — 切换模型后在此记录</div>';
       return;
     }
     var rows = '';
@@ -515,7 +515,7 @@
     if (!entries.length) {
       el.innerHTML =
         '<div class="mon-cost-total"><span class="val">¥' + total.toFixed(4) + '</span></div>' +
-        '<div class="if-empty">暂无费用数据</div>';
+        '<div class="if-empty">暂无费用数据 — 产生用量后在此显示</div>';
       return;
     }
     for (var i = 0; i < entries.length; i++) {

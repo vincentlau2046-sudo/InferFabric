@@ -984,3 +984,69 @@ def test_anomaly_critical_highlight():
     assert "'critical'" in js, "anomaly.js must branch on severity === 'critical'"
 
 
+# ── Task 10 收口断言集（巨石删除 / 骨架标准化 / 断连 banner / 全 TAB 装配） ──
+
+def test_app_js_deleted():
+    """legacy app.js 巨石（1432 行死代码）已删除；JS 模块化为 9 个模块（无 app）。"""
+    assert not (ROOT / "inferfabric" / "dashboard" / "js" / "app.js").exists(), (
+        "legacy app.js monolith must be deleted (Task 10)"
+    )
+    import inferfabric.dashboard as dash
+    assert "app" not in getattr(dash, "JS_MODULES", ["app"]), (
+        "app must not be in JS_MODULES"
+    )
+
+
+def test_no_app_js_reference():
+    """served HTML（get_html() 内联全部 JS）不得含 app.js 字面引用——
+    含 store.js/ui.js 内的历史注释（已改写为“旧巨石”表述）。"""
+    html = _html()
+    assert "app.js" not in html, (
+        "served HTML still references app.js (stale comment or script tag)"
+    )
+
+
+def test_all_tab_renderers_registered():
+    """全部 6 个 TAB 的 tabRenderers 注册必须出现在 served HTML（Task 10 收口）。"""
+    html = _html()
+    for tab in ("tab-overview", "tab-inference", "tab-monitor",
+                "tab-deploy", "tab-cloud", "tab-anomaly"):
+        assert "window.tabRenderers['%s']" % tab in html, (
+            "missing tabRenderers registration: %s" % tab
+        )
+
+
+def test_skeleton_in_data_driven_tabs():
+    """spec §5 全 TAB 骨架态：数据驱动区域（cloud 预设网格 / provider 表、
+    anomaly 事件表）用 UI.skeleton + .skeleton 占位，不得残留静态“加载中…”。
+    deploy TAB 为静态表单（无数据依赖）——不要求骨架。"""
+    js_dir = ROOT / "inferfabric" / "dashboard" / "js"
+    cloud_js = (js_dir / "cloud.js").read_text(encoding="utf-8")
+    anomaly_js = (js_dir / "anomaly.js").read_text(encoding="utf-8")
+    assert "UI.skeleton" in cloud_js, "cloud.js must call UI.skeleton on initial load"
+    assert "UI.skeleton" in anomaly_js, "anomaly.js must call UI.skeleton on load"
+    frag_dir = ROOT / "inferfabric" / "dashboard" / "fragments"
+    for name in ("cloud.html", "anomaly.html", "deploy.html"):
+        frag = (frag_dir / name).read_text(encoding="utf-8")
+        assert "加载中" not in frag, (
+            "%s still uses static 加载中 placeholder (use skeleton)" % name
+        )
+    cloud_frag = (frag_dir / "cloud.html").read_text(encoding="utf-8")
+    anomaly_frag = (frag_dir / "anomaly.html").read_text(encoding="utf-8")
+    assert 'class="skeleton"' in cloud_frag, "cloud.html initial markup must be skeleton"
+    assert 'class="skeleton"' in anomaly_frag, "anomaly.html initial markup must be skeleton"
+
+
+def test_api_error_banner_last_sync_text():
+    """spec §5 断连 banner：#apiErrorBanner 显示时须带“最后数据更新于 X”
+    （X = sync_meta.ts，最近一次成功同步时间；从未同步过则 “—”）。"""
+    html = _html()
+    assert 'id="apiErrorBanner"' in html, "disconnect banner missing from shell"
+    assert "最后数据更新于" in html, (
+        "store.js api_error handler must show 最后数据更新于 X in banner"
+    )
+    frag = (_DASHBOARD_DIR / "base.html").read_text(encoding="utf-8")
+    assert "apiErrorBanner" in frag
+    assert "重试" in frag, "banner must offer a retry action"
+
+

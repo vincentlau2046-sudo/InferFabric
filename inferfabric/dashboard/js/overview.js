@@ -228,12 +228,12 @@
 
     var stats = window.__TOKEN_STATS__;
     if (!stats || typeof stats !== 'object') {
-      body.innerHTML = '<div class="spark-empty muted">暂无请求数据</div>';
+      body.innerHTML = '<div class="spark-empty muted">暂无请求数据 — 经代理发起请求后生成趋势</div>';
       return;
     }
     var keys = Object.keys(stats);
     if (!keys.length) {
-      body.innerHTML = '<div class="spark-empty muted">暂无请求数据</div>';
+      body.innerHTML = '<div class="spark-empty muted">暂无请求数据 — 经代理发起请求后生成趋势</div>';
       return;
     }
 
@@ -250,7 +250,7 @@
     days.sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
     var recent = days.slice(-7);
     if (!recent.length) {
-      body.innerHTML = '<div class="spark-empty muted">暂无请求数据</div>';
+      body.innerHTML = '<div class="spark-empty muted">暂无请求数据 — 经代理发起请求后生成趋势</div>';
       return;
     }
 

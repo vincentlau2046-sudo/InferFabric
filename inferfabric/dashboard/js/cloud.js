@@ -78,6 +78,8 @@
   async function cloudLoadPresets() {
     var grid = $('presetGrid');
     if (!grid) return;
+    // 首次加载（无缓存）→ skeleton（spec §5 全 TAB 骨架；重取不闪）
+    if (!_presets.length) UI.skeleton(grid, 3);
     try {
       var res = await fetch('/admin/cloud/presets', { headers: UI.adminHeaders() });
       var d = null;
@@ -89,7 +91,7 @@
       }
       _presets = d.presets || [];
       if (!_presets.length) {
-        grid.innerHTML = '<div class="if-empty">无预设</div>';
+        grid.innerHTML = '<div class="if-empty">无预设 — 用下方手动配置添加 Provider</div>';
         return;
       }
       var html = '';
@@ -195,6 +197,20 @@
     }
   };
 
+  /* ── Provider 表加载骨架（UI.skeleton 同款 .skeleton/.skeleton-row，逐行占位；
+   *    与 anomaly.js showSkeleton 同模式：detached div 生成后取 innerHTML 入 <tr>） ── */
+  function providerSkeleton() {
+    var tbody = $('provTbody');
+    if (!tbody) return;
+    var html = '';
+    for (var i = 0; i < 3; i++) {
+      var cell = document.createElement('div');
+      UI.skeleton(cell, 1);
+      html += '<tr class="cp-skel"><td colspan="6">' + cell.innerHTML + '</td></tr>';
+    }
+    tbody.innerHTML = html;
+  }
+
   /* ══ Provider 表：GET /admin/cloud/providers → #provTable + #cloudModels ══ */
   function providerRow(p) {
     var stOn = !!p.enabled;
@@ -252,6 +268,8 @@
       tbody.innerHTML = '<tr class="cp-row-loading"><td colspan="6">' +
         '<div class="if-empty">加载失败 · ' + esc(msg) + '</div></td></tr>';
     }
+    // 首次加载（无缓存）→ skeleton（spec §5 全 TAB 骨架；重取不闪）
+    if (!_providers.length) providerSkeleton();
     try {
       var res = await fetch('/admin/cloud/providers', { headers: UI.adminHeaders() });
       var d = null;
