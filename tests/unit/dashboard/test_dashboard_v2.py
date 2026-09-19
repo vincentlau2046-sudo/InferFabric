@@ -34,6 +34,17 @@ def test_shell_structure():
         assert el in html
 
 
+def test_overview_structure():
+    """总览页 DOM 契约：Task 3 接数据时按这些 id 取节点。"""
+    html = _html()
+    for el in ('id="ovActiveCard"', 'id="ovActiveBody"', 'id="ovSpark24h"',
+               'id="ovAnomTop"', 'id="sysOpsCard"'):
+        assert el in html, "missing overview contract id: %s" % el
+    # 系统操作按钮 data-action 契约
+    for act in ('release', 'reconcile', 'reload', 'reset'):
+        assert 'data-action="%s"' % act in html, "missing sys-ops data-action: %s" % act
+
+
 def test_no_emoji_in_shell():
     import re
     # 顶栏/侧栏区域不得含 emoji 区段（U+1F300-1FAFF, U+2600-27BF）

@@ -448,6 +448,19 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
 }
 .if-card-sub { font-size: var(--fs-table); color: var(--ink-3); }
 .if-card-body { display: flex; flex-direction: column; gap: var(--sp-1); }
+.if-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--border);
+}
+.if-card-link {
+  font-size: var(--fs-table);
+  color: var(--info);
+  text-decoration: none;
+}
+.if-card-link:hover { text-decoration: underline; }
 
 /* KPI tile */
 .kpi {
@@ -561,7 +574,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
 
 /* ── Tab 内容 ─────────────────────────────────────────────────── */
 .tab-content { display: none; }
-.tab-content.active { display: block; }
+.tab-content.active { display: flex; flex-direction: column; gap: var(--sp-2); }
 
 /* ── 空状态 ───────────────────────────────────────────────────── */
 .if-empty {
@@ -721,6 +734,58 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
   .skeleton-row::after { display: none; }
   .switch-spinner { animation: none; border-top-color: var(--accent); }
 }
+
+/* ── 总览页组件 ───────────────────────────────────────────────── */
+
+/* 活跃模型卡 stat 网格（dl → 2 列） */
+.ov-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--sp-1) var(--sp-2);
+  margin: 0;
+}
+.ov-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ov-stat dt { font-size: var(--fs-table); color: var(--ink-3); margin: 0; }
+.ov-stat dd {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 24h sparkline */
+.ov-spark-body { gap: var(--sp-1); }
+.ov-spark {
+  width: 100%;
+  height: 60px;
+  display: block;
+}
+.spark-line {
+  fill: none;
+  stroke: var(--series-blue);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.spark-caption {
+  font-size: var(--fs-table);
+  color: var(--ink-2);
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.spark-caption b { font-size: var(--fs-title); color: var(--ink); }
+
+/* 异常 top3 表：消息列允许换行，其余紧凑 */
+.ov-anom td:last-child { white-space: normal; min-width: 240px; }
+.ov-anom .badge svg { width: 12px; height: 12px; }
+
+/* 系统操作：按钮纵向堆叠（col 4 窄卡） */
+.sys-ops { gap: var(--sp-1); }
+.sys-ops .btn { width: 100%; justify-content: flex-start; }
 
 /* ── 响应式：窄屏折叠遥测带 ───────────────────────────────────── */
 @media (max-width: 720px) {
