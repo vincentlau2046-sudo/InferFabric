@@ -38,11 +38,15 @@ InferFabric 是单 GPU 工作站的 AI 推理 OS。Dashboard 操作者是系统�
 
 两组状态色/系列色各自独立选定（不是自动反色），均须过对比度检查（状态色对各自 surface ≥ 4.5:1）。
 
-### 2.3 图表系列色（两组，分别跑 CVD 验证）
+### 2.3 图表系列色（两组，CVD 验证已通过）
 
-固定顺序、不循环：dark 组 蓝 `#58a6ff` / 琥珀 `#e3b341` / 绿 `#3fb950` / 紫 `#bc8cff`；
-light 组取同色相降阶值（实施时定稿）。>4 系列折叠为"其他"。
-实施 P2 时必须用 dataviz 技能 `scripts/validate_palette.js` 对两组分别跑 `--mode dark` / `--mode light`，FAIL 必须修正。
+固定顺序、不循环：蓝 → 琥珀 → 青 → 紫。
+- dark 组（surface `#161c24`）：蓝 `#3b82f6` / 琥珀 `#b45309` / 青 `#0891b2` / 紫 `#7c3aed`
+- light 组（surface `#ffffff`）：蓝 `#2563eb` / 琥珀 `#b45309` / 青 `#0891b2` / 紫 `#7c3aed`
+
+>4 系列折叠为"其他"。
+已用 `validate_palette.js` 验证：两组全 PASS，最差相邻 CVD ΔE 15.0（deutan，紫↔青），远超 ≥8 目标。
+（原 spec 写"绿 `#3fb950`"，与琥珀 protan ΔE 仅 3.8 违反 §7，改青后通过——见 plan ledger 裁决。）
 
 ## 3. 排版
 
