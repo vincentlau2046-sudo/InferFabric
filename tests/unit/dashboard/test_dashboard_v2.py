@@ -880,3 +880,107 @@ def test_deploy_success_guard():
     assert "throw new Error" in js, "doDeploy must throw on non-success status"
 
 
+# ── Task 9: 异常 TAB（结构化事件表 + 类别/严重度过滤 + 全文搜索 + critical 高亮） ──
+
+# 异常页 emoji 区段（与 cloud 同口径：U+1F300-1FAFF 符号 + U+2600-27BF 杂项/制表符号）
+_ANOM_EMOJI_RE = __import__("re").compile(r"[\U0001F300-\U0001FAFF☀-➿]")
+_ANOM_LEGACY_EMOJI = [
+    "\U0001F50D", "\U0001F441", "\U0001F527",   # 🔍 👁 🔧
+    "✓", "✗",                                       # 状态标记
+    "\U0001F7E2", "\U0001F7E1", "\U0001F534",     # 🟢 🟡 ⚫（旧 anomaly 严重度 emoji）
+]
+
+
+def _anomaly_sources():
+    frag = (_DASHBOARD_DIR / "fragments" / "anomaly.html").read_text(encoding="utf-8")
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "anomaly.js").read_text(encoding="utf-8")
+    return frag, js
+
+
+def test_anomaly_structure():
+    """异常页 DOM 契约（spec §4.6）：事件表 + 过滤栏 + 计数。
+
+    断言 get_html() 含契约 id（anomTable/anomTbody/anomCatFilter/anomSevFilter/
+    anomSearch/anomCount）与过滤选项值（category 5 值 + severity 4 值）。"""
+    html = _html()
+    for el in (
+        'id="anomTable"',       # 事件表
+        'id="anomTbody"',       # 事件表 tbody
+        'id="anomCatFilter"',   # 类别过滤
+        'id="anomSevFilter"',   # 严重度过滤
+        'id="anomSearch"',      # 全文搜索
+        'id="anomCount"',       # 总计数
+    ):
+        assert el in html, "missing anomaly contract id: %s" % el
+    frag = (_DASHBOARD_DIR / "fragments" / "anomaly.html").read_text(encoding="utf-8")
+    for opt in ('value="routing"', 'value="model"', 'value="auth"',
+                'value="config"', 'value="cloud"'):
+        assert opt in frag, "missing category option: %s" % opt
+    for opt in ('value="info"', 'value="warning"', 'value="error"', 'value="critical"'):
+        assert opt in frag, "missing severity option: %s" % opt
+
+
+def test_anomaly_js_present():
+    """anomaly.js 模块存在且被 get_html() 内联装配（tabRenderers 注册 + 端点 + fetch）。
+
+    断言：文件存在；get_html() 含 tabRenderers['tab-anomaly'] 注册；
+    /api/anomalies 端点契约；fetch 调用存在（/api/anomalies 为公开只读端点，无需 admin header）。"""
+    js_path = ROOT / "inferfabric" / "dashboard" / "js" / "anomaly.js"
+    assert js_path.exists(), "anomaly.js missing"
+    html = _html()
+    assert "window.tabRenderers['tab-anomaly'] = renderAnomaly" in html, (
+        "anomaly.js tab renderer registration not inlined into HTML"
+    )
+    js = js_path.read_text(encoding="utf-8")
+    assert "'/api/anomalies'" in js, "anomaly.js missing /api/anomalies endpoint"
+    # /api/anomalies 为公开只读 GET：允许 UI.adminHeaders() 或裸 fetch，二者其一即可
+    assert ("UI.adminHeaders()" in js) or ("fetch(" in js), (
+        "anomaly.js must fetch /api/anomalies (UI.adminHeaders or fetch)"
+    )
+    # 暴露的操作函数
+    for fn in ("window.renderAnomaly", "window.doAnomRefresh"):
+        assert fn in html, "anomaly.js missing global: %s" % fn
+
+
+def test_anomaly_no_emoji():
+    """anomaly.html + anomaly.js 零 emoji：无常见 emoji 区段码位、无 legacy 严重度
+    emoji（🟢🟡⚫ 等）——严重度一律 SVG 图标 + 文字标签双编码。"""
+    frag, js = _anomaly_sources()
+    for src, name in ((frag, "anomaly.html"), (js, "anomaly.js")):
+        m = _ANOM_EMOJI_RE.search(src)
+        assert not m, "%s contains emoji codepoint U+%04X" % (name, ord(m.group(0)))
+        for ch in _ANOM_LEGACY_EMOJI:
+            assert ch not in src, "%s contains legacy emoji %r" % (name, ch)
+
+
+def test_anomaly_no_inline_onclick():
+    """anomaly.html 不得含任何 inline onclick= 属性（事件委托约束）。"""
+    frag = (_DASHBOARD_DIR / "fragments" / "anomaly.html").read_text(encoding="utf-8")
+    assert "onclick=" not in frag, (
+        "anomaly.html contains inline onclick= — must use event delegation"
+    )
+
+
+def test_anomaly_js_node_syntax():
+    """anomaly.js 必须通过 node --check 语法校验（零构建工具链，CI 前置门）。"""
+    import shutil
+    import subprocess
+    import pytest
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available")
+    js = ROOT / "inferfabric" / "dashboard" / "js" / "anomaly.js"
+    proc = subprocess.run([node, "--check", str(js)],
+                          capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, \
+        "node --check anomaly.js failed:\nstdout:%s\nstderr:%s" % (proc.stdout, proc.stderr)
+
+
+def test_anomaly_critical_highlight():
+    """critical 行须整行高亮：anomaly.js 对 severity==='critical' 追加 row-crit 类
+    （spec §4.6；row-crit 为低 alpha --crit 背景 tint，文字色不变）。"""
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "anomaly.js").read_text(encoding="utf-8")
+    assert "row-crit" in js, "anomaly.js must add row-crit class to critical rows"
+    assert "'critical'" in js, "anomaly.js must branch on severity === 'critical'"
+
+

@@ -1116,6 +1116,45 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
 }
 .cp-model-prov { color: var(--ink-3); font-size: 11px; margin-left: auto; }
 
+/* ── 异常 TAB (Task 9)：过滤栏 / 严重度双编码 / critical 行高亮 ───── */
+.anom-filterbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+.anom-filterbar .if-field-select { width: 132px; flex-shrink: 0; }
+#anomSearch { flex: 1 1 160px; min-width: 140px; }
+.anom-count {
+  margin-left: auto;
+  font-size: var(--fs-table);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+/* 严重度：图标 + 文字标签双编码（spec §7：不得仅用颜色表达状态） */
+.anom-sev { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-table); }
+.anom-sev svg { width: 12px; height: 12px; flex-shrink: 0; }
+.anom-sev.crit { color: var(--crit); }
+.anom-sev.err  { color: var(--crit); }
+.anom-sev.warn { color: var(--warn); }
+.anom-sev.info { color: var(--info); }
+/* critical 行：整行低 alpha 高亮（背景 tint，文字色不变；spec §4.6） */
+#anomTable tbody tr.row-crit {
+  background: color-mix(in srgb, var(--crit) 10%, var(--surface));
+}
+#anomTable tbody tr.row-crit:hover {
+  background: color-mix(in srgb, var(--crit) 16%, var(--surface-2));
+}
+/* 事件消息格：主行 message（ellipsis）+ 次级行（model / HTTP 状态码） */
+#anomTable .anom-msgcell { display: flex; flex-direction: column; gap: 2px; max-width: 520px; }
+#anomTable .anom-msg { overflow: hidden; text-overflow: ellipsis; }
+.anom-sub {
+  font-size: 11px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── 响应式：窄屏折叠遥测带 ───────────────────────────────────── */
 @media (max-width: 720px) {
   .if-telemetry { grid-template-columns: repeat(2, 1fr); }
