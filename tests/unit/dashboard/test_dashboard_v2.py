@@ -1,6 +1,6 @@
 """Dashboard v2 (InferFabric Console) — 结构断言。增量随任务扩展。"""
 from pathlib import Path
-from inferfabric.dashboard import get_html
+from inferfabric.dashboard import get_html, _DASHBOARD_DIR
 
 ROOT = Path(__file__).resolve().parents[3]  # sandbox 根
 
@@ -198,3 +198,41 @@ def test_ui_confirm_no_listener_leak(tmp_path):
     assert result["holderClickListeners"] == 0, (
         "click listener leaked onto persistent holder: %s" % result
     )
+
+
+# ── Task 3: 总览页接真实数据 ──────────────────────────────────────
+
+
+def test_overview_js_present():
+    """overview.js 模块存在且被 get_html() 内联装配（tabRenderers 注册 + doSystemOps）。"""
+    js_path = ROOT / "inferfabric" / "dashboard" / "js" / "overview.js"
+    assert js_path.exists(), "overview.js missing"
+    html = _html()
+    # overview.js 在 JS_MODULES 中，由 __init__.py 内联进 HTML
+    assert "window.tabRenderers['tab-overview'] = renderOverview" in html, (
+        "overview.js tab renderer registration not inlined into HTML"
+    )
+    assert "window.doSystemOps" in html, (
+        "window.doSystemOps not inlined into HTML"
+    )
+    # 遥测带绑定 + 系统操作端点契约
+    assert "renderRail" in html
+    assert "'/switch'" in html and "'/reset'" in html
+    assert "'/reconcile'" in html and "'/reload-config'" in html
+
+
+def test_overview_no_fake_script():
+    """overview.html 不得残留 Task 2 静态原型假数据 <script>（已由 overview.js 接管）。
+
+    断言：fragment 无任何内联 <script>；无 'prototype-only' 注释标记；
+    无假值 '24.1'（原型 VRAM 假值）/ MutationObserver 原型代码。
+    """
+    frag = (_DASHBOARD_DIR / "fragments" / "overview.html").read_text(encoding="utf-8")
+    assert "<script" not in frag, "overview.html must not contain an inline <script> block"
+    assert "prototype-only" not in frag
+    assert "24.1" not in frag
+    assert "MutationObserver" not in frag
+    # 占位结构保留（overview.js 按 id 填充）
+    assert 'id="ovActiveCard"' in frag
+    assert 'id="ovActiveBody"' in frag
+    assert 'id="ovSpark24h"' in frag

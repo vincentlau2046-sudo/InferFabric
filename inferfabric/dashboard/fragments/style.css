@@ -755,6 +755,20 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
   white-space: nowrap;
 }
 
+/* 活跃模型卡：多模型堆叠（shared 模式） */
+.ov-active-list { gap: var(--sp-2); }
+.ov-model { display: flex; flex-direction: column; gap: var(--sp-1); }
+.ov-model + .ov-model { border-top: 1px solid var(--border); padding-top: var(--sp-2); }
+/* 模型块内嵌的 hdr 不重复卡片底边 */
+.ov-model .if-card-hdr { border-bottom: none; padding-bottom: 0; }
+
+/* 空态/加载占位文本 */
+.spark-empty, .ov-anom-empty {
+  font-size: var(--fs-table);
+  color: var(--ink-3);
+  padding: var(--sp-1) 0;
+}
+
 /* 24h sparkline */
 .ov-spark-body { gap: var(--sp-1); }
 .ov-spark {

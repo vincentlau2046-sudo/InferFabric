@@ -3,60 +3,26 @@
   <!-- Row 2: 活跃模型卡 (col 8) + 24h 请求趋势 sparkline (col 4) -->
   <div class="if-grid">
 
-    <!-- 活跃模型卡 -->
+    <!-- 活跃模型卡（overview.js 按 active_services 动态填充：0/1/N 模型） -->
     <div class="col-8">
       <div class="if-card" id="ovActiveCard">
         <div class="if-card-hdr">
-          <span class="status-dot ok" title="运行中"></span>
-          <span class="if-card-title">Qwen3-32B</span>
-          <span class="badge">NInfer</span>
-          <span class="if-card-sub">端口 <span class="mono">:8007</span></span>
+          <span class="status-dot"></span>
+          <span class="if-card-title muted">加载中…</span>
         </div>
-        <div class="if-card-body" id="ovActiveBody">
-          <dl class="ov-stats">
-            <div class="ov-stat">
-              <dt>uptime</dt>
-              <dd class="mono">3h12m</dd>
-            </div>
-            <div class="ov-stat">
-              <dt>KV cache</dt>
-              <dd class="mono">615K <span class="muted">tokens</span></dd>
-            </div>
-            <div class="ov-stat">
-              <dt>decoding</dt>
-              <dd class="mono">MTP ×4</dd>
-            </div>
-            <div class="ov-stat">
-              <dt>precision</dt>
-              <dd class="mono">NVFP4</dd>
-            </div>
-          </dl>
-        </div>
-        <div class="if-card-actions">
-          <button class="btn btn-sec btn-sm" data-action="stop">
-            <svg><use href="#s-stop"/></svg>Stop
-          </button>
-          <button class="btn btn-sec btn-sm" data-action="sleep">
-            <svg><use href="#s-sleep"/></svg>Sleep
-          </button>
-          <button class="btn btn-sec btn-sm" data-action="wake">
-            <svg><use href="#s-wake"/></svg>Wake
-          </button>
-        </div>
+        <div class="if-card-body" id="ovActiveBody"></div>
       </div>
     </div>
 
-    <!-- 24h 请求趋势 sparkline（ECharts 在 Task 4 接管；容器 id 稳定） -->
+    <!-- 24h 请求趋势 sparkline（overview.js 按 __TOKEN_STATS__ 聚合；
+         Task 4 ECharts 接管，容器 id #ovSpark24h 不变） -->
     <div class="col-4">
       <div class="if-card" id="ovSpark24h">
         <div class="if-card-hdr">
           <span class="if-card-title">24h 请求趋势</span>
         </div>
         <div class="if-card-body ov-spark-body">
-          <svg class="ov-spark" viewBox="0 0 240 60" preserveAspectRatio="none" aria-label="24h 请求 sparkline">
-            <polyline class="spark-line" points="5,49.7 15,52.2 25,54.1 35,55.4 45,56 55,54.7 65,51 75,41.6 85,29.1 95,19.7 105,12.1 115,14.6 125,22.8 135,27.2 145,24.7 155,16.5 165,8.4 175,4 185,13.4 195,29.1 205,38.5 215,43.5 225,46 235,47.9"/>
-          </svg>
-          <div class="spark-caption"><b>1,204</b> <span class="muted">req · 24h</span></div>
+          <div class="spark-empty muted">加载中…</div>
         </div>
       </div>
     </div>
@@ -66,42 +32,20 @@
   <!-- Row 3: 最近异常 top3 (col 8) + 系统操作 (col 4) -->
   <div class="if-grid">
 
-    <!-- 最近异常 -->
+    <!-- 最近异常（overview.js GET /api/anomalies 取 top3 填充） -->
     <div class="col-8">
       <div class="if-card" id="ovAnomTop">
         <div class="if-card-hdr">
           <span class="if-card-title">最近异常</span>
-          <a class="if-card-link" href="javascript:void(0)"
-             onclick="if(window.store)window.store.switchTab('tab-anomaly')">查看全部</a>
+          <a class="if-card-link" href="#" data-action="view-all">查看全部</a>
         </div>
         <div class="if-card-body">
-          <table class="if-table ov-anom">
-            <thead>
-              <tr><th>时间</th><th>级别</th><th>消息</th></tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td class="mono">14:32</td>
-                <td><span class="badge warn"><svg><use href="#s-alert"/></svg>warning</span></td>
-                <td>cloud provider <span class="mono">openai</span> 健康检查超时，已重试 <b>3</b> 次</td>
-              </tr>
-              <tr>
-                <td class="mono">13:58</td>
-                <td><span class="badge crit"><svg><use href="#s-xmark"/></svg>error</span></td>
-                <td>模型切换失败：显存不足，需 <b>28</b> GB / 可用 <b>24</b> GB</td>
-              </tr>
-              <tr>
-                <td class="mono">12:04</td>
-                <td><span class="badge info"><svg><use href="#s-bolt"/></svg>info</span></td>
-                <td>响应缓存已启用（maxsize=<b>500</b>，temp=0 only）</td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="spark-empty muted">加载中…</div>
         </div>
       </div>
     </div>
 
-    <!-- 系统操作 -->
+    <!-- 系统操作（data-action 事件委托 → window.doSystemOps） -->
     <div class="col-4">
       <div class="if-card" id="sysOpsCard">
         <div class="if-card-hdr">
@@ -127,43 +71,3 @@
   </div>
 
 </div>
-
-<!-- ── 静态原型假数据：GPU 遥测带 + 模式徽标 ───────────────────────────
-     Task 1 在 base.html 留下遥测带占位（—/width:0%）；store.js 尚未绑定
-     遥测带（"遥测带由后续任务接管"），故此处一次性填充假值即持久可见。
-     Task 3 接 /api/snapshot 真实绑定时删除本 <script> 整块。 ── -->
-<script>
-(function () {
-  function setTxt(id, t){ var el = document.getElementById(id); if (el) el.textContent = t; }
-  function setFill(id, w, cls){
-    var el = document.getElementById(id); if (!el) return;
-    el.style.width = w;
-    el.className = 'tr-fill' + (cls ? ' ' + cls : '');   // 87% < 90% → 不加 crit
-  }
-  setTxt('trVram',  '24.1'); setFill('trVramFill', '75.3%');
-  setTxt('trUtil',  '87');   setFill('trUtilFill',  '87%');
-  setTxt('trPwr',   '320');
-  setTxt('trTemp',  '68');
-  setTxt('trClock', '2.41');
-
-  // 模式徽标：活跃重模型 → exclusive。store.js 订阅 gpu_mode 会在每次
-  // /api/snapshot 后改写为真实值；在截图窗口内重置回 exclusive，保证静态
-  // 原型视觉连贯。带 no-op 守卫避免 MutationObserver 反馈循环。Task 3 删除。
-  var mb = document.getElementById('modeBadge');
-  if (mb) {
-    function applyExclusive(){
-      var t = mb.querySelector('.mode-txt');
-      var cur = t ? t.textContent : '';
-      if (mb.className === 'if-mode exclusive' && cur === 'exclusive') return;
-      mb.className = 'if-mode exclusive';
-      if (t) t.textContent = 'exclusive';
-    }
-    applyExclusive();
-    try {
-      var obs = new MutationObserver(function(){ applyExclusive(); });
-      obs.observe(mb, { attributes: true, childList: true, subtree: true, characterData: true });
-      setTimeout(function(){ obs.disconnect(); }, 6000);
-    } catch (e) {}
-  }
-})();
-</script>
