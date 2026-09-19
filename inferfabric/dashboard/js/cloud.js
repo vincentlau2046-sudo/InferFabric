@@ -22,7 +22,7 @@
  *   - 不新增 API（R10）：仅既有 /admin/cloud/* 端点。
  *
  * 暴露：
- *   - window.tabRenderers['tab-cloud'] = renderCloud
+ *   - window.tabRenderers['tab-cloud'] = renderCloud；window.renderCloud
  *   - window.doCloudAdd() / window.doCloudAddPreset() / window.doCloudTest()
  *   - window.doCloudDiscover(name?) / window.doCloudDelete(name) / window.doCloudReload()
  */
@@ -61,12 +61,17 @@
 
   function icon(name) { return UI.icon(name, 12); }
 
-  /* ── 按钮 busy 态（provider 行按钮按 data-provider 精确定位） ── */
+  /* ── 按钮 busy 态（provider 行按钮按 data-provider 精确定位） ──
+   *   provider 为用户输入（手动 provider 名），不得拼进 CSS 选择器——
+   *   名字含 " / [ / \ 会使 querySelectorAll 抛错（review fix#1）。
+   *   改为按 data-action 取候选（action 为代码内固定字面量，安全），
+   *   再 getAttribute 比较 data-provider，彻底避免注入。 */
   function setBtnBusy(action, busy, provider) {
-    var sel = '[data-action="' + action + '"]';
-    if (provider) sel += '[data-provider="' + provider + '"]';
-    var els = document.querySelectorAll(sel);
-    for (var i = 0; i < els.length; i++) els[i].disabled = busy;
+    var els = document.querySelectorAll('[data-action="' + action + '"]');
+    for (var i = 0; i < els.length; i++) {
+      if (provider && els[i].getAttribute('data-provider') !== provider) continue;
+      els[i].disabled = busy;
+    }
   }
 
   /* ══ 预设：GET /admin/cloud/presets → #presetGrid ══ */
@@ -179,11 +184,12 @@
       }
       UI.toast('Provider ' + (preset.display_name || preset.id) + ' 已添加', 'success');
       if (preset.discovery) {
-        // provider 名默认 = 预设 id（handler 未带 name 时）；doCloudDiscover 内部会刷新 Provider 表
+        // doCloudDiscover 内部 finally 会刷新 Provider 表（无论发现成败，review fix#2）
         await window.doCloudDiscover(preset.id);
+      } else {
+        await cloudLoadProviders();
       }
       cloudDeselectPreset();
-      if (!preset.discovery) await cloudLoadProviders();
     } catch (e) {
       UI.toast('添加失败: ' + (e.message || e), 'error');
     }
@@ -384,11 +390,11 @@
       }
       if (provider) UI.toast('Provider ' + provider + ': 发现 ' + (d.cloud_models || 0) + ' 个模型', 'success');
       else UI.toast('发现 ' + (d.cloud_models || 0) + ' 个云端模型', 'success');
-      await cloudLoadProviders();
     } catch (e) {
       UI.toast('发现失败: ' + (e.message || e), 'error');
     } finally {
       setBtnBusy('provider-discover', false, provider);
+      await cloudLoadProviders();  // review fix#2：无论发现成败都刷新（provider 可能已添加但发现失败）
     }
   };
 
