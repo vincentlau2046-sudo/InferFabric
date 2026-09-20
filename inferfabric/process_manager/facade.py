@@ -243,21 +243,26 @@ class ProcessManager(BaseProcessManager):
         sglang_ports: Optional[list[int]] = None,
         active_services: Optional[list[str]] = None,
     ) -> dict:
-        """Stop all services: ComfyUI first, then vLLM, then TTS, then ASR,
+        """Stop services: ComfyUI first, then vLLM, then TTS, then ASR,
         then SGLang.
 
-        Each block is guarded: when active_services is provided, services
-        without explicit port/cfg args or a tracked PID are skipped.  This
-        prevents bare stop_vllm() (no port) from triggering _pkill_vllm_fallback()
-        when the caller only intended to clean up after a non-vLLM deployment
-        failure (e.g. ComfyUI).
+        Two contracts:
 
-        Callers that know which services are running should pass
-        active_services=list(self.state.get_active_services()).
-        Callers that want the legacy "stop everything" behaviour pass None
-        (the default — backward compatible).
+        - **active_services given (not None)**: the caller has already
+          stopped the enumerated services via the engine adapter
+          (``get_adapter(model.type).stop(model)``), so no bare
+          ``stop_<engine>()`` call is made — this method only clears the
+          tracked PIDs so the facade stays self-contained.  Explicit
+          port/cfg args (``vllm_ports``, ``comfyui_cfg``, ``tts_port``,
+          ``asr_port``, ``sglang_ports``) still trigger their engine stops.
 
-        SGLang already requires explicit ports; force_kill_all is unchanged.
+        - **active_services is None (legacy)**: stop everything — bare
+          ``stop_<engine>`` calls for vLLM/ComfyUI/TTS/ASR, which clear
+          their own PIDs.  Backward compatible for callers that do not
+          track which services are running.
+
+        SGLang always requires explicit ports (no bare stop path);
+        force_kill_all is unchanged.
         """
         results = {}
 
@@ -265,7 +270,7 @@ class ProcessManager(BaseProcessManager):
         if comfyui_cfg:
             port = comfyui_port or comfyui_cfg.port
             results["comfyui"] = self.stop_comfyui_with_config(comfyui_cfg, port=port)
-        elif active_services is None or self.comfyui_pid:
+        elif active_services is None:
             results["comfyui"] = self.stop_comfyui()
 
         # vLLM
@@ -273,19 +278,19 @@ class ProcessManager(BaseProcessManager):
             for p in vllm_ports:
                 self.stop_vllm(port=p)
             results["vllm"] = {"status": "ok", "ports": vllm_ports}
-        elif active_services is None or self.vllm_pid:
+        elif active_services is None:
             results["vllm"] = self.stop_vllm()
 
         # TTS
         if tts_port:
             results["tts"] = self.stop_tts_server(port=tts_port)
-        elif active_services is None or self.tts_pid:
+        elif active_services is None:
             results["tts"] = self.stop_tts_server()
 
         # ASR
         if asr_port:
             results["asr"] = self.stop_asr_server(port=asr_port)
-        elif active_services is None or self.asr_pid:
+        elif active_services is None:
             results["asr"] = self.stop_asr_server()
 
         # SGLang (already guarded by explicit ports — keep existing logic)
@@ -293,6 +298,16 @@ class ProcessManager(BaseProcessManager):
             for p in sglang_ports:
                 self.stop_sglang(port=p)
             results["sglang"] = {"status": "ok", "ports": sglang_ports}
+
+        # active_services given: engines were stopped by the caller via the
+        # adapter path — clear tracked PIDs so the facade is self-contained.
+        if active_services is not None:
+            self._set_vllm_pid(None)
+            self._set_sglang_pid(None)
+            self._set_comfyui_pid(None)
+            self._set_tts_pid(None)
+            self._set_asr_pid(None)
+            self._set_sglang_container(None)
 
         return results
 
