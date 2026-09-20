@@ -376,6 +376,7 @@ class ModelConfig:
         return MODEL_TYPE_TO_MODALITY.get(self.model_type, "text")
 
     type: str = "vllm"  # 'vllm' | 'sglang' | 'comfyui' | 'ollama' | 'ollama_cpp' | 'ollama_daemon' | 'tts_server' | 'asr_server'
+    deployment: str = ""  # '' (auto-derive) | 'docker' | 'conda' | 'process' — 部署方式显式声明
     vllm: Optional[VLLMConfig] = None
     sglang: Optional[SGLangConfig] = None
     comfyui: Optional[ComfyUIConfig] = None
@@ -467,6 +468,23 @@ class ModelConfig:
     @property
     def is_exclusive(self) -> bool:
         return self.gpu_role == "exclusive"
+
+    @property
+    def resolved_deployment(self) -> str:
+        """Effective deployment: explicit value if set, else derived from engine type.
+
+        推导规则保证现有 YAML（未写 deployment）行为不变。
+        未来 docker+vllm 只需在 YAML 写 deployment: docker 即可启用 docker 路径。
+        """
+        if self.deployment in ("docker", "conda", "process"):
+            return self.deployment
+        if self.type in ("ninfer", "sglang"):
+            return "docker"
+        if self.type in ("vllm", "comfyui", "tts_server", "asr_server"):
+            return "conda"
+        if self.type in ("ollama_cpp", "ollama_daemon"):
+            return "process"
+        return "process"
 
     @property
     def is_shared(self) -> bool:

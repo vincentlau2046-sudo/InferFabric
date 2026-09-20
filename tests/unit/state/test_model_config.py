@@ -152,6 +152,44 @@ def test_model_add_remove():
 
 
 # ═══════════════════════════════════════════════════════════════
+# Phase 1b: Deployment Metadata (docker/conda/process)
+# ═══════════════════════════════════════════════════════════════
+
+def test_deployment_derived_from_engine_type():
+    """未显式写 deployment 时，按引擎类型推导（向后兼容现有 YAML）。"""
+    from inferfabric.config import ModelConfig
+    cases = {
+        "ninfer": "docker",
+        "sglang": "docker",
+        "vllm": "conda",
+        "comfyui": "conda",
+        "tts_server": "conda",
+        "asr_server": "conda",
+        "ollama_cpp": "process",
+        "ollama_daemon": "process",
+    }
+    for etype, expected in cases.items():
+        # 裸 ModelConfig 即可：resolved_deployment 纯按 type 推导，不读嵌套 config
+        m = ModelConfig(name=f"t-{etype}", description="", type=etype)
+        assert m.resolved_deployment == expected, f"{etype} 应推导为 {expected}"
+
+
+def test_deployment_explicit_overrides_derived():
+    """YAML 显式写 deployment 时覆盖推导值（未来 docker+vllm 的入口）。"""
+    from inferfabric.config import ModelConfig
+    m = ModelConfig(name="t-vllm-docker", description="", type="vllm", deployment="docker")
+    assert m.resolved_deployment == "docker", "显式 deployment 应覆盖 vllm=conda 推导"
+
+
+def test_deployment_in_config_hash():
+    """deployment 参与 config_hash（防漂移：deployment 变化 → hash 变化 → 触发重启）。"""
+    from inferfabric.config import ModelConfig
+    a = ModelConfig(name="t-hash", description="", type="vllm")
+    b = ModelConfig(name="t-hash", description="", type="vllm", deployment="docker")
+    assert a.config_hash() != b.config_hash(), "仅 deployment 不同 → hash 必须不同"
+
+
+# ═══════════════════════════════════════════════════════════════
 # Phase 2: Tri-State GPU State Machine
 # ═══════════════════════════════════════════════════════════════
 
