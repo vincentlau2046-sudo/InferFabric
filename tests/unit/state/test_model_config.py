@@ -189,6 +189,54 @@ def test_deployment_in_config_hash():
     assert a.config_hash() != b.config_hash(), "仅 deployment 不同 → hash 必须不同"
 
 
+def test_deployment_wired_through_load_models():
+    """load_models() 必须把 YAML 顶层 deployment: 传给 ModelConfig（端到端）。
+
+    未来 docker+vllm 的入口：YAML 写 `deployment: docker` → resolved_deployment=='docker'，
+    覆盖 vllm 默认的 conda 推导。若 load_models 没接线（deployment=raw.get 缺失），
+    显式 deployment 会被丢弃，resolved_deployment 退回推导值——Step 3 自适应前提断裂。
+    """
+    import tempfile
+    from inferfabric.config import load_models
+
+    with tempfile.TemporaryDirectory() as tmp:
+        models_dir = Path(tmp)
+        # vllm 但显式声明 docker 部署（未来 docker+vllm 组合）
+        (models_dir / "vllm-docker.yaml").write_text(
+            "name: vllm-docker\ndescription: 'docker vllm'\nmode: exclusive\n"
+            "deployment: docker\n"
+            "vllm:\n"
+            "  model_dir: test-model\n"
+            "  served_name: vllm_docker\n"
+            "  port: 8005\n"
+            "  conda_env: ''\n"
+            "  max_model_len: 128000\n"
+            "  gpu_memory_utilization: 0.90\n"
+            "  max_num_seqs: 4\n"
+            "  kv_cache_dtype: fp8\n"
+        )
+        # 对照：vllm 不写 deployment → 推导 conda
+        (models_dir / "vllm-conda.yaml").write_text(
+            "name: vllm-conda\ndescription: 'conda vllm'\nmode: shared\n"
+            "vllm:\n"
+            "  model_dir: test-model2\n"
+            "  served_name: vllm_conda\n"
+            "  port: 8006\n"
+            "  conda_env: test-env\n"
+            "  max_model_len: 64000\n"
+            "  gpu_memory_utilization: 0.4\n"
+            "  max_num_seqs: 4\n"
+            "  kv_cache_dtype: fp8\n"
+        )
+        models = load_models(models_dir)
+        # 显式 docker 覆盖推导
+        assert models["vllm-docker"].deployment == "docker", "YAML deployment: docker 未被 load_models 读入"
+        assert models["vllm-docker"].resolved_deployment == "docker", "显式 deployment 应覆盖 vllm=conda 推导"
+        # 未写 deployment → 空字符串 → 推导 conda
+        assert models["vllm-conda"].deployment == "", "未写 deployment 应为空（触发推导）"
+        assert models["vllm-conda"].resolved_deployment == "conda", "vllm 默认推导 conda"
+
+
 # ═══════════════════════════════════════════════════════════════
 # Phase 2: Tri-State GPU State Machine
 # ═══════════════════════════════════════════════════════════════

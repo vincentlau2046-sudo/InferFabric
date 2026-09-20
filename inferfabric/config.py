@@ -786,6 +786,7 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             quantization=raw.get("quantization", ""),
             modality=raw.get("modality", ""),
             replicas=raw.get("replicas", []),
+            deployment=raw.get("deployment", ""),
         )
 
     return result
