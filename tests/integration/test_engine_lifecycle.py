@@ -22,6 +22,24 @@ import pytest, tempfile
 
 # ── Fixtures ─────────────────────────────────────────────────────
 
+@pytest.fixture(autouse=True)
+def _reset_adapter_singleton_procs():
+    """Reset singleton adapter _proc before each test (test isolation).
+
+    _stop_model_process (model_lifecycle.py) calls adapter.set_process_manager(self._proc)
+    on the get_adapter() singleton and does not reset it. Unit tests that build a
+    ModelLifecycle with a mock _proc and exercise stop paths pollute the singleton for
+    later integration tests that assume _proc is None (test_*_no_proc). This fixture
+    restores a clean slate per test. Note: the singleton *instances* are cached in
+    the module-level _instances dict (in inferfabric/engine_adapter/__init__.py);
+    _adapters maps names to classes, so it must not be reset here.
+    """
+    from inferfabric.engine_adapter import _instances
+    for _a in list(_instances.values()):
+        _a._proc = None
+    yield
+
+
 @pytest.fixture
 def tmp_d():
     with tempfile.TemporaryDirectory() as d:
