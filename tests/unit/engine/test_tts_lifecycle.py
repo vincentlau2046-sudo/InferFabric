@@ -8,6 +8,7 @@ unit/engine/test_tts_lifecycle.py — TTS 服务生命周期测试
   - 孤儿 PID 检测与恢复（TTS / ComfyUI / vLLM）
   - 防御性测试（无 tts_config、无 tts_port、空 tts_block）
   - deploy_model TTS 失败后端口 & PID 清理
+  - deploy_model 失败清理经 _stop_model_process 统一入口（Task 2.2，不内联 docker）
   - modality 回归测试
   - config_hash 排除字段测试
 """
@@ -637,11 +638,14 @@ class TestDeployModelFailureTts:
     """Verify _deploy_model failure cleanup handles tts_port + tts_pid."""
 
     def test_deploy_tts_failure_stops_tts_port(self):
-        """When TTS deployment fails, stop_all is called with tts_port."""
+        """When TTS deployment fails, the failed model is stopped via
+        _stop_model_process (adapter → proc.stop_tts_server); stop_all only
+        receives active_services (PID cleanup, Task 2.3 demotes the facade)."""
         from inferfabric.model_lifecycle import ModelLifecycle
         from inferfabric.config import ModelConfig, TTSConfig, load_models
 
         mock_state = MagicMock()
+        mock_state.get_active_services.return_value = []
         mock_proc = MagicMock()
         # Simulate TTS start failure
         mock_proc.start_tts_server.return_value = {"status": "error", "message": "crashed"}
@@ -666,11 +670,15 @@ class TestDeployModelFailureTts:
 
         assert result["status"] == "error"
 
-        # Verify stop_all was called with tts_port
+        # Metadata-driven: the failed model is stopped via _stop_model_process →
+        # TTSAdapter.stop → proc.stop_tts_server(port=8880)
+        mock_proc.stop_tts_server.assert_called_once_with(port=8880)
+        # stop_all is a thin PID-cleanup call — no engine-specific kwargs
         stop_all_calls = mock_proc.stop_all.call_args_list
-        assert len(stop_all_calls) >= 1
+        assert len(stop_all_calls) == 1
         kwargs = stop_all_calls[0][1]
-        assert kwargs.get("tts_port") == 8880, f"Expected tts_port=8880, got {kwargs}"
+        assert kwargs == {"active_services": []}, \
+            f"stop_all should receive only active_services, got {kwargs}"
 
     def test_deploy_tts_failure_clears_tts_pid(self):
         """When TTS deployment fails, tts_pid is cleared in state."""
@@ -706,6 +714,64 @@ class TestDeployModelFailureTts:
             if "tts_pid" in args and args["tts_pid"] == "":
                 found_tts_pid_clear = True
         assert found_tts_pid_clear, "tts_pid should be cleared on deployment failure"
+
+
+class TestDeployModelFailureNinfer:
+    """Task 2.2: _deploy_model failure-cleanup stops the failed model via
+    _stop_model_process (metadata-driven) — no inlined docker stop, and
+    stop_all receives only active_services (PID cleanup; Task 2.3 demotes
+    the facade)."""
+
+    def test_deploy_ninfer_failure_stops_via_stop_model_process(self):
+        """When NInfer deployment fails, cleanup routes through _stop_model_process
+        (not an inlined docker stop) and stop_all gets only active_services."""
+        import subprocess as _subprocess
+        from inferfabric.model_lifecycle import ModelLifecycle
+        from inferfabric.config import ModelConfig, NInferConfig
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+
+        mock_state = MagicMock()
+        mock_state.get_active_services.return_value = []
+        mock_proc = MagicMock()
+        mock_health = MagicMock()
+        mock_lock = MagicMock()
+        mock_lock.acquire.return_value = True
+        mock_gpu = MagicMock()
+        mock_gpu.reconcile.return_value = {"actions": []}
+
+        ninfer_model = ModelConfig(
+            name="qwen38-ninfer", description="test", type="ninfer",
+            gpu_role="shared",
+            ninfer=NInferConfig(port=8007, container_name="ninfer-qwen38",
+                                 weight_path="/tmp/weights",
+                                 docker_image="ninfer:test"),
+        )
+
+        lc = ModelLifecycle(mock_state, mock_proc, mock_health, mock_lock, mock_gpu,
+                            {"qwen38-ninfer": ninfer_model})
+
+        # Simulate NInfer start failure — patch the adapter's start so no real
+        # docker/Popen/sleep runs. Spy on _stop_model_process so the real
+        # adapter.stop (which shells out to docker) is not executed here.
+        with patch("inferfabric.model_lifecycle.load_models",
+                   return_value={"qwen38-ninfer": ninfer_model}), \
+             patch.object(NInferAdapter, "start",
+                          return_value={"status": "error", "message": "simulated"}), \
+             patch.object(lc, "_stop_model_process") as stop_spy, \
+             patch.object(_subprocess, "run") as run_spy:
+            result = lc._deploy_model(ninfer_model, "shared")
+
+        assert result["status"] == "error"
+
+        # Unified entry: _stop_model_process(model, model.name)
+        stop_spy.assert_called_once_with(ninfer_model, "qwen38-ninfer")
+        # No inlined docker/subprocess in the failure-cleanup path
+        run_spy.assert_not_called()
+        # stop_all is a thin PID-cleanup call — no engine-specific kwargs
+        assert mock_proc.stop_all.call_count == 1
+        kwargs = mock_proc.stop_all.call_args[1]
+        assert kwargs == {"active_services": []}, \
+            f"stop_all should receive only active_services, got {kwargs}"
 
 
 # ═══════════════════════════════════════════════════════════════════
