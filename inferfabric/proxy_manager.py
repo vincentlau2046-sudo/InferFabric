@@ -41,9 +41,11 @@ log = logging.getLogger("inferfabric.proxy_manager")
 
 PROXY_HOST = os.environ.get("EDGE_PROXY_HOST", "127.0.0.1")
 PROXY_PORT = int(os.environ.get("EDGE_PROXY_PORT", "8999"))
-# Default OFF: a single stray request should not displace the active model.
-# Set EDGE_AUTO_SWITCH=1 to re-enable request-driven auto-switching.
-AUTO_SWITCH = os.environ.get("EDGE_AUTO_SWITCH", "0") == "1"
+# Default ON (v6.0.0): request-driven auto-switching is the expected UX for a
+# personal single-GPU inference OS — a request to a known-but-inactive model
+# should auto-start it. Set EDGE_AUTO_SWITCH=0 to disable (e.g. to prevent a
+# stray request from displacing the active exclusive model).
+AUTO_SWITCH = os.environ.get("EDGE_AUTO_SWITCH", "1") == "1"
 HEALTH_CHECK_INTERVAL = int(os.environ.get("EDGE_HEALTH_CHECK", "60"))
 WATCHDOG_INTERVAL = 20
 

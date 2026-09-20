@@ -3,7 +3,7 @@ unit/infra/test_auto_switch.py — 自动切换 & 端口绑定重试测试
 
 测试对象: inferfabric.proxy_manager.AUTO_SWITCH, proxy.handler._create_server, manager.switch
 覆盖范围:
-  - EDGE_AUTO_SWITCH 环境变量默认关闭、显式开启/关闭
+  - EDGE_AUTO_SWITCH 环境变量默认开启(v6.0.0)、显式开启/关闭
   - _create_server() EADDRINUSE 重试（有界退避）
   - 非 EADDRINUSE 错误立即抛出
   - switch() 端口占用守卫（fuser 交叉检查，防止 stale idle 状态）
@@ -24,13 +24,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # 1. AUTO_SWITCH default
 # ═══════════════════════════════════════════════════════════════
 
-def test_auto_switch_default_off(monkeypatch):
-    """Without EDGE_AUTO_SWITCH, auto-switch is disabled."""
+def test_auto_switch_default_on(monkeypatch):
+    """Without EDGE_AUTO_SWITCH, auto-switch is enabled (v6.0.0 default)."""
     import inferfabric.proxy_manager as pm
     monkeypatch.delenv("EDGE_AUTO_SWITCH", raising=False)
     importlib.reload(pm)
     try:
-        assert pm.AUTO_SWITCH is False
+        assert pm.AUTO_SWITCH is True
     finally:
         importlib.reload(pm)
 
