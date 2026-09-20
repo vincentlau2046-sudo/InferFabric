@@ -297,6 +297,50 @@ class TestSGLangAdapter:
         )
 
 
+class TestNInferAdapterStopContainerName:
+    """NInferAdapter.stop 必须用 model.container_name（统一 property），不再内联重推（Task 3.3）。"""
+
+    def _stop_and_capture(self, monkeypatch, ninfer_cfg):
+        """Run NInferAdapter.stop, capture the docker stop command, return it."""
+        import subprocess
+        from inferfabric.config import ModelConfig
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+
+        model = ModelConfig(name="t", description="d", type="ninfer", ninfer=ninfer_cfg)
+        adapter = NInferAdapter()
+        calls = []
+
+        def fake_run(args, **kwargs):
+            calls.append(args)
+            return MagicMock(returncode=0, stderr=b"")
+
+        # stop() 内部局部 import subprocess（绑定 sys.modules 同一模块对象），
+        # 因此 patch 模块级 subprocess.run 对 stop() 可见。
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = adapter.stop(model)
+        assert result["status"] == "ok", f"expected ok, got {result}"
+        assert len(calls) == 1, f"expected one docker stop call, got {calls}"
+        return calls[0], model
+
+    def test_stop_uses_explicit_container_name(self, monkeypatch):
+        """显式 container_name：stop 传该名给 docker stop（来自统一 property）。"""
+        from inferfabric.config import NInferConfig
+        cfg = NInferConfig(port=8007, container_name="iff-ninfer-qwen38")
+        cmd, model = self._stop_and_capture(monkeypatch, cfg)
+        assert model.container_name == "iff-ninfer-qwen38"  # property returns explicit
+        assert "docker" in cmd and "stop" in cmd
+        assert "iff-ninfer-qwen38" in cmd, f"expected iff-ninfer-qwen38 in {cmd}"
+
+    def test_stop_uses_derived_fallback_container_name(self, monkeypatch):
+        """无显式 container_name：stop 传推导名 ninfer-{port}（来自统一 property）。"""
+        from inferfabric.config import NInferConfig
+        cfg = NInferConfig(port=8007, container_name="")  # 空 → 推导 ninfer-8007
+        cmd, model = self._stop_and_capture(monkeypatch, cfg)
+        assert model.container_name == "ninfer-8007"  # property derives fallback
+        assert "docker" in cmd and "stop" in cmd
+        assert "ninfer-8007" in cmd, f"expected ninfer-8007 in {cmd}"
+
+
 class TestOllamaAdapter:
     """Ollama 适配器"""
 

@@ -130,7 +130,7 @@ class NInferAdapter(EngineAdapter):
         cfg = model.ninfer
         if not cfg:
             return {"status": "error", "message": "No ninfer config"}
-        container = cfg.container_name or f"ninfer-{cfg.port}"
+        container = model.container_name
         log.info("Stopping NInfer container: %s", container)
         result = subprocess.run(
             ["docker", "stop", container],
