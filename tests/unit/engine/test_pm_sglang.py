@@ -1,7 +1,6 @@
 # tests/unit/engine/test_pm_sglang.py
 """SGLangProcessManager — stop 改优雅 docker stop（D3），start 加 container_name 参。"""
 from unittest.mock import MagicMock
-from pathlib import Path
 
 
 def _make_pm(tmp_path):
@@ -33,6 +32,35 @@ class TestStopSGLangGraceful:
         assert len(kill_calls) == 0, f"不应 docker kill: {calls}"
         assert len(rm_calls) == 0, f"不应 docker rm（--rm 自动移除）: {calls}"
         assert "sglang-foo" in stop_calls[0]
+
+
+class TestStopSGLangGuards:
+    def test_stop_docker_timeout_returns_warning(self, monkeypatch, tmp_path):
+        """docker stop 超时（TimeoutExpired）：不抛异常，warning + 消息含 'timed out'
+        （镜像 ninfer.stop_ninfer 守卫，闭合 D3 不对称）。"""
+        import subprocess
+        pm = _make_pm(tmp_path)
+
+        def fake_run(args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=args, timeout=10)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = pm.stop_sglang(container_name="sglang-test")
+        assert result["status"] == "warning"
+        assert "timed out" in result["message"]
+
+    def test_stop_docker_not_found_returns_warning(self, monkeypatch, tmp_path):
+        """docker 不在 PATH（FileNotFoundError）：不抛异常，warning（同 ninfer 守卫）。"""
+        import subprocess
+        pm = _make_pm(tmp_path)
+
+        def fake_run(args, **kwargs):
+            raise FileNotFoundError("docker")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = pm.stop_sglang(container_name="sglang-test")
+        assert result["status"] == "warning"
+        assert "docker not found on PATH" in result["message"]
 
 
 class TestStartSGLangContainerName:

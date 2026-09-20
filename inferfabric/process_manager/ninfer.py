@@ -7,12 +7,10 @@ engine_adapter/ninfer.py — container_name now a parameter (single source
 of truth = ModelConfig.container_name, threaded by the adapter).
 """
 
-import os
 import time
 import logging
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 from inferfabric.health import wait_http, check_http_status
 from inferfabric.process_manager.base import BaseProcessManager

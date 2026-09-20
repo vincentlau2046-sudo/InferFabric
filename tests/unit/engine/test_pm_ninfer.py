@@ -4,8 +4,7 @@
 镜像 vllm/sglang PM 的 mock-subprocess 测试模式。start_ninfer 的
 container_name 必须来自参数（不重推 cfg.container_name or f"ninfer-{port}"）。
 """
-from unittest.mock import MagicMock, patch
-from pathlib import Path
+from unittest.mock import MagicMock
 
 
 def _make_pm(tmp_path):

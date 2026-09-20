@@ -1,6 +1,5 @@
 """ProcessManager facade — ninfer 注册 + 透传 + 状态层（Task 3）。"""
 from unittest.mock import MagicMock
-from pathlib import Path
 
 
 def _make_facade(tmp_path):
