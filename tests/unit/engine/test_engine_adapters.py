@@ -220,6 +220,64 @@ class TestVLLMAdapterStopDispatch:
         assert not any("conda_env" in i for i in issues), f"docker 部署应跳过 conda_env: {issues}"
 
 
+class TestVLLMAdapterStartDispatch:
+    """VLLMAdapter.start 按 resolved_deployment 分派（Task 6，D2，镜像 stop:58-65）。"""
+
+    def _make_model(self, deployment="", **vllm_overrides):
+        from inferfabric.config import ModelConfig, VLLMConfig
+        defaults = dict(model_dir="/m", served_name="t", conda_env="vllm",
+                        port=8000, max_model_len=4096, gpu_memory_utilization=0.9)
+        defaults.update(vllm_overrides)
+        return ModelConfig(
+            name="t", description="d", type="vllm", deployment=deployment,
+            gpu_role="exclusive", vllm=VLLMConfig(**defaults),
+        )
+
+    def test_start_conda_calls_start_vllm(self):
+        """conda 部署：start 调 PM.start_vllm（现有路径不动）。"""
+        from inferfabric.engine_adapter.vllm import VLLMAdapter
+        adapter = VLLMAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        model = self._make_model(deployment="")  # 推导 conda
+        assert model.resolved_deployment == "conda"
+        adapter.start(model)
+        pm.start_vllm.assert_called_once()
+
+    def test_start_docker_returns_error(self, caplog):
+        """docker 部署：start 返回 error + log.warning（D2 脚手架，未实现）。"""
+        import logging
+        from inferfabric.engine_adapter.vllm import VLLMAdapter
+        adapter = VLLMAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        model = self._make_model(deployment="docker", conda_env="")
+        assert model.resolved_deployment == "docker"
+        with caplog.at_level(logging.WARNING, logger="inferfabric.vllm_adapter"):
+            result = adapter.start(model)
+        assert result["status"] == "error"
+        assert "docker" in result["message"].lower()
+        pm.start_vllm.assert_not_called()
+
+    def test_start_no_proc_raises(self):
+        """无 PM：start 抛 RuntimeError（和 stop 一致）。"""
+        from inferfabric.engine_adapter.vllm import VLLMAdapter
+        import pytest
+        adapter = VLLMAdapter()
+        model = self._make_model()
+        with pytest.raises(RuntimeError):
+            adapter.start(model)
+
+    def test_validate_rejects_docker_deployment(self):
+        """validate_config 拦截 deployment:docker（D2，防止 start 硬失败陷阱）。"""
+        from inferfabric.engine_adapter.vllm import VLLMAdapter
+        adapter = VLLMAdapter()
+        model = self._make_model(deployment="docker", conda_env="")
+        issues = adapter.validate_config(model)
+        assert any("docker" in i.lower() and "conda" in i.lower() for i in issues), \
+            f"validate 应拦截 vllm docker: {issues}"
+
+
 class TestOllamaCppAdapter:
     """Ollama-CPP 适配器"""
 
