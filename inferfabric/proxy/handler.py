@@ -994,7 +994,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         result = pm.mgr.stop_service(target)
         if result.get("status") in ("stopped", "already_stopped"):
             pm.mgr.state.record_manual_stop(target)
-        self._send_json(result)
+            self._send_json(result, 200)
+        else:
+            # error（含 exclusive 守卫）——4xx，前端 doModelAction 显示 message
+            self._send_json(result, 400)
 
     def _handle_reset(self, pm):
         for svc in list(pm.mgr.active_services):
