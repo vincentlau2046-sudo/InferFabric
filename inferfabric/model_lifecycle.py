@@ -428,42 +428,14 @@ class ModelLifecycle:
         log.info("Switch to idle from %s (gpu_mode=%s)", from_services, self.state.gpu_mode)
 
         try:
-            # ── Stop GPU-bound services with port-based cleanup ──
-            ports = []
-            comfyui_cfg = None
-            tts_port = None
-            asr_port = None
+            # ── 经统一入口停止所有 GPU-bound 服务（adapter 按 deployment 分派）──
             for svc_name in from_services:
                 m = self._models.get(svc_name)
-                if m:
-                    if m.is_vllm:
-                        ports.append(("vllm", m.vllm.port))
-                    elif m.is_sglang:
-                        ports.append(("sglang", m.sglang.port))
-                    elif m.is_comfyui:
-                        ports.append(("comfyui", m.comfyui.port))
-                        comfyui_cfg = m.comfyui
-                    elif m.is_tts_server:
-                        tts_port = m.tts.port
-                    elif m.is_asr_server:
-                        asr_port = m.asr.port
-                    elif m.is_ninfer:
-                        import subprocess as _subprocess
-                        container = m.ninfer.container_name or f"ninfer-{m.ninfer.port}"
-                        res = _subprocess.run(["docker", "stop", container], timeout=30, capture_output=True)
-                        if res.returncode != 0:
-                            logging.getLogger("inferfabric.model_lifecycle").warning(
-                                "NInfer docker stop %s exit %d: %s",
-                                container, res.returncode, res.stderr.decode()[:200])
-            self._proc.stop_all(
-                comfyui_cfg=comfyui_cfg,
-                vllm_ports=[p for t, p in ports if t == "vllm"],
-                sglang_ports=[p for t, p in ports if t == "sglang"],
-                comfyui_port=comfyui_cfg.port if comfyui_cfg else None,
-                tts_port=tts_port,
-                asr_port=asr_port,
-                active_services=from_services,
-            )
+                if m and m.needs_gpu:
+                    self._stop_model_process(m, svc_name)
+                # gpu_role=none 服务保留，由 set_multi 过滤
+            # PID 清理 + GPU 兜底（stop_all 降级为薄方法，见 Task 2.3）
+            self._proc.stop_all(active_services=from_services)
 
             gpu_idle = self._proc._wait_gpu_idle(timeout=30)
             if gpu_idle.get("status") not in ("ok", "force"):

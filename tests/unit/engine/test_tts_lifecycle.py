@@ -3,7 +3,7 @@ unit/engine/test_tts_lifecycle.py — TTS 服务生命周期测试
 
 测试对象: inferfabric.model_lifecycle.ModelLifecycle, process_manager.ProcessManager
 覆盖范围:
-  - switch_to_idle 时 TTS 端口清理
+  - switch_to_idle 时 TTS 经统一入口停止（Task 2.1，stop_all 不再收引擎特定端口）
   - force_kill_all 杀 TTS 进程组（SIGKILL、fuser 端口清理）
   - 孤儿 PID 检测与恢复（TTS / ComfyUI / vLLM）
   - 防御性测试（无 tts_config、无 tts_port、空 tts_block）
@@ -27,7 +27,11 @@ import pytest
 # ═══════════════════════════════════════════════════════════════════
 
 class TestSwitchToIdleTtsPort:
-    """Verify _switch_to_idle correctly collects tts_port and passes to stop_all."""
+    """Verify _switch_to_idle stops services via the unified entry (Task 2.1).
+
+    Engine stops go through the adapter (proc.stop_tts_server / proc.stop_vllm);
+    stop_all is a thin call that only receives active_services — no
+    engine-specific ports/cfgs (those were removed in Task 2.1)."""
 
     def _make_lc(self, models=None):
         """Create ModelLifecycle with mocked dependencies."""
@@ -47,7 +51,8 @@ class TestSwitchToIdleTtsPort:
         return lc, mock_state, mock_proc
 
     def test_switch_to_idle_tts_only(self):
-        """When only TTS is active, tts_port is passed to stop_all."""
+        """When only TTS is active, it is stopped via its adapter (proc.stop_tts_server);
+        stop_all only receives active_services."""
         from inferfabric.config import ModelConfig, TTSConfig
 
         tts_model = ModelConfig(
@@ -61,15 +66,14 @@ class TestSwitchToIdleTtsPort:
 
         lc._switch_to_idle()
 
-        # Verify stop_all was called with tts_port=8880
+        # TTS stopped via the adapter (Task 2.1: no engine-specific kwargs to stop_all)
+        mock_proc.stop_tts_server.assert_called_once_with(port=8880)
         mock_proc.stop_all.assert_called_once()
         kwargs = mock_proc.stop_all.call_args[1]
-        assert kwargs["tts_port"] == 8880
-        assert kwargs["comfyui_cfg"] is None
-        assert kwargs["vllm_ports"] == []
+        assert kwargs == {"active_services": ["tts-qwen3"]}
 
     def test_switch_to_idle_vllm_and_tts(self):
-        """When both vLLM and TTS are active, both ports are passed."""
+        """When both vLLM and TTS are active, each is stopped via its adapter."""
         from inferfabric.config import ModelConfig, TTSConfig, VLLMConfig
 
         vllm_model = ModelConfig(
@@ -94,12 +98,14 @@ class TestSwitchToIdleTtsPort:
 
         lc._switch_to_idle()
 
+        mock_proc.stop_vllm.assert_called_once_with(port=11441)
+        mock_proc.stop_tts_server.assert_called_once_with(port=8880)
         kwargs = mock_proc.stop_all.call_args[1]
-        assert kwargs["tts_port"] == 8880
-        assert kwargs["vllm_ports"] == [11441]
+        assert kwargs == {"active_services": ["qwen35-9b-vl", "tts-qwen3"]}
 
     def test_switch_to_idle_no_tts(self):
-        """When no TTS is active, tts_port is None."""
+        """When no TTS is active, stop_tts_server is not called and stop_all
+        carries no engine-specific kwargs."""
         from inferfabric.config import ModelConfig, VLLMConfig
 
         vllm_model = ModelConfig(
@@ -117,8 +123,10 @@ class TestSwitchToIdleTtsPort:
 
         lc._switch_to_idle()
 
+        mock_proc.stop_tts_server.assert_not_called()
+        mock_proc.stop_vllm.assert_called_once_with(port=11441)
         kwargs = mock_proc.stop_all.call_args[1]
-        assert kwargs["tts_port"] is None
+        assert kwargs == {"active_services": ["qwen35-9b-vl"]}
 
     def test_switch_to_idle_clears_tts_pid(self):
         """_switch_to_idle clears tts_pid in state."""
@@ -143,7 +151,7 @@ class TestSwitchToIdleTtsPort:
         assert last_call_kwargs["tts_pid"] == ""
 
     def test_switch_to_idle_unknown_service_skipped(self):
-        """Unknown service name in active_services is safely skipped."""
+        """Unknown service name in active_services is safely skipped by the stop loop."""
         from inferfabric.config import ModelConfig, TTSConfig
 
         tts_model = ModelConfig(
@@ -158,9 +166,10 @@ class TestSwitchToIdleTtsPort:
 
         lc._switch_to_idle()
 
-        # tts_port still collected correctly
+        # Only the known service gets an adapter stop; stop_all still sees the full list
+        mock_proc.stop_tts_server.assert_called_once_with(port=8880)
         kwargs = mock_proc.stop_all.call_args[1]
-        assert kwargs["tts_port"] == 8880
+        assert kwargs == {"active_services": ["tts-qwen3", "phantom-svc"]}
 
 
 # ═══════════════════════════════════════════════════════════════════
