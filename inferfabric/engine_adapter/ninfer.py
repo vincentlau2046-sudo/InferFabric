@@ -3,7 +3,6 @@
 from __future__ import annotations
 import logging
 from pathlib import Path
-import re
 from typing import TYPE_CHECKING
 
 from inferfabric.engine_adapter.base import EngineAdapter
@@ -135,10 +134,6 @@ class NInferAdapter(EngineAdapter):
         if tput: r["throughput"] = str(round(tput,1)); r["throughput_inst"] = str(round(tput,1))
         if rec: r["throughput_cum_n"] = sum(x["output"] for x in rec)
         return r if r.get("kv_cache_usage_perc") or rec else {"sleep_state": 0}
-
-
-def get_pid_state_key(self) -> str | None:
-        return None
 
 
 register("ninfer", NInferAdapter)

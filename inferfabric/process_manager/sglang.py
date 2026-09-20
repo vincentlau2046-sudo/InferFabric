@@ -114,7 +114,7 @@ class SGLangProcessManager(BaseProcessManager):
                 log.debug("Docker scan fallback failed: %s", e)
         if container_name:
             try:
-                subprocess.run(["docker", "stop", container_name],
+                result = subprocess.run(["docker", "stop", container_name],
                               timeout=10, check=False, capture_output=True)
             except subprocess.TimeoutExpired:
                 msg = f"docker stop {container_name} timed out"
@@ -123,6 +123,13 @@ class SGLangProcessManager(BaseProcessManager):
             except FileNotFoundError:
                 msg = "docker not found on PATH"
                 log.warning(msg)
+                return {"status": "warning", "message": msg}
+            if result.returncode != 0:
+                stderr_fragment = result.stderr.decode()[:200] if result.stderr else ""
+                msg = f"docker stop exit {result.returncode}: {stderr_fragment}"
+                log.warning(msg)
+                self._set_sglang_pid(None)
+                self._set_sglang_container(None)
                 return {"status": "warning", "message": msg}
             log.info("SGLang container %s stopped (graceful)", container_name)
 

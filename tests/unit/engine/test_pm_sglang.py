@@ -62,6 +62,24 @@ class TestStopSGLangGuards:
         assert result["status"] == "warning"
         assert "docker not found on PATH" in result["message"]
 
+    def test_stop_docker_nonzero_rc_returns_warning(self, monkeypatch, tmp_path):
+        """docker stop 非零退出：warning + 消息含 rc 与 stderr 片段（镜像 ninfer.stop_ninfer）。
+
+        Ruling H: stop_sglang 原先不检查 returncode，非零也返回 ok。改为检查并
+        返回 warning，与 ninfer.stop_ninfer 的非零 rc 守卫对称。
+        """
+        import subprocess
+        pm = _make_pm(tmp_path)
+
+        def fake_run(args, **kwargs):
+            return MagicMock(returncode=1, stderr=b"no such container")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = pm.stop_sglang(container_name="sglang-test")
+        assert result["status"] == "warning", f"非零 rc 应 warning，got {result}"
+        assert "exit 1" in result["message"], f"消息应含 rc: {result['message']}"
+        assert "no such container" in result["message"], f"消息应含 stderr 片段: {result['message']}"
+
 
 class TestStartSGLangContainerName:
     def test_start_accepts_container_name_param(self, monkeypatch, tmp_path):
