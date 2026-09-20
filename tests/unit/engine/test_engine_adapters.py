@@ -178,6 +178,7 @@ class TestVLLMAdapterStopDispatch:
 
     def test_vllm_adapter_stop_docker_calls_docker_stop(self, monkeypatch):
         """docker 部署的 vllm：stop 调 docker stop <container>，不走 stop_vllm。"""
+        import subprocess
         import inferfabric.engine_adapter.vllm as vmod
         from inferfabric.config import ModelConfig
         adapter = vmod.VLLMAdapter()
@@ -193,7 +194,10 @@ class TestVLLMAdapterStopDispatch:
         def fake_run(*args, **kwargs):
             docker_calls.append(args)
             return MagicMock(returncode=0, stderr=b"")
-        monkeypatch.setattr(vmod.subprocess, "run", fake_run)
+        # Task 3.4: vllm.py 模块级 import subprocess 已删（helper 在 base.py
+        # 局部 import，绑定 sys.modules 同一 subprocess 模块对象），
+        # 故 patch 目标由 vmod.subprocess 改为直接 patch subprocess 模块。
+        monkeypatch.setattr(subprocess, "run", fake_run)
         result = adapter.stop(model)
         assert result["status"] == "ok", f"expected ok, got {result}"
         assert any("docker" in str(c) and "stop" in str(c) for c in docker_calls), "应调 docker stop"
@@ -339,6 +343,82 @@ class TestNInferAdapterStopContainerName:
         assert model.container_name == "ninfer-8007"  # property derives fallback
         assert "docker" in cmd and "stop" in cmd
         assert "ninfer-8007" in cmd, f"expected ninfer-8007 in {cmd}"
+
+
+class TestStopDockerContainerHelper:
+    """base._stop_docker_container — 共享 docker-stop 辅助方法 + 全量守卫（Task 3.4）。
+
+    直接测基类 helper（经 NInferAdapter 继承，无构造参数）。helper 只读
+    model.container_name，故用 SimpleNamespace/MagicMock 轻量 mock ——
+    真实 ModelConfig 对 ninfer/sglang 恒产生非 None 名，None 名路径只能 mock。
+    """
+
+    def _adapter(self):
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        return NInferAdapter()  # 继承 base 的 _stop_docker_container
+
+    def test_none_container_name_returns_warning(self, monkeypatch):
+        """container_name 为 None：不触子进程，直接 warning。"""
+        import subprocess
+        from types import SimpleNamespace
+        adapter = self._adapter()
+        model = SimpleNamespace(container_name=None)
+        called = []
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: called.append(1))
+        result = adapter._stop_docker_container(model)
+        assert result["status"] == "warning"
+        assert "container_name" in result["message"]
+        assert called == []  # subprocess NOT called
+
+    def test_success_returns_ok(self, monkeypatch):
+        """rc=0：返回 ok，message 含容器名。"""
+        import subprocess
+        adapter = self._adapter()
+        model = MagicMock(container_name="test-ctr")
+        monkeypatch.setattr(subprocess, "run",
+                            lambda *a, **k: MagicMock(returncode=0, stderr=b""))
+        result = adapter._stop_docker_container(model)
+        assert result["status"] == "ok"
+        assert "test-ctr" in result["message"]
+
+    def test_nonzero_exit_returns_warning_with_stderr(self, monkeypatch):
+        """rc!=0：返回 warning，message 带 stderr 片段。"""
+        import subprocess
+        adapter = self._adapter()
+        model = MagicMock(container_name="test-ctr")
+        monkeypatch.setattr(subprocess, "run",
+                            lambda *a, **k: MagicMock(returncode=1, stderr=b"some error"))
+        result = adapter._stop_docker_container(model)
+        assert result["status"] == "warning"
+        assert "some error" in result["message"]
+
+    def test_timeout_returns_warning(self, monkeypatch):
+        """TimeoutExpired → warning（Task 3.4 新增守卫，3.3 前 ninfer 缺失）。"""
+        import subprocess
+        adapter = self._adapter()
+        model = MagicMock(container_name="test-ctr")
+
+        def raise_timeout(*a, **k):
+            raise subprocess.TimeoutExpired(cmd=["docker", "stop", "test-ctr"], timeout=30)
+
+        monkeypatch.setattr(subprocess, "run", raise_timeout)
+        result = adapter._stop_docker_container(model)
+        assert result["status"] == "warning"
+        assert "timed out" in result["message"]
+
+    def test_docker_not_found_returns_warning(self, monkeypatch):
+        """FileNotFoundError（docker 不在 PATH）→ warning（Task 3.4 新增守卫）。"""
+        import subprocess
+        adapter = self._adapter()
+        model = MagicMock(container_name="test-ctr")
+
+        def raise_fnf(*a, **k):
+            raise FileNotFoundError("[Errno 2] No such file or directory: 'docker'")
+
+        monkeypatch.setattr(subprocess, "run", raise_fnf)
+        result = adapter._stop_docker_container(model)
+        assert result["status"] == "warning"
+        assert "not found" in result["message"].lower() or "PATH" in result["message"]
 
 
 class TestOllamaAdapter:

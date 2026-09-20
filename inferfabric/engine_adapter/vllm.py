@@ -5,7 +5,6 @@ Health: /health 200  |  Metrics: /metrics (vllm:* Prometheus)
 """
 from __future__ import annotations
 import logging
-import subprocess
 from typing import TYPE_CHECKING
 from inferfabric.engine_adapter.base import EngineAdapter
 from inferfabric.engine_adapter import register
@@ -61,27 +60,9 @@ class VLLMAdapter(EngineAdapter):
         if self._proc is None:
             raise RuntimeError("ProcessManager not set")
         if model.resolved_deployment == "docker":
-            return self._stop_docker(model)
+            return self._stop_docker_container(model)
         cfg = getattr(model, 'vllm')
         return self._proc.stop_vllm(port=cfg.port)
-
-    def _stop_docker(self, model: ModelConfig) -> dict:
-        """Stop a docker-deployed vllm container.
-
-        Inlined here; Task 3.4 extracts it to the base helper
-        (_stop_docker_container) shared by all docker adapters.
-        """
-        name = model.container_name
-        if not name:
-            return {"status": "warning", "message": "docker deployment has no container_name — cannot stop"}
-        try:
-            result = subprocess.run(["docker", "stop", name], timeout=30, capture_output=True, check=False)
-        except subprocess.TimeoutExpired:
-            return {"status": "warning", "message": f"docker stop {name} timed out"}
-        if result.returncode == 0:
-            return {"status": "ok", "message": f"Container {name} stopped"}
-        msg = result.stderr.decode()[:200] if result.stderr else ""
-        return {"status": "warning", "message": f"docker stop exit {result.returncode}: {msg}"}
 
     def is_alive(self, model: ModelConfig) -> bool:
         return self.check_health(model) == "\u2705"

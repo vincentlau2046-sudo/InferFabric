@@ -62,3 +62,31 @@ class EngineAdapter(ABC):
     def get_pid_state_key(self) -> str | None:
         """Return the state.db key for storing PID, or None."""
         return None
+
+    def _stop_docker_container(self, model: ModelConfig, timeout: int = 30) -> dict:
+        """docker stop <model.container_name>. Shared by docker-deployed adapters.
+
+        Reads the unified ModelConfig.container_name property (Task 1.2).
+        Guards: missing name, docker not on PATH, timeout, non-zero exit.
+        """
+        import subprocess
+        import logging
+        log = logging.getLogger("inferfabric")
+        name = model.container_name
+        if not name:
+            return {"status": "warning",
+                    "message": "docker deployment has no container_name — cannot stop"}
+        log.info("Stopping docker container: %s", name)
+        try:
+            result = subprocess.run(
+                ["docker", "stop", name],
+                timeout=timeout, capture_output=True, check=False)
+        except subprocess.TimeoutExpired:
+            return {"status": "warning", "message": f"docker stop {name} timed out"}
+        except FileNotFoundError:
+            return {"status": "warning", "message": "docker not found on PATH"}
+        if result.returncode == 0:
+            return {"status": "ok", "message": f"Container {name} stopped"}
+        msg = result.stderr.decode()[:200] if result.stderr else ""
+        return {"status": "warning",
+                "message": f"docker stop exit {result.returncode}: {msg}"}

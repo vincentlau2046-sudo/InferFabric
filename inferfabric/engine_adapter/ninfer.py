@@ -124,22 +124,10 @@ class NInferAdapter(EngineAdapter):
                 "message": f"NInfer didn't become healthy within {timeout}s"}
 
     def stop(self, model: ModelConfig) -> dict:
-        import logging
-        import subprocess
-        log = logging.getLogger("inferfabric")
         cfg = model.ninfer
         if not cfg:
             return {"status": "error", "message": "No ninfer config"}
-        container = model.container_name
-        log.info("Stopping NInfer container: %s", container)
-        result = subprocess.run(
-            ["docker", "stop", container],
-            timeout=30, capture_output=True, check=False)
-        if result.returncode == 0:
-            return {"status": "ok", "message": f"Container {container} stopped"}
-        msg = result.stderr.decode()[:200]
-        return {"status": "warning",
-                "message": f"docker stop exit {result.returncode}: {msg}"}
+        return self._stop_docker_container(model)
 
     def is_alive(self, model: ModelConfig) -> bool:
         return self.check_health(model) == "✅"
