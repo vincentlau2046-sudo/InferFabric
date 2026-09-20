@@ -317,6 +317,88 @@ def test_charts_js_node_syntax():
         "node --check charts.js failed:\nstdout:%s\nstderr:%s" % (proc.stdout, proc.stderr)
 
 
+def test_charts_data_array_replaced_not_merged():
+    """IFCharts._deepMerge 对 ECharts `data` 数组整体替换，不按下标合并残留旧点。
+
+    回归：Token 图表从 hour(60 个 HH:MM 点)切到 day(14 个 MM-DD 点)时，
+    _mergeArray 按下标合并会保留第 15-60 个旧时间标签 → 横坐标前段日期、
+    后段时间，尺度不统一。series.data 同理残留 ghost 数据条。
+    修复：_deepMerge 遇 key==='data' 时整体替换。
+    """
+    import shutil
+    import subprocess
+    import pytest
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available")
+    js_path = ROOT / "inferfabric" / "dashboard" / "js" / "charts.js"
+    js = js_path.read_text(encoding="utf-8")
+
+    # 用 node 加载 charts.js + echarts stub，模拟 hour→day 切换，断言 data 不残留。
+    # charts.js 是浏览器 IIFE（引用 window/document），node -e 无这些全局，
+    # 故先声明 stub 全局再注入脚本。
+    script = (
+        r"""
+        var window = {};
+        var _lastOpt = null;
+        window.echarts = {
+          init: function () {
+            return {
+              _ifcId: null,
+              setOption: function (opt) { _lastOpt = opt; },
+              dispose: function () {},
+              resize: function () {},
+            };
+          },
+        };
+        var document = {
+          getElementById: function () { return { id: 'c1' }; },
+          documentElement: { getAttribute: function () { return null; } },
+        };
+        window.getComputedStyle = function () { return { getPropertyValue: function () { return ''; } }; };
+        window.addEventListener = function () {};
+        window.store = { on: function () {} };
+        var MutationObserver = undefined;
+        """
+        + "\n"
+        + js
+        + "\n"
+        + r"""
+        var c = window.IFCharts.create('c1');
+        // 第一次 update：hour 模式 60 个时间点
+        var hourXs = []; for (var i = 0; i < 60; i++) hourXs.push('0' + (i%24) + ':00');
+        window.IFCharts.update(c, {
+          xAxis: { data: hourXs, boundaryGap: true },
+          series: [
+            { type: 'bar', name: 'Prompt', stack: 'tok', data: new Array(60).fill(10) },
+            { type: 'bar', name: 'Completion', stack: 'tok', data: new Array(60).fill(5) },
+          ],
+        });
+        // 第二次 update：day 模式 14 个日期点
+        var dayXs = []; for (var j = 0; j < 14; j++) dayXs.push('09-' + (j+1));
+        window.IFCharts.update(c, {
+          xAxis: { data: dayXs, boundaryGap: true },
+          series: [
+            { type: 'bar', name: 'Prompt', stack: 'tok', data: new Array(14).fill(20) },
+            { type: 'bar', name: 'Completion', stack: 'tok', data: new Array(14).fill(8) },
+          ],
+        });
+        // 断言：xAxis.data 恰好 14 个，全是 MM-DD，无 HH:MM 残留
+        var xd = _lastOpt.xAxis.data;
+        var res = xd.length === 14
+          && xd.every(function (x) { return /^09-/.test(x); })
+          && _lastOpt.series[0].data.length === 14
+          && _lastOpt.series[1].data.length === 14;
+        console.log(res ? 'PASS' : 'FAIL: xAxis.data len=' + xd.length + ' sample=' + JSON.stringify(xd.slice(0,3)) + '..' + JSON.stringify(xd.slice(-3)));
+        process.exit(res ? 0 : 1);
+        """
+    )
+    proc = subprocess.run([node, "-e", script],
+                          capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, \
+        "charts data-replace regression FAILED:\nstdout:%s\nstderr:%s" % (proc.stdout, proc.stderr)
+
+
 def test_theme_state_hooked_in_store():
     """store.js 必须把主题状态注入 store('theme') 供 charts.js 订阅重建。"""
     js = (ROOT / "inferfabric" / "dashboard" / "js" / "store.js").read_text(encoding="utf-8")

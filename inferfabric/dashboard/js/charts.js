@@ -113,7 +113,11 @@
     };
   }
 
-  /* 深合并：对象递归合并；数组按下标合并（对象元素合并，标量替换），对齐 ECharts setOption 语义。 */
+  /* 深合并：对象递归合并；数组按下标合并（对象元素合并，标量替换），对齐 ECharts setOption 语义。
+   * 例外：ECharts 的 `data` 字段（xAxis.data / yAxis.data / series[].data / legend.data）
+   * 永远是"整体替换"语义——一组数据点代表完整数据集，不是增量。按下标合并会导致
+   * 切换粒度/窗口时旧数据点残留（如 hour 60 点 → day 14 点，残留 46 个旧时间标签 +
+   * ghost 数据条）。故 `data` key 整体替换。 */
   function _clone(v) {
     if (v == null || typeof v !== 'object') return v;
     if (Array.isArray(v)) return v.map(_clone);
@@ -142,7 +146,10 @@
     var out = {}; for (var k in base) out[k] = _clone(base[k]);
     for (var key in patch) {
       var pv = patch[key], bv = base[key];
-      if (pv != null && typeof pv === 'object' && !Array.isArray(pv)) {
+      // ECharts data 数组整体替换（见上方注释）——不按下标合并残留旧点
+      if (key === 'data') {
+        out[key] = _clone(pv);
+      } else if (pv != null && typeof pv === 'object' && !Array.isArray(pv)) {
         out[key] = _deepMerge(bv || {}, pv);
       } else if (Array.isArray(pv)) {
         out[key] = _mergeArray(bv, pv);
