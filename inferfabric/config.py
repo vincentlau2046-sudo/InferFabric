@@ -172,8 +172,11 @@ class SGLangConfig:
             flags.extend(shlex.split(self.extra_flags))
         return flags
 
-    def build_docker_cmd(self) -> list[str]:
-        """Build docker run command for SGLang serving."""
+    def build_docker_cmd(self, container_name: str) -> list[str]:
+        """Build docker run command for SGLang serving.
+
+        container_name threaded from ModelConfig.container_name (single source).
+        """
         import shlex
         model_path = MODEL_BASE / self.model_dir
         container_cmd = self.build_cmd()
@@ -187,7 +190,7 @@ class SGLangConfig:
             "-v", f"{model_path}:{model_path}",
             "-v", f"{MODEL_BASE}:/models",
             "-v", f"{Path.home() / '.cache/huggingface'}:/root/.cache/huggingface",
-            "--name", f"sglang-{self.served_name}",
+            "--name", container_name,
         ]
         if self.extra_env:
             for k, v in self.extra_env.items():

@@ -46,11 +46,14 @@ class SGLangAdapter(EngineAdapter):
         return issues
 
     def start(self, model: ModelConfig) -> dict:
-        """Start sglang via ProcessManager delegation."""
+        """Start sglang via ProcessManager delegation.
+
+        container_name threaded from ModelConfig.container_name (single source).
+        """
         if self._proc is None:
             raise RuntimeError("ProcessManager not set — call inject ._proc on the adapter instance first")
         cfg = getattr(model, 'sglang')
-        return self._proc.start_sglang(cfg)
+        return self._proc.start_sglang(cfg, model.container_name)
 
     def stop(self, model: ModelConfig) -> dict:
         """Stop sglang via ProcessManager delegation."""

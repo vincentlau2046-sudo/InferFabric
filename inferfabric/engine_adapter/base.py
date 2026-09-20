@@ -64,7 +64,7 @@ class EngineAdapter(ABC):
         return None
 
     def _stop_docker_container(self, model: ModelConfig, timeout: int = 30) -> dict:
-        """docker stop <model.container_name>. Shared by docker-deployed adapters.
+        """docker stop <model.container_name>. Used by vllm-docker stop (ninfer migrated to PM launcher).
 
         Reads the unified ModelConfig.container_name property (Task 1.2).
         Guards: missing name, docker not on PATH, timeout, non-zero exit.

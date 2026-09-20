@@ -42,6 +42,8 @@ class VLLMAdapter(EngineAdapter):
             issues.append("vllm.served_name is empty")
         if model.resolved_deployment == "conda" and not model.vllm.conda_env:
             issues.append("vllm.conda_env is empty (required for conda deployment)")
+        if model.resolved_deployment == "docker":
+            issues.append("vllm docker start not yet supported — use deployment: conda")
         if model.vllm.port <= 0:
             issues.append(f"Invalid vllm.port: {model.vllm.port}")
         if not (0 < model.vllm.gpu_memory_utilization <= 1):
@@ -49,9 +51,17 @@ class VLLMAdapter(EngineAdapter):
         return issues
 
     def start(self, model: ModelConfig) -> dict:
-        """Start vllm via ProcessManager delegation."""
+        """Start vllm, dispatching by deployment: docker → not-implemented error, conda → PM.
+
+        D2: docker start is scaffolded (error + log.warning) but not implemented;
+        validate_config rejects deployment:docker to prevent the trap.
+        """
         if self._proc is None:
             raise RuntimeError("ProcessManager not set — call inject ._proc on the adapter instance first")
+        if model.resolved_deployment == "docker":
+            log.warning("vllm docker start not implemented for %s — set deployment: conda", model.name)
+            return {"status": "error",
+                    "message": "vllm docker start not implemented — set deployment: conda"}
         cfg = getattr(model, 'vllm')
         return self._proc.start_vllm(cfg)
 

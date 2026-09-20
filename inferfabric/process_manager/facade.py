@@ -24,6 +24,7 @@ from inferfabric.process_manager.comfyui import ComfyUIProcessManager
 from inferfabric.process_manager.tts import TTSProcessManager
 from inferfabric.process_manager.asr import ASRProcessManager
 from inferfabric.process_manager.ollama_cpp import OllamaCppProcessManager
+from inferfabric.process_manager.ninfer import NInferProcessManager
 
 log = logging.getLogger("inferfabric")
 
@@ -44,6 +45,7 @@ class ProcessManager(BaseProcessManager):
         self._tts = TTSProcessManager(state, log_dir)
         self._asr = ASRProcessManager(state, log_dir)
         self._ollama = OllamaCppProcessManager(state, log_dir)
+        self._ninfer = NInferProcessManager(state, log_dir)
 
     # ─── PID Tracking ────────────────────────────────────────────
 
@@ -83,6 +85,21 @@ class ProcessManager(BaseProcessManager):
         return c or None
 
     @property
+    def ninfer_pid(self) -> Optional[int]:
+        pid_str = self._state.get("ninfer_pid")
+        if pid_str:
+            try:
+                return int(pid_str)
+            except ValueError:
+                pass
+        return None
+
+    @property
+    def ninfer_container(self) -> Optional[str]:
+        c = self._state.get("ninfer_container")
+        return c or None
+
+    @property
     def tts_pid(self) -> Optional[int]:
         pid_str = self._state.get("tts_pid")
         if pid_str:
@@ -116,6 +133,12 @@ class ProcessManager(BaseProcessManager):
     def _set_sglang_container(self, name: Optional[str]):
         self._state.set("sglang_container", name or "")
 
+    def _set_ninfer_pid(self, pid: Optional[int]):
+        self._state.set("ninfer_pid", str(pid) if pid else "")
+
+    def _set_ninfer_container(self, name: Optional[str]):
+        self._state.set("ninfer_container", name or "")
+
     def _set_tts_pid(self, pid: Optional[int]):
         self._state.set("tts_pid", str(pid) if pid else "")
 
@@ -144,11 +167,17 @@ class ProcessManager(BaseProcessManager):
 
     # ─── SGLang ─────────────────────────────────────────────────
 
-    def start_sglang(self, cfg) -> dict:
-        return self._sglang.start_sglang(cfg)
+    def start_sglang(self, cfg, container_name: str) -> dict:
+        return self._sglang.start_sglang(cfg, container_name)
 
     def stop_sglang(self, port: Optional[int] = None, container_name: Optional[str] = None) -> dict:
-        return self._sglang.stop_sglang(port, container_name)
+        return self._sglang.stop_sglang(port=port, container_name=container_name)
+
+    def start_ninfer(self, cfg, container_name: str) -> dict:
+        return self._ninfer.start_ninfer(cfg, container_name)
+
+    def stop_ninfer(self, container_name: str) -> dict:
+        return self._ninfer.stop_ninfer(container_name)
 
     def is_sglang_alive(self, port: int) -> bool:
         return self._sglang.is_sglang_alive(port)
@@ -308,6 +337,8 @@ class ProcessManager(BaseProcessManager):
             self._set_tts_pid(None)
             self._set_asr_pid(None)
             self._set_sglang_container(None)
+            self._set_ninfer_pid(None)
+            self._set_ninfer_container(None)
 
         return results
 

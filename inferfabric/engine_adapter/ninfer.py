@@ -16,6 +16,8 @@ log = logging.getLogger("inferfabric.ninfer_adapter")
 
 
 class NInferAdapter(EngineAdapter):
+    def __init__(self, process_manager=None):
+        self._proc = process_manager
 
     @property
     def engine_type(self) -> str:
@@ -61,73 +63,25 @@ class NInferAdapter(EngineAdapter):
         return issues
 
     def start(self, model: ModelConfig) -> dict:
-        import logging
-        import subprocess
-        import time
-        log = logging.getLogger("inferfabric")
+        """Start NInfer via ProcessManager delegation (D1).
+
+        container_name threaded from ModelConfig.container_name (single source).
+        """
+        if self._proc is None:
+            raise RuntimeError("ProcessManager not set")
         cfg = model.ninfer
         if not cfg:
             return {"status": "error", "message": "No ninfer config"}
-
-        container = cfg.container_name or f"ninfer-{cfg.port}"
-        subprocess.run(["docker", "stop", container], timeout=10,
-                       capture_output=True, check=False)
-        time.sleep(2)
-
-        weight_path = Path(cfg.weight_path).expanduser()
-        weight_dir = str(weight_path.parent)
-
-        cmd = [
-            "docker", "run", "--gpus", "all", "--rm",
-            "-v", f"{weight_dir}:/workspace",
-            "-p", f"{cfg.port}:8080",
-            "--name", container,
-            "-e", "NVIDIA_DISABLE_REQUIRE=1",
-            cfg.docker_image,
-            "ninfer-serve", weight_path.name,
-            "--model-id", cfg.model_id,
-            "--host", "0.0.0.0", "--port", "8080",
-            "--max-concurrency", str(cfg.max_concurrency),
-            "--max-context", str(cfg.max_context),
-            "--kv-capacity", "auto" if cfg.kv_capacity == 0 else str(cfg.kv_capacity),
-            "--default-max-tokens", str(cfg.default_max_tokens),
-            "--pending-timeout-ms", str(cfg.pending_timeout_ms),
-            "--kv-dtype", cfg.kv_dtype,
-            "--prefill-chunk", str(cfg.prefill_chunk),
-        ]
-        if cfg.enable_mtp:
-            cmd.extend(["--spec", "mtp", "--draft-tokens", str(cfg.draft_tokens)])
-        if cfg.enable_lm_head_draft:
-            cmd.append("--lm-head-draft")
-
-        log.info("Starting NInfer: %s", " ".join(cmd))
-        log_file = Path(cfg.log_file or f"/tmp/ninfer-{cfg.port}.log")
-        log_file.write_text("")
-
-        try:
-            proc = subprocess.Popen(
-                cmd, stdout=log_file.open("a"),
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-        except Exception as e:
-            log.error("Failed to start NInfer: %s", e)
-            return {"status": "error", "message": f"Popen failed: {e}"}
-
-        from inferfabric.health import wait_http
-        timeout = cfg.startup_timeout or 120
-        healthy = wait_http(f"http://localhost:{cfg.port}/v1/models",
-                           timeout=timeout)
-        if healthy:
-            return {"status": "healthy", "port": cfg.port, "pid": proc.pid}
-        return {"status": "timeout",
-                "message": f"NInfer didn't become healthy within {timeout}s"}
+        return self._proc.start_ninfer(cfg, model.container_name)
 
     def stop(self, model: ModelConfig) -> dict:
+        """Stop NInfer via ProcessManager delegation (migrated off base helper, D1)."""
+        if self._proc is None:
+            raise RuntimeError("ProcessManager not set")
         cfg = model.ninfer
         if not cfg:
             return {"status": "error", "message": "No ninfer config"}
-        return self._stop_docker_container(model)
+        return self._proc.stop_ninfer(model.container_name)
 
     def is_alive(self, model: ModelConfig) -> bool:
         return self.check_health(model) == "✅"

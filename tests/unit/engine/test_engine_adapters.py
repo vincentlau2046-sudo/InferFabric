@@ -220,6 +220,64 @@ class TestVLLMAdapterStopDispatch:
         assert not any("conda_env" in i for i in issues), f"docker 部署应跳过 conda_env: {issues}"
 
 
+class TestVLLMAdapterStartDispatch:
+    """VLLMAdapter.start 按 resolved_deployment 分派（Task 6，D2，镜像 stop:58-65）。"""
+
+    def _make_model(self, deployment="", **vllm_overrides):
+        from inferfabric.config import ModelConfig, VLLMConfig
+        defaults = dict(model_dir="/m", served_name="t", conda_env="vllm",
+                        port=8000, max_model_len=4096, gpu_memory_utilization=0.9)
+        defaults.update(vllm_overrides)
+        return ModelConfig(
+            name="t", description="d", type="vllm", deployment=deployment,
+            gpu_role="exclusive", vllm=VLLMConfig(**defaults),
+        )
+
+    def test_start_conda_calls_start_vllm(self):
+        """conda 部署：start 调 PM.start_vllm（现有路径不动）。"""
+        from inferfabric.engine_adapter.vllm import VLLMAdapter
+        adapter = VLLMAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        model = self._make_model(deployment="")  # 推导 conda
+        assert model.resolved_deployment == "conda"
+        adapter.start(model)
+        pm.start_vllm.assert_called_once()
+
+    def test_start_docker_returns_error(self, caplog):
+        """docker 部署：start 返回 error + log.warning（D2 脚手架，未实现）。"""
+        import logging
+        from inferfabric.engine_adapter.vllm import VLLMAdapter
+        adapter = VLLMAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        model = self._make_model(deployment="docker", conda_env="")
+        assert model.resolved_deployment == "docker"
+        with caplog.at_level(logging.WARNING, logger="inferfabric.vllm_adapter"):
+            result = adapter.start(model)
+        assert result["status"] == "error"
+        assert "docker" in result["message"].lower()
+        pm.start_vllm.assert_not_called()
+
+    def test_start_no_proc_raises(self):
+        """无 PM：start 抛 RuntimeError（和 stop 一致）。"""
+        from inferfabric.engine_adapter.vllm import VLLMAdapter
+        import pytest
+        adapter = VLLMAdapter()
+        model = self._make_model()
+        with pytest.raises(RuntimeError):
+            adapter.start(model)
+
+    def test_validate_rejects_docker_deployment(self):
+        """validate_config 拦截 deployment:docker（D2，防止 start 硬失败陷阱）。"""
+        from inferfabric.engine_adapter.vllm import VLLMAdapter
+        adapter = VLLMAdapter()
+        model = self._make_model(deployment="docker", conda_env="")
+        issues = adapter.validate_config(model)
+        assert any("docker" in i.lower() and "conda" in i.lower() for i in issues), \
+            f"validate 应拦截 vllm docker: {issues}"
+
+
 class TestOllamaCppAdapter:
     """Ollama-CPP 适配器"""
 
@@ -302,47 +360,39 @@ class TestSGLangAdapter:
 
 
 class TestNInferAdapterStopContainerName:
-    """NInferAdapter.stop 必须用 model.container_name（统一 property），不再内联重推（Task 3.3）。"""
+    """NInferAdapter.stop 委托 PM.stop_ninfer(model.container_name)（Task 4，D1）。"""
 
-    def _stop_and_capture(self, monkeypatch, ninfer_cfg):
-        """Run NInferAdapter.stop, capture the docker stop command, return it."""
-        import subprocess
-        from inferfabric.config import ModelConfig
+    def test_stop_delegates_stop_ninfer_with_explicit_name(self):
         from inferfabric.engine_adapter.ninfer import NInferAdapter
-
-        model = ModelConfig(name="t", description="d", type="ninfer", ninfer=ninfer_cfg)
+        from inferfabric.config import ModelConfig, NInferConfig
         adapter = NInferAdapter()
-        calls = []
-
-        def fake_run(args, **kwargs):
-            calls.append(args)
-            return MagicMock(returncode=0, stderr=b"")
-
-        # stop() 内部局部 import subprocess（绑定 sys.modules 同一模块对象），
-        # 因此 patch 模块级 subprocess.run 对 stop() 可见。
-        monkeypatch.setattr(subprocess, "run", fake_run)
-        result = adapter.stop(model)
-        assert result["status"] == "ok", f"expected ok, got {result}"
-        assert len(calls) == 1, f"expected one docker stop call, got {calls}"
-        return calls[0], model
-
-    def test_stop_uses_explicit_container_name(self, monkeypatch):
-        """显式 container_name：stop 传该名给 docker stop（来自统一 property）。"""
-        from inferfabric.config import NInferConfig
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
         cfg = NInferConfig(port=8007, container_name="iff-ninfer-qwen38")
-        cmd, model = self._stop_and_capture(monkeypatch, cfg)
-        assert model.container_name == "iff-ninfer-qwen38"  # property returns explicit
-        assert "docker" in cmd and "stop" in cmd
-        assert "iff-ninfer-qwen38" in cmd, f"expected iff-ninfer-qwen38 in {cmd}"
+        model = ModelConfig(name="t", description="d", type="ninfer", ninfer=cfg)
+        adapter.stop(model)
+        pm.stop_ninfer.assert_called_once_with("iff-ninfer-qwen38")
 
-    def test_stop_uses_derived_fallback_container_name(self, monkeypatch):
-        """无显式 container_name：stop 传推导名 ninfer-{port}（来自统一 property）。"""
-        from inferfabric.config import NInferConfig
-        cfg = NInferConfig(port=8007, container_name="")  # 空 → 推导 ninfer-8007
-        cmd, model = self._stop_and_capture(monkeypatch, cfg)
-        assert model.container_name == "ninfer-8007"  # property derives fallback
-        assert "docker" in cmd and "stop" in cmd
-        assert "ninfer-8007" in cmd, f"expected ninfer-8007 in {cmd}"
+    def test_stop_delegates_stop_ninfer_with_derived_name(self):
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        from inferfabric.config import ModelConfig, NInferConfig
+        adapter = NInferAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        cfg = NInferConfig(port=8007, container_name="")
+        model = ModelConfig(name="t", description="d", type="ninfer", ninfer=cfg)
+        adapter.stop(model)
+        pm.stop_ninfer.assert_called_once_with("ninfer-8007")
+
+    def test_stop_no_proc_raises(self):
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        from inferfabric.config import ModelConfig, NInferConfig
+        import pytest
+        adapter = NInferAdapter()
+        cfg = NInferConfig(port=8007)
+        model = ModelConfig(name="t", description="d", type="ninfer", ninfer=cfg)
+        with pytest.raises(RuntimeError):
+            adapter.stop(model)
 
 
 class TestStopDockerContainerHelper:
@@ -479,3 +529,85 @@ class TestOllamaAdapter:
         cfg = ModelConfig(name="test", description="test", type="ollama", gpu_role="exclusive")
         result = adapter.sleep(cfg)
         assert "error" in result.get("status", "") or "not supported" in result.get("message", "").lower()
+
+
+class TestNInferAdapterStartContainerName:
+    """NInferAdapter.start 委托 PM.start_ninfer(cfg, model.container_name)（Task 4，D1）。"""
+
+    def _make_model(self, container_name="", port=8007):
+        from inferfabric.config import ModelConfig, NInferConfig
+        cfg = NInferConfig(
+            port=port, container_name=container_name,
+            weight_path="/w/model.bin", docker_image="ninfer:latest",
+            model_id="m1", max_concurrency=8, max_context=615000,
+            kv_capacity=0, default_max_tokens=8192, pending_timeout_ms=300000,
+            kv_dtype="nvfp4", prefill_chunk=8192,
+        )
+        return ModelConfig(name="t", description="d", type="ninfer", ninfer=cfg)
+
+    def test_start_delegates_start_ninfer_with_container_name(self):
+        """start 调 PM.start_ninfer(cfg, model.container_name)，container_name 来自 property。"""
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        adapter = NInferAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        model = self._make_model(container_name="iff-ninfer-qwen38")
+        assert model.container_name == "iff-ninfer-qwen38"  # property
+        adapter.start(model)
+        pm.start_ninfer.assert_called_once()
+        # 第二个位置参 = container_name（来自 property）
+        args = pm.start_ninfer.call_args
+        assert args[0][1] == "iff-ninfer-qwen38" or args.kwargs.get("container_name") == "iff-ninfer-qwen38"
+
+    def test_start_uses_derived_container_name_when_empty(self):
+        """无显式 container_name：start 传推导名 ninfer-{port}（来自 property，不重推）。"""
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        adapter = NInferAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        model = self._make_model(container_name="", port=8007)
+        assert model.container_name == "ninfer-8007"  # property derives
+        adapter.start(model)
+        args = pm.start_ninfer.call_args
+        assert args[0][1] == "ninfer-8007" or args.kwargs.get("container_name") == "ninfer-8007"
+
+    def test_start_no_proc_raises(self):
+        """无 PM：start 抛 RuntimeError（和 stop 一致）。"""
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        adapter = NInferAdapter()
+        import pytest
+        model = self._make_model()
+        with pytest.raises(RuntimeError):
+            adapter.start(model)
+
+
+class TestSGLangAdapterStartContainerName:
+    """SGLangAdapter.start 委托 start_sglang(cfg, model.container_name)（Task 5）。"""
+
+    def _make_model(self, served_name="foo", port=8100):
+        from inferfabric.config import ModelConfig, SGLangConfig
+        cfg = SGLangConfig(model_dir="/m", served_name=served_name, port=port,
+                          mem_fraction=0.9, context_length=4096)
+        return ModelConfig(name="t", description="d", type="sglang", sglang=cfg)
+
+    def test_start_delegates_with_container_name(self):
+        from inferfabric.engine_adapter.sglang import SGLangAdapter
+        adapter = SGLangAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        model = self._make_model(served_name="foo")
+        assert model.container_name == "sglang-foo"  # property
+        adapter.start(model)
+        args = pm.start_sglang.call_args
+        assert args[0][1] == "sglang-foo" or args.kwargs.get("container_name") == "sglang-foo"
+
+    def test_build_docker_cmd_uses_container_name_param(self):
+        """build_docker_cmd(container_name) 用参数做 --name，不硬编码 sglang-{served_name}。"""
+        from inferfabric.config import SGLangConfig
+        cfg = SGLangConfig(model_dir="/m", served_name="foo", port=8100,
+                          mem_fraction=0.9, context_length=4096)
+        cmd = cfg.build_docker_cmd("custom-container-name")
+        assert "--name" in cmd
+        idx = cmd.index("--name")
+        assert cmd[idx + 1] == "custom-container-name", \
+            f"build_docker_cmd 应用 container_name 参数: {cmd[idx:idx+2]}"

@@ -527,6 +527,11 @@ class TestStartSGLangContainerName:
             return MagicMock(pid=555, poll=lambda: None, returncode=None)
 
         monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        # sglang.py:63 调 os.getpgid(proc.pid) — fake pid 555 不存在会抛
+        # ProcessLookupError，必须 patch
+        monkeypatch.setattr("inferfabric.process_manager.sglang.os.getpgid", lambda pid: 555)
+        monkeypatch.setattr("inferfabric.process_manager.sglang.os.environ", {"PATH": "/x"})
+        monkeypatch.setattr("inferfabric.process_manager.sglang.time.sleep", lambda *a: None)
         monkeypatch.setattr("inferfabric.process_manager.sglang.check_http_status", lambda *a, **k: "✅")
 
         pm.start_sglang(cfg, container_name="sglang-foo")
