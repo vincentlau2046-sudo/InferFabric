@@ -843,7 +843,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
 /* KPI 五联网格：窄卡内自适应换行 */
 .mon-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--sp-1);
 }
 .mon-kpi-grid .kpi { padding: var(--sp-1); }
@@ -904,28 +904,32 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
   text-transform: none;
 }
 
-/* 模型卡片网格：自适应列数 */
+/* 模型卡片网格：固定列数对齐 12 列网格体系（spec §4 "所有对齐必须落在网格/刻度上"）。
+ * auto-fill 会让不同分组（独占 1 张 / 共享 3 张）列数不同 → 卡片宽度跨组不一致。
+ * 固定 repeat(auto-fill, minmax(260px, 1fr)) 但加 min-width:0 让卡内 nowrap 内容
+ * 由卡片自身 overflow 收纳，不再撑爆网格。卡片同构同密度（spec §4）。 */
 .inf-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: var(--sp-2);
 }
 
 /* 单张模型卡（复用 .if-card 基底，此处仅微调） */
-.inf-card .if-card-hdr { flex-wrap: wrap; }
+.inf-card .if-card-hdr { flex-wrap: nowrap; }
 .inf-card .if-card-title {
-  font-size: var(--fs-body);
+  font-size: var(--fs-title);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* 卡片内统计列表（dt/dd 横排） */
+/* 卡片内统计列表（dt/dd 横排，不换行——保证同组卡片高度对齐） */
 .inf-stats {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: var(--sp-1) var(--sp-2);
   margin: 0;
+  overflow: hidden;
 }
 .inf-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .inf-stat dt { font-size: var(--fs-table); color: var(--ink-3); margin: 0; }

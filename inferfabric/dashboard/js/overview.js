@@ -217,9 +217,11 @@
       '<div class="if-card-body ov-active-list" id="ovActiveBody">' + blocks + '</div>';
   }
 
-  /* ── 3. 24h 请求趋势 sparkline ──
-   * __TOKEN_STATS__ 按日聚合（{YYYY-MM-DD: {model: {requests}}}），取最近最多 7 个
-   * 日期桶绘制趋势线，caption 显示今日总量。Task 4 ECharts 接管真正小时级数据。 */
+  /* ── 3. 请求趋势 sparkline（近 7 天） ──
+   * __TOKEN_STATS__ 按日聚合（{YYYY-MM-DD: {model: {requests}}}），取最近 7 个
+   * 日期桶绘制趋势线，caption 显示今日总量。后端 __TOKEN_STATS__ 仅按日聚合，
+   * 无小时级数据源，故标题如实标"近 7 天"而非"24h"（spec §4.1 原述 24h，
+   * 数据源约束下以实际粒度为准）。 */
   function renderSpark() {
     var card = $('ovSpark24h');
     if (!card) return;
