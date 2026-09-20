@@ -151,6 +151,71 @@ class TestVLLMAdapter:
         assert adapter.get_pid_state_key() == "vllm_pid"
 
 
+class TestVLLMAdapterStopDispatch:
+    """VLLMAdapter.stop 按 resolved_deployment 分派 docker/conda（Task 3.1）。"""
+
+    def _make_model(self, deployment="", **vllm_overrides):
+        from inferfabric.config import ModelConfig, VLLMConfig
+        defaults = dict(model_dir="/m", served_name="t", conda_env="vllm",
+                        port=8000, max_model_len=4096, gpu_memory_utilization=0.9)
+        defaults.update(vllm_overrides)
+        return ModelConfig(
+            name="t", description="d", type="vllm", deployment=deployment,
+            gpu_role="exclusive", vllm=VLLMConfig(**defaults),
+        )
+
+    def test_vllm_adapter_stop_conda_calls_stop_vllm(self):
+        """conda 部署的 vllm：stop 调 ProcessManager.stop_vllm（进程组 kill）。"""
+        from inferfabric.engine_adapter.vllm import VLLMAdapter
+        adapter = VLLMAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        model = self._make_model(deployment="")  # 未声明 → 推导 conda
+        assert model.resolved_deployment == "conda"
+        adapter.stop(model)
+        pm.stop_vllm.assert_called_once()
+        pm.stop_sglang.assert_not_called()
+
+    def test_vllm_adapter_stop_docker_calls_docker_stop(self, monkeypatch):
+        """docker 部署的 vllm：stop 调 docker stop <container>，不走 stop_vllm。"""
+        import inferfabric.engine_adapter.vllm as vmod
+        from inferfabric.config import ModelConfig
+        adapter = vmod.VLLMAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        # R10: docker 部署不要求 conda_env
+        model = self._make_model(deployment="docker", conda_env="")
+        assert model.resolved_deployment == "docker"
+        # vllm 当前无嵌套 docker config → container_name 为 None；
+        # 模拟未来显式 container_name 声明（Task 1.2 扩展点），patch 类属性
+        monkeypatch.setattr(ModelConfig, "container_name", property(lambda self: "vllm-foo"))
+        docker_calls = []
+        def fake_run(*args, **kwargs):
+            docker_calls.append(args)
+            return MagicMock(returncode=0, stderr=b"")
+        monkeypatch.setattr(vmod.subprocess, "run", fake_run)
+        result = adapter.stop(model)
+        assert result["status"] == "ok", f"expected ok, got {result}"
+        assert any("docker" in str(c) and "stop" in str(c) for c in docker_calls), "应调 docker stop"
+        pm.stop_vllm.assert_not_called()
+
+    def test_validate_conda_requires_conda_env(self):
+        """R10：conda 部署（含默认推导）仍要求 conda_env 非空。"""
+        from inferfabric.engine_adapter.vllm import VLLMAdapter
+        adapter = VLLMAdapter()
+        model = self._make_model(deployment="", conda_env="")
+        issues = adapter.validate_config(model)
+        assert any("conda_env" in i for i in issues), f"conda 部署应要求 conda_env: {issues}"
+
+    def test_validate_docker_skips_conda_env(self):
+        """R10：docker 部署不要求 conda_env。"""
+        from inferfabric.engine_adapter.vllm import VLLMAdapter
+        adapter = VLLMAdapter()
+        model = self._make_model(deployment="docker", conda_env="")
+        issues = adapter.validate_config(model)
+        assert not any("conda_env" in i for i in issues), f"docker 部署应跳过 conda_env: {issues}"
+
+
 class TestOllamaCppAdapter:
     """Ollama-CPP 适配器"""
 
