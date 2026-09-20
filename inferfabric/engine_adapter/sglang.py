@@ -57,7 +57,7 @@ class SGLangAdapter(EngineAdapter):
         if self._proc is None:
             raise RuntimeError("ProcessManager not set")
         cfg = getattr(model, 'sglang')
-        return self._proc.stop_sglang(port=cfg.port)
+        return self._proc.stop_sglang(port=cfg.port, container_name=model.container_name)
 
     def is_alive(self, model: ModelConfig) -> bool:
         return self.check_health(model) == "✅"

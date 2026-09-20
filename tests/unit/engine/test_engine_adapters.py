@@ -277,6 +277,25 @@ class TestSGLangAdapter:
         result = adapter.sleep(cfg)
         assert "error" in result.get("status", "") or "not supported" in result.get("message", "").lower()
 
+    def test_stop_threads_unified_container_name(self):
+        """stop 必须显式传 model.container_name 给 stop_sglang（不依赖底层扫描）。"""
+        from inferfabric.config import ModelConfig, SGLangConfig
+        from inferfabric.engine_adapter.sglang import SGLangAdapter
+
+        served_name = "qwen3-test"
+        model = ModelConfig(
+            name="qwen3", description="test", type="sglang",
+            sglang=SGLangConfig(model_dir="/models/qwen3", served_name=served_name, port=8100),
+        )
+        pm = MagicMock()
+        adapter = SGLangAdapter(pm)
+        adapter.stop(model)
+        # container_name 必须等于统一属性值 f"sglang-{served_name}"
+        # （与 start_sglang / build_docker_cmd --name 逐字节一致）
+        pm.stop_sglang.assert_called_once_with(
+            port=8100, container_name=f"sglang-{served_name}"
+        )
+
 
 class TestOllamaAdapter:
     """Ollama 适配器"""
