@@ -512,9 +512,13 @@ class ModelLifecycle:
     # ── Stop Single Service ───────────────────────────────────────
 
     def stop_service(self, name: str) -> dict:
-        """Stop a single shared service. Other shared services remain.
+        """Stop a running service.
 
-        If this is the last shared service, auto-transition to idle.
+        - shared: stops just that service; if last shared, auto-transitions to idle.
+        - exclusive: delegates to _switch_to_idle (single GPU-bound service ⇒
+          stopping it = releasing the GPU). Returns status='stopped' (normalized
+          from _switch_to_idle's 'switched' so CLI/handler see stopped).
+        - gpu_role=none: routed to stop_independent (no GPU-state change).
         Verifies GPU memory is actually freed (catches orphaned processes).
         """
         if name not in self.state.get_active_services():

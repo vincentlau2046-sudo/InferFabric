@@ -996,7 +996,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             pm.mgr.state.record_manual_stop(target)
             self._send_json(result, 200)
         else:
-            # error（含 exclusive 守卫）——4xx，前端 doModelAction 显示 message
+            # genuine error（未运行/未知模型/锁占用/GPU 未释放等）——4xx，
+            # 前端 doModelAction 显示 message。注：exclusive 模型经 stop_service
+            # 转走 _switch_to_idle，成功返回 stopped → 200（不再走此分支）。
             self._send_json(result, 400)
 
     def _handle_reset(self, pm):
