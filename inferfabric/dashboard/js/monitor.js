@@ -450,11 +450,13 @@
       '</tr>';
     }
     el.innerHTML =
+      '<div class="cp-table-wrap">' +
       '<table class="if-table mon-tbl">' +
         '<thead><tr><th>时间</th><th>模型</th><th>状态</th>' +
         '<th>Tokens in/out</th><th>TTFT</th><th>耗时</th></tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
-      '</table>';
+      '</table>' +
+      '</div>';
     var tsEl = $('monLogTs');
     if (tsEl) tsEl.textContent = new Date().toLocaleTimeString('zh-CN',
       { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -490,10 +492,12 @@
       '</tr>';
     }
     el.innerHTML =
+      '<div class="cp-table-wrap">' +
       '<table class="if-table mon-tbl">' +
         '<thead><tr><th>时间</th><th>From</th><th>To</th><th>耗时</th><th>状态</th></tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
-      '</table>';
+      '</table>' +
+      '</div>';
   }
 
   /* ── 7. 费用概览卡 ── */
