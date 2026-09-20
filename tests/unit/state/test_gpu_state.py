@@ -8,7 +8,7 @@ unit/state/test_gpu_state.py — GPU 状态机测试
   - _detect_orphan_pids: 死进程清理、存活进程保留
   - reconcile: 空状态安全、返回 db/actual 服务列表
   - cleanup_dead_services: 空状态、健康服务保留
-  - force_reset: 返回 reset 状态、调用 stop_all + force_kill_all
+  - force_reset: 返回 reset 状态、调用 force_kill_all（Task 2.4 降级后 stop_all 已移至 manager 层）
 """
 
 import time
@@ -248,8 +248,9 @@ class TestGpuStateMachineForceReset:
         assert result["status"] == "reset"
         assert result["gpu_mode"] == GPUMode.IDLE
 
-    def test_force_reset_calls_proc_stop_all(self):
-        """force_reset 调用 proc.stop_all 和 force_kill_all。"""
+    def test_force_reset_kill_and_clear_only(self):
+        """Task 2.4 降级：gpu_state.force_reset 只做 kill+clear（force_kill_all），
+        不再调用 proc.stop_all（优雅停止已提升到 manager 层 _stop_all_active）。"""
         from inferfabric.state import GPUMode
         state = MagicMock()
         state.get_active_services.return_value = []
@@ -262,5 +263,5 @@ class TestGpuStateMachineForceReset:
             with patch("inferfabric.gpu_state.gpu_used_mb", return_value=100):
                 gs.force_reset()
 
-        proc.stop_all.assert_called_once()
         proc.force_kill_all.assert_called_once()
+        proc.stop_all.assert_not_called()

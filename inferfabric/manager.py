@@ -529,6 +529,15 @@ class ModelManager:
         return self._gpu_state.cleanup_dead_services()
 
     def force_reset(self) -> dict:
+        """Nuclear reset: graceful-stop all active services, then kill+clear.
+
+        Task 2.4（关闭 R6 窗口）：先经统一 metadata-driven 路径
+        （ModelLifecycle._stop_all_active，adapter 按 deployment 分派）优雅停止
+        所有 active 服务——包括 gpu_role=none 服务（ollama_cpp/asr）。
+        随后 GpuStateMachine.force_reset 降级为 kill+clear-only，
+        force_kill_all 作为 SIGKILL 兜底安全网。
+        """
+        self._lifecycle._stop_all_active(include_none=True)
         return self._gpu_state.force_reset()
 
     # ── Delegation: ModelLifecycle ────────────────────────────────

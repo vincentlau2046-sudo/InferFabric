@@ -421,3 +421,84 @@ def test_stop_service_shared_still_calls_stop_model_process(monkeypatch):
     monkeypatch.setattr(lc, "_stop_model_process", lambda m, n: called.__setitem__("stop_model_process", True))
     lc.stop_service("ovis-ocr2")
     assert called["stop_model_process"] and not called["switch_to_idle"]
+
+
+# ═══════════════════════════════════════════════════════════════
+# 5. _stop_all_active unified stop helper (Task 2.4)
+# ═══════════════════════════════════════════════════════════════
+
+
+def _make_lifecycle_mixed():
+    """Lifecycle with 2 GPU-bound services + 1 gpu_role=none service.
+
+    - "qwen2" (vllm, shared): needs_gpu=True
+    - "nomic-embed" (vllm, shared): needs_gpu=True
+    - "bge-m3" (ollama_cpp): needs_gpu=False, is_gpu_none=True
+    """
+    state = MagicMock()
+    state.get_active_services.return_value = ["qwen2", "nomic-embed", "bge-m3"]
+    state.gpu_mode = GPUMode.SHARED
+
+    def _mk(name, mtype, needs_gpu, gpu_none):
+        m = MagicMock()
+        m.name = name
+        m.type = mtype
+        m.needs_gpu = needs_gpu
+        m.is_gpu_none = gpu_none
+        m.gpu_role = "none" if gpu_none else "shared"
+        return m
+
+    models = {
+        "qwen2": _mk("qwen2", "vllm", needs_gpu=True, gpu_none=False),
+        "nomic-embed": _mk("nomic-embed", "vllm", needs_gpu=True, gpu_none=False),
+        "bge-m3": _mk("bge-m3", "ollama_cpp", needs_gpu=False, gpu_none=True),
+    }
+
+    return ModelLifecycle(state, MagicMock(), MagicMock(), MagicMock(), MagicMock(), models)
+
+
+class TestStopAllActive:
+    """Task 2.4: _stop_all_active — 统一「停所有 active 服务」入口（经 _stop_model_process）。"""
+
+    def test_stops_gpu_bound_services_by_default(self, monkeypatch):
+        """默认（include_none=False）只停 needs_gpu 服务。"""
+        lc = _make_lifecycle_mixed()
+        stopped = []
+        monkeypatch.setattr(lc, "_stop_model_process", lambda m, n: stopped.append(n))
+
+        lc._stop_all_active()
+
+        assert sorted(stopped) == ["nomic-embed", "qwen2"], \
+            f"默认应只停 GPU-bound 服务，got {stopped}"
+
+    def test_include_none_true_stops_none_services(self, monkeypatch):
+        """include_none=True 也停 gpu_role=none 服务（force_reset 用）。"""
+        lc = _make_lifecycle_mixed()
+        stopped = []
+        monkeypatch.setattr(lc, "_stop_model_process", lambda m, n: stopped.append(n))
+
+        lc._stop_all_active(include_none=True)
+
+        assert sorted(stopped) == ["bge-m3", "nomic-embed", "qwen2"], \
+            f"include_none=True 应停全部 active 服务，got {stopped}"
+
+    def test_explicit_services_list_overrides_state(self, monkeypatch):
+        """显式 services 列表优先（不读 state 的 active_services）。"""
+        lc = _make_lifecycle_mixed()
+        stopped = []
+        monkeypatch.setattr(lc, "_stop_model_process", lambda m, n: stopped.append(n))
+
+        lc._stop_all_active(services=["bge-m3"], include_none=True)
+
+        assert stopped == ["bge-m3"], \
+            f"应只停显式列表中的服务（state 里还有 qwen2/nomic-embed 不应被停），got {stopped}"
+
+    def test_unknown_service_defensively_skipped(self, monkeypatch):
+        """active_services 里不在 _models 的服务被防御性跳过。"""
+        lc = _make_lifecycle_mixed()
+        stopped = []
+        monkeypatch.setattr(lc, "_stop_model_process", lambda m, n: stopped.append(n))
+
+        lc._stop_all_active(services=["ghost-service"], include_none=True)
+
+        assert stopped == [], f"未知服务应被跳过，got {stopped}"

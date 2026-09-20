@@ -261,6 +261,21 @@ class ModelLifecycle:
         except KeyError:
             log.warning("Unknown model type %s — cannot stop", model.type)
 
+    def _stop_all_active(self, services: list[str] | None = None,
+                         include_none: bool = False) -> None:
+        """经 _stop_model_process 停所有 active 服务（adapter 按 deployment 分派）。
+
+        默认只停 needs_gpu 服务（_switch_to_idle/_deploy_model 用——
+        gpu_role=none 服务不影响 GPU，予以保留）。
+        include_none=True 时也停 gpu_role=none 服务（force_reset 用——
+        替代手动 ollama_cpp/asr 停止循环）。
+        """
+        svcs = services or list(self.state.get_active_services())
+        for svc_name in svcs:
+            m = self._models.get(svc_name)
+            if m and (m.needs_gpu or include_none):
+                self._stop_model_process(m, svc_name)
+
     # ── Switch (internal helpers) ─────────────────────────────────
 
     def _switch_exclusive(self, model: ModelConfig) -> dict:
@@ -401,11 +416,8 @@ class ModelLifecycle:
 
         try:
             # ── 经统一入口停止所有 GPU-bound 服务（adapter 按 deployment 分派）──
-            for svc_name in from_services:
-                m = self._models.get(svc_name)
-                if m and m.needs_gpu:
-                    self._stop_model_process(m, svc_name)
-                # gpu_role=none 服务保留，由 set_multi 过滤
+            # include_none=False（默认）：gpu_role=none 服务保留，由 set_multi 过滤
+            self._stop_all_active(services=from_services)
             # PID 清理 + GPU 兜底（stop_all 降级为薄方法，见 Task 2.3）
             self._proc.stop_all(active_services=from_services)
 

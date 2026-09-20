@@ -329,24 +329,16 @@ class GpuStateMachine:
     # ── Force Reset ───────────────────────────────────────────────
 
     def force_reset(self) -> dict:
-        """Nuclear reset: kill everything, verify GPU, clean state."""
+        """Nuclear reset — kill+clear only (Task 2.4 demoted contract).
+
+        优雅停止所有 active 服务已提升到 ModelManager.force_reset()，经
+        ModelLifecycle._stop_all_active(include_none=True) 统一 metadata-driven
+        路径完成（覆盖 vllm/tts/asr/sglang/ollama_cpp/comfyui 全部引擎）。
+        本方法只做 kill + clear：force_kill_all 作为 SIGKILL 兜底安全网，
+        清掉优雅停止漏掉的任何进程。
+        """
         log.info("Force reset")
 
-        # Collect ComfyUI config for proper stop
-        comfyui_cfg = None
-        for svc_name in self.state.get_active_services():
-            m = self._models.get(svc_name)
-            if m and m.is_comfyui:
-                comfyui_cfg = m.comfyui
-                break
-        self._proc.stop_all(comfyui_cfg=comfyui_cfg, active_services=self.state.get_active_services())
-        # Stop ollama_cpp (gpu_role=none) processes explicitly
-        for svc_name in self.state.get_active_services():
-            m = self._models.get(svc_name)
-            if m and m.is_ollama_cpp:
-                self._proc.stop_ollama_cpp(m.ollama_cpp.port)
-            elif m and m.is_asr_server:
-                self._proc.stop_asr_server(port=m.asr.port)
         self._proc.force_kill_all()
 
         # P1-6: Clear GPU CUDA state after force kill to eliminate fragmentation
