@@ -8,7 +8,7 @@ import logging
 import subprocess
 from typing import Optional
 
-from inferfabric.config import HEALTH_CHECK_TIMEOUT, SGLangConfig
+from inferfabric.config import HEALTH_CHECK_TIMEOUT
 from inferfabric.health import check_http_status, wait_gpu_free
 from inferfabric.process_manager.base import BaseProcessManager
 
@@ -43,15 +43,17 @@ class SGLangProcessManager(BaseProcessManager):
         self._state.set("sglang_container", name or "")
 
 
-    def start_sglang(self, cfg: SGLangConfig) -> dict:
-        """Start SGLang via Docker container."""
+    def start_sglang(self, cfg, container_name: str) -> dict:
+        """Start SGLang via Docker container.
+
+        container_name threaded from ModelConfig.container_name (single source).
+        """
         log_file = self._log_dir / f"sglang_{cfg.served_name}.log"
-        container_name = f"sglang-{cfg.served_name}"
 
         cmd = cfg.build_docker_cmd()
         env = os.environ.copy()
 
-        log.info("Starting SGLang container: %s", " ".join(cmd))
+        log.info("Starting SGLang container %s: %s", container_name, " ".join(cmd))
         with open(log_file, "w") as f:
             proc = subprocess.Popen(
                 cmd,
@@ -74,6 +76,8 @@ class SGLangProcessManager(BaseProcessManager):
                     err = log_file.read_text()[-2000:]
                 except Exception:
                     err = ""
+                self._set_sglang_pid(None)
+                self._set_sglang_container(None)
                 return {"status": "error", "message": "SGLang container exited", "log": str(log_file)}
             if check_http_status(f"http://localhost:{cfg.port}/health", timeout=2) == "✅":
                 return {"status": "healthy", "message": f"SGLang healthy on port {cfg.port}"}
@@ -81,11 +85,10 @@ class SGLangProcessManager(BaseProcessManager):
         return {"status": "timeout", "message": f"SGLang didn't become healthy within {health_timeout}s"}
 
     def stop_sglang(self, port: Optional[int] = None, container_name: Optional[str] = None) -> dict:
-        """Stop SGLang container. docker kill → docker rm.
+        """Stop SGLang container via `docker stop` (graceful SIGTERM→SIGKILL).
 
-        Uses docker kill (SIGKILL) instead of docker stop -t 10 because
-        SGLang model servers are stateless w.r.t. the container and don't
-        need graceful shutdown — saving ~10s on every release.
+        D3: unified to graceful docker stop (was docker kill). SGLang's
+        `docker run --rm` auto-removes on stop, so no separate docker rm.
         Falls back to scanning running containers if no name is tracked.
         """
         if not container_name:
@@ -110,11 +113,9 @@ class SGLangProcessManager(BaseProcessManager):
             except Exception as e:
                 log.debug("Docker scan fallback failed: %s", e)
         if container_name:
-            subprocess.run(["docker", "kill", container_name],
+            subprocess.run(["docker", "stop", container_name],
                           timeout=10, check=False, capture_output=True)
-            subprocess.run(["docker", "rm", "-f", container_name],
-                          timeout=10, check=False, capture_output=True)
-            log.info("SGLang container %s stopped", container_name)
+            log.info("SGLang container %s stopped (graceful)", container_name)
 
         if port:
             try:
