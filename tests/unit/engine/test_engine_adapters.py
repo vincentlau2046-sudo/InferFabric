@@ -302,47 +302,39 @@ class TestSGLangAdapter:
 
 
 class TestNInferAdapterStopContainerName:
-    """NInferAdapter.stop 必须用 model.container_name（统一 property），不再内联重推（Task 3.3）。"""
+    """NInferAdapter.stop 委托 PM.stop_ninfer(model.container_name)（Task 4，D1）。"""
 
-    def _stop_and_capture(self, monkeypatch, ninfer_cfg):
-        """Run NInferAdapter.stop, capture the docker stop command, return it."""
-        import subprocess
-        from inferfabric.config import ModelConfig
+    def test_stop_delegates_stop_ninfer_with_explicit_name(self):
         from inferfabric.engine_adapter.ninfer import NInferAdapter
-
-        model = ModelConfig(name="t", description="d", type="ninfer", ninfer=ninfer_cfg)
+        from inferfabric.config import ModelConfig, NInferConfig
         adapter = NInferAdapter()
-        calls = []
-
-        def fake_run(args, **kwargs):
-            calls.append(args)
-            return MagicMock(returncode=0, stderr=b"")
-
-        # stop() 内部局部 import subprocess（绑定 sys.modules 同一模块对象），
-        # 因此 patch 模块级 subprocess.run 对 stop() 可见。
-        monkeypatch.setattr(subprocess, "run", fake_run)
-        result = adapter.stop(model)
-        assert result["status"] == "ok", f"expected ok, got {result}"
-        assert len(calls) == 1, f"expected one docker stop call, got {calls}"
-        return calls[0], model
-
-    def test_stop_uses_explicit_container_name(self, monkeypatch):
-        """显式 container_name：stop 传该名给 docker stop（来自统一 property）。"""
-        from inferfabric.config import NInferConfig
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
         cfg = NInferConfig(port=8007, container_name="iff-ninfer-qwen38")
-        cmd, model = self._stop_and_capture(monkeypatch, cfg)
-        assert model.container_name == "iff-ninfer-qwen38"  # property returns explicit
-        assert "docker" in cmd and "stop" in cmd
-        assert "iff-ninfer-qwen38" in cmd, f"expected iff-ninfer-qwen38 in {cmd}"
+        model = ModelConfig(name="t", description="d", type="ninfer", ninfer=cfg)
+        adapter.stop(model)
+        pm.stop_ninfer.assert_called_once_with("iff-ninfer-qwen38")
 
-    def test_stop_uses_derived_fallback_container_name(self, monkeypatch):
-        """无显式 container_name：stop 传推导名 ninfer-{port}（来自统一 property）。"""
-        from inferfabric.config import NInferConfig
-        cfg = NInferConfig(port=8007, container_name="")  # 空 → 推导 ninfer-8007
-        cmd, model = self._stop_and_capture(monkeypatch, cfg)
-        assert model.container_name == "ninfer-8007"  # property derives fallback
-        assert "docker" in cmd and "stop" in cmd
-        assert "ninfer-8007" in cmd, f"expected ninfer-8007 in {cmd}"
+    def test_stop_delegates_stop_ninfer_with_derived_name(self):
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        from inferfabric.config import ModelConfig, NInferConfig
+        adapter = NInferAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        cfg = NInferConfig(port=8007, container_name="")
+        model = ModelConfig(name="t", description="d", type="ninfer", ninfer=cfg)
+        adapter.stop(model)
+        pm.stop_ninfer.assert_called_once_with("ninfer-8007")
+
+    def test_stop_no_proc_raises(self):
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        from inferfabric.config import ModelConfig, NInferConfig
+        import pytest
+        adapter = NInferAdapter()
+        cfg = NInferConfig(port=8007)
+        model = ModelConfig(name="t", description="d", type="ninfer", ninfer=cfg)
+        with pytest.raises(RuntimeError):
+            adapter.stop(model)
 
 
 class TestStopDockerContainerHelper:
@@ -479,3 +471,53 @@ class TestOllamaAdapter:
         cfg = ModelConfig(name="test", description="test", type="ollama", gpu_role="exclusive")
         result = adapter.sleep(cfg)
         assert "error" in result.get("status", "") or "not supported" in result.get("message", "").lower()
+
+
+class TestNInferAdapterStartContainerName:
+    """NInferAdapter.start 委托 PM.start_ninfer(cfg, model.container_name)（Task 4，D1）。"""
+
+    def _make_model(self, container_name="", port=8007):
+        from inferfabric.config import ModelConfig, NInferConfig
+        cfg = NInferConfig(
+            port=port, container_name=container_name,
+            weight_path="/w/model.bin", docker_image="ninfer:latest",
+            model_id="m1", max_concurrency=8, max_context=615000,
+            kv_capacity=0, default_max_tokens=8192, pending_timeout_ms=300000,
+            kv_dtype="nvfp4", prefill_chunk=8192,
+        )
+        return ModelConfig(name="t", description="d", type="ninfer", ninfer=cfg)
+
+    def test_start_delegates_start_ninfer_with_container_name(self):
+        """start 调 PM.start_ninfer(cfg, model.container_name)，container_name 来自 property。"""
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        adapter = NInferAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        model = self._make_model(container_name="iff-ninfer-qwen38")
+        assert model.container_name == "iff-ninfer-qwen38"  # property
+        adapter.start(model)
+        pm.start_ninfer.assert_called_once()
+        # 第二个位置参 = container_name（来自 property）
+        args = pm.start_ninfer.call_args
+        assert args[0][1] == "iff-ninfer-qwen38" or args.kwargs.get("container_name") == "iff-ninfer-qwen38"
+
+    def test_start_uses_derived_container_name_when_empty(self):
+        """无显式 container_name：start 传推导名 ninfer-{port}（来自 property，不重推）。"""
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        adapter = NInferAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        model = self._make_model(container_name="", port=8007)
+        assert model.container_name == "ninfer-8007"  # property derives
+        adapter.start(model)
+        args = pm.start_ninfer.call_args
+        assert args[0][1] == "ninfer-8007" or args.kwargs.get("container_name") == "ninfer-8007"
+
+    def test_start_no_proc_raises(self):
+        """无 PM：start 抛 RuntimeError（和 stop 一致）。"""
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        adapter = NInferAdapter()
+        import pytest
+        model = self._make_model()
+        with pytest.raises(RuntimeError):
+            adapter.start(model)
