@@ -71,9 +71,9 @@ class StateStore {
   /* ── API polling (single source of truth: /api/snapshot) ── */
   async fetchSnapshot(force = false) {
     try {
-      const headers = { cache: 'no-store' };
+      const headers = {};
       if (this._etag && !force) headers['If-None-Match'] = this._etag;
-      const res = await fetch('/api/snapshot', { headers });
+      const res = await fetch('/api/snapshot', { headers, cache: 'no-store' });
 
       if (res.status === 304) {
         // Control plane unchanged — keep last state, update sync meta only.
@@ -244,8 +244,8 @@ class StateStore {
   restoreTab() {
     try {
       const saved = localStorage.getItem('iff_active_tab');
-      // Only restore known tabs; skip 'tab-anomaly' (hidden by default)
-      if (saved && !saved.startsWith('tab-anomaly')) this.switchTab(saved);
+      // Restore last active tab (anomaly is a regular nav item in v2, no longer hidden)
+      if (saved) this.switchTab(saved);
     } catch(e) {}
   }
 

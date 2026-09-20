@@ -17,11 +17,9 @@
   --c-surface2-light: #f0f2f5;
   --c-border-light:   #e2e5ea;
 
-  /* 图表系列色（固定顺序、不循环；Task 4 跑 CVD 验证） */
-  --series-blue:   #58a6ff;
-  --series-amber:  #e3b341;
-  --series-green:  #3fb950;
-  --series-purple: #bc8cff;
+  /* 图表系列色（CVD 验证通过，Task 4 定稿；与 charts.js PALETTES 同源）。
+     仅 --series-1 用于 CSS sparkline（单系列）；多系列色由 charts.js 内联。 */
+  --series-1: #3b82f6;
 
   /* 间距刻度（8 / 16 / 24 网格） */
   --sp-0: 4px;
@@ -96,11 +94,8 @@
   --skeleton-base: #eef1f5;
   --skeleton-shine: #e2e6ec;
 
-  /* 图表系列色（light 组：同色相降阶；Task 4 定稿 + CVD 验证） */
-  --series-blue:   #0969da;
-  --series-amber:  #bf8700;
-  --series-green:  #1a7f37;
-  --series-purple: #8250df;
+  /* 图表系列色（light 组，CVD 验证通过；与 charts.js PALETTES 同源） */
+  --series-1: #2563eb;
 }
 
 /* ── 全局基础 ─────────────────────────────────────────────────── */
@@ -778,7 +773,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
 }
 .spark-line {
   fill: none;
-  stroke: var(--series-blue);
+  stroke: var(--series-1);
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;

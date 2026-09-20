@@ -324,7 +324,7 @@
     }
     var body = card.querySelector('.if-card-body');
     if (body && !_anomCache) UI.skeleton(body, 3);
-    fetch('/api/anomalies?limit=3', { headers: { cache: 'no-store' } })
+    fetch('/api/anomalies?limit=3', { cache: 'no-store' })
       .then(function (res) {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         return res.json();

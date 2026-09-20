@@ -82,7 +82,7 @@ InferFabric 是单 GPU 工作站的 AI 推理 OS。Dashboard 操作者是系统�
 
 1. GPU 显存/利用率时间曲线（1h / 24h / 7d 切换，dataZoom 回放）
 2. Token 用量：prompt/completion 堆叠条（小时 / 天 / 月）
-3. 延迟 P50 / P90 双线（单轴；P50 与 P90 同单位可同图，禁止双 y 轴）
+3. 延迟 P50 / P95 双线（单轴；P50 与 P95 同单位可同图，禁止双 y 轴。注：后端仅计算 p50/p95/p99，无 p90——API 冻结约束下用 p95 代替 spec 原述 p90）
 4. 五联 KPI：KV Cache / Seq Length / TPOT / TTFT / Throughput（保留现有指标语义与 tooltip 解释，换皮）
 5. 请求日志表 + 切换历史表（表格化，13px 紧凑行高）
 6. 费用概览卡（保留）

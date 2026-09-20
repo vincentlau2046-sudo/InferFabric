@@ -402,7 +402,7 @@
     UI.skeleton(el, 3);
     // GET only — no method specified = GET (read-only constraint)
     fetch('/api/engine_metrics?model=' + encodeURIComponent(model), {
-      headers: { cache: 'no-store' },
+      cache: 'no-store',
     })
       .then(function (res) {
         if (!res.ok) throw new Error('HTTP ' + res.status);
