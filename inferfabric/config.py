@@ -462,6 +462,21 @@ class ModelConfig:
         return self.name
 
     @property
+    def container_name(self) -> Optional[str]:
+        """Docker 容器名（docker 部署时用）；conda/process 返回 None。
+
+        统一 ninfer/sglang 两处散落的容器名推导，供 adapter.stop 复用。
+        """
+        if self.resolved_deployment != "docker":
+            return None
+        if self.ninfer:
+            return self.ninfer.container_name or f"ninfer-{self.ninfer.port}"
+        if self.sglang:
+            return f"sglang-{self.sglang.served_name}"
+        # 未来 docker+vllm 等：YAML 显式 container_name 字段（本计划不先加，留扩展点）
+        return None
+
+    @property
     def needs_gpu(self) -> bool:
         return self.gpu_role != "none"
 

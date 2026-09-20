@@ -19,6 +19,7 @@ import json
 import time
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 # Ensure inferfabric is importable
@@ -235,6 +236,27 @@ def test_deployment_wired_through_load_models():
         # 未写 deployment → 空字符串 → 推导 conda
         assert models["vllm-conda"].deployment == "", "未写 deployment 应为空（触发推导）"
         assert models["vllm-conda"].resolved_deployment == "conda", "vllm 默认推导 conda"
+
+
+def test_container_name_unified_accessor():
+    """docker 部署的模型都能经 ModelConfig.container_name 拿到容器名。"""
+    from inferfabric.config import ModelConfig
+    # ninfer：显式 container_name
+    m_ninfer = ModelConfig(name="t", description="", type="ninfer")
+    m_ninfer.ninfer = SimpleNamespace(container_name="iff-ninfer-qwen38", port=8007)
+    assert m_ninfer.container_name == "iff-ninfer-qwen38"
+    # ninfer：container_name 空 → 推导 ninfer-{port}
+    m_ninfer2 = ModelConfig(name="t2", description="", type="ninfer")
+    m_ninfer2.ninfer = SimpleNamespace(container_name="", port=8007)
+    assert m_ninfer2.container_name == "ninfer-8007"
+    # sglang：推导 sglang-{served_name}
+    m_sglang = ModelConfig(name="t3", description="", type="sglang")
+    m_sglang.sglang = SimpleNamespace(served_name="muse-glimmer-vl", port=8006)
+    assert m_sglang.container_name == "sglang-muse-glimmer-vl"
+    # conda 部署：无容器名
+    m_vllm = ModelConfig(name="t4", description="", type="vllm")
+    m_vllm.vllm = SimpleNamespace(port=8002)
+    assert m_vllm.container_name is None
 
 
 # ═══════════════════════════════════════════════════════════════
