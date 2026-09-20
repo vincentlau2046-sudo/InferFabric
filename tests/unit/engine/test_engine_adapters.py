@@ -521,3 +521,35 @@ class TestNInferAdapterStartContainerName:
         model = self._make_model()
         with pytest.raises(RuntimeError):
             adapter.start(model)
+
+
+class TestSGLangAdapterStartContainerName:
+    """SGLangAdapter.start 委托 start_sglang(cfg, model.container_name)（Task 5）。"""
+
+    def _make_model(self, served_name="foo", port=8100):
+        from inferfabric.config import ModelConfig, SGLangConfig
+        cfg = SGLangConfig(model_dir="/m", served_name=served_name, port=port,
+                          mem_fraction=0.9, context_length=4096)
+        return ModelConfig(name="t", description="d", type="sglang", sglang=cfg)
+
+    def test_start_delegates_with_container_name(self):
+        from inferfabric.engine_adapter.sglang import SGLangAdapter
+        adapter = SGLangAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        model = self._make_model(served_name="foo")
+        assert model.container_name == "sglang-foo"  # property
+        adapter.start(model)
+        args = pm.start_sglang.call_args
+        assert args[0][1] == "sglang-foo" or args.kwargs.get("container_name") == "sglang-foo"
+
+    def test_build_docker_cmd_uses_container_name_param(self):
+        """build_docker_cmd(container_name) 用参数做 --name，不硬编码 sglang-{served_name}。"""
+        from inferfabric.config import SGLangConfig
+        cfg = SGLangConfig(model_dir="/m", served_name="foo", port=8100,
+                          mem_fraction=0.9, context_length=4096)
+        cmd = cfg.build_docker_cmd("custom-container-name")
+        assert "--name" in cmd
+        idx = cmd.index("--name")
+        assert cmd[idx + 1] == "custom-container-name", \
+            f"build_docker_cmd 应用 container_name 参数: {cmd[idx:idx+2]}"

@@ -50,7 +50,7 @@ class SGLangProcessManager(BaseProcessManager):
         """
         log_file = self._log_dir / f"sglang_{cfg.served_name}.log"
 
-        cmd = cfg.build_docker_cmd()
+        cmd = cfg.build_docker_cmd(container_name)
         env = os.environ.copy()
 
         log.info("Starting SGLang container %s: %s", container_name, " ".join(cmd))
