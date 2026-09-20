@@ -1147,7 +1147,9 @@ class TestDashboard:
 class TestPackageStructure:
     def test_version_format(self):
         from inferfabric import __version__
-        assert __version__.startswith("5.")
+        # 语义化版本 MAJOR.MINOR.PATCH（v6.0.0 起跨大版本，不再锁 5. 前缀）
+        import re
+        assert re.match(r"^\d+\.\d+\.\d+", __version__), f"bad version: {__version__}"
 
     def test_public_exports(self):
         from inferfabric.manager import ModelManager
