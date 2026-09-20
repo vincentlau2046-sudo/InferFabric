@@ -68,25 +68,33 @@ class EngineAdapter(ABC):
 
         Reads the unified ModelConfig.container_name property (Task 1.2).
         Guards: missing name, docker not on PATH, timeout, non-zero exit.
+        Logs a warning on each failure branch (restores observability lost when
+        the inline _switch_to_idle ninfer docker stop was extracted here).
         """
         import subprocess
         import logging
         log = logging.getLogger("inferfabric")
         name = model.container_name
         if not name:
-            return {"status": "warning",
-                    "message": "docker deployment has no container_name — cannot stop"}
+            msg = "docker deployment has no container_name — cannot stop"
+            log.warning(msg)
+            return {"status": "warning", "message": msg}
         log.info("Stopping docker container: %s", name)
         try:
             result = subprocess.run(
                 ["docker", "stop", name],
                 timeout=timeout, capture_output=True, check=False)
         except subprocess.TimeoutExpired:
-            return {"status": "warning", "message": f"docker stop {name} timed out"}
+            msg = f"docker stop {name} timed out"
+            log.warning(msg)
+            return {"status": "warning", "message": msg}
         except FileNotFoundError:
-            return {"status": "warning", "message": "docker not found on PATH"}
+            msg = "docker not found on PATH"
+            log.warning(msg)
+            return {"status": "warning", "message": msg}
         if result.returncode == 0:
             return {"status": "ok", "message": f"Container {name} stopped"}
-        msg = result.stderr.decode()[:200] if result.stderr else ""
-        return {"status": "warning",
-                "message": f"docker stop exit {result.returncode}: {msg}"}
+        stderr_fragment = result.stderr.decode()[:200] if result.stderr else ""
+        msg = f"docker stop exit {result.returncode}: {stderr_fragment}"
+        log.warning(msg)
+        return {"status": "warning", "message": msg}

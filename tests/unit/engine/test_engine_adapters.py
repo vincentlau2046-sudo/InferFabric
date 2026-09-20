@@ -420,6 +420,47 @@ class TestStopDockerContainerHelper:
         assert result["status"] == "warning"
         assert "not found" in result["message"].lower() or "PATH" in result["message"]
 
+    def test_failure_branches_log_warning(self, monkeypatch, caplog):
+        """docker-stop 失败分支必须 log.warning（可观测性回归防护）。
+
+        Regression guard: 将 _switch_to_idle 内联 ninfer docker stop 抽取为
+        共享 helper（Task 2.1/3.4）时丢失了旧代码失败分支的 log.warning。
+        4 个失败分支（None 名 / 超时 / docker 缺失 / 非零退出）都要发 WARNING。
+        """
+        import subprocess
+        import logging
+        from types import SimpleNamespace
+        adapter = self._adapter()
+
+        def fake_nonzero(*a, **k):
+            return MagicMock(returncode=1, stderr=b"some error")
+
+        def fake_timeout(*a, **k):
+            raise subprocess.TimeoutExpired(cmd=["docker", "stop", "test-ctr"], timeout=30)
+
+        def fake_fnf(*a, **k):
+            raise FileNotFoundError("[Errno 2] No such file or directory: 'docker'")
+
+        # (model, fake_run, expected WARNING message substring)
+        cases = [
+            (MagicMock(container_name="test-ctr"), fake_nonzero, "docker stop exit"),
+            (MagicMock(container_name="test-ctr"), fake_timeout, "timed out"),
+            (MagicMock(container_name="test-ctr"), fake_fnf, "not found"),
+            (SimpleNamespace(container_name=None), lambda *a, **k: None, "container_name"),
+        ]
+
+        for model, fake_run, expected in cases:
+            caplog.records.clear()
+            monkeypatch.setattr(subprocess, "run", fake_run)
+            with caplog.at_level(logging.WARNING, logger="inferfabric"):
+                result = adapter._stop_docker_container(model)
+            assert result["status"] == "warning"
+            warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+            assert any(expected in r.message for r in warnings), (
+                f"expected a WARNING record containing {expected!r}; "
+                f"captured: {[r.message for r in caplog.records]}"
+            )
+
 
 class TestOllamaAdapter:
     """Ollama 适配器"""
