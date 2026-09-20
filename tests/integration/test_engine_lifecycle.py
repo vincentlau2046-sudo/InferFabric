@@ -121,6 +121,15 @@ class TestIFFDB:
         iffdb.MANUAL_STOP_TTL = -1
         assert iffdb.is_manually_stopped("m") is False
 
+    def test_manual_stop_ttl_default_60s(self, iffdb):
+        """Default manual-stop cooldown is 60s — after stop/reset, auto-switch
+        is blocked for 60s then unblocked (was 600s; shortened so EDGE_AUTO_SWITCH
+        recovers promptly). IFFDB holds the load-bearing value (is_manually_stopped
+        reads it in SQL); StateDB mirrors it for alignment."""
+        from inferfabric.state import StateDB
+        assert iffdb.MANUAL_STOP_TTL == 60.0
+        assert StateDB.MANUAL_STOP_TTL == 60
+
     def test_log_crud(self, iffdb):
         e = {
             "req_id": "r1", "key_name": "k1", "model": "m1",

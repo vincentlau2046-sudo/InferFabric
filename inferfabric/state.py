@@ -138,7 +138,7 @@ class StateDB:
 
     # ─── Manual Stop Protection (delegated to IFFDB table) ──────
 
-    MANUAL_STOP_TTL = 600  # 10 min
+    MANUAL_STOP_TTL = 60  # 60s — auto-switch unblock cooldown after manual stop/reset
 
     def record_manual_stop(self, name: str):
         """Record that user manually stopped a model (blocks auto-switch)."""

@@ -300,7 +300,7 @@ class IFFDB:
 
     # ── State: manual stops (v5.2: table-backed) ──────────────
 
-    MANUAL_STOP_TTL: float = 600.0  # 10 min (align with StateDB)
+    MANUAL_STOP_TTL: float = 60.0  # 60s — auto-switch unblock cooldown (align with StateDB)
 
     def record_manual_stop(self, name: str):
         import time
