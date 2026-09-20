@@ -528,8 +528,20 @@ class ModelLifecycle:
         if model.is_gpu_none:
             return self.stop_independent(name)
 
+        # exclusive 模型：单 GPU 上停它 = 释放整个 GPU → 转 idle。
+        # active_services 在 exclusive 下恰为该模型，转 idle 等价停它。
+        # 返回值归一为 stopped（CLI cli.py:147 / handler _handle_stop 依赖）。
         if self.state.gpu_mode == GPUMode.EXCLUSIVE:
-            return {"status": "error", "message": "Cannot stop individual service in exclusive mode. Use 'switch idle'."}
+            result = self._switch_to_idle()
+            if result.get("status") == "switched":
+                return {
+                    "status": "stopped",
+                    "model": name,
+                    "gpu_mode": GPUMode.IDLE,
+                    "stopped": result.get("stopped", [name]),
+                    "elapsed_sec": result.get("elapsed_sec"),
+                }
+            return result  # error 透传
 
         # Stop the specific service (pass port for port-based cleanup)
         self._stop_model_process(model, name)

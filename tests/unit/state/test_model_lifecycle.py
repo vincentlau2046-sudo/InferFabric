@@ -103,6 +103,80 @@ def _make_shared_lifecycle():
     return ModelLifecycle(state, proc, health, lock, gpu_state, models)
 
 
+def _make_lifecycle_with_active_exclusive(name):
+    """Lifecycle whose only active service is an exclusive GPU-bound model."""
+    state = MagicMock()
+    state.get_active_services.return_value = [name]
+    state.get_sleep_state.return_value = None
+    state.get_all_sleep_states.return_value = {}
+    state.gpu_mode = GPUMode.EXCLUSIVE
+
+    proc = MagicMock()
+    health = MagicMock()
+    lock = MagicMock()
+    gpu_state = MagicMock()
+    gpu_state._get_current_vram_pct.return_value = 0
+
+    model = MagicMock()
+    model.name = name
+    model.type = "vllm"
+    model.is_vllm = True
+    model.is_exclusive = True
+    model.is_gpu_none = False
+    model.is_sglang = False
+    model.is_comfyui = False
+    model.is_ninfer = False
+    model.is_ollama_cpp = False
+    model.is_tts_server = False
+    model.is_asr_server = False
+    model.needs_gpu = True
+    model.gpu_role = "exclusive"
+    model.peak_vram_mb = 0
+    model.typical_vram_pct = 0
+    model.vllm.port = 8100
+
+    models = {name: model}
+
+    return ModelLifecycle(state, proc, health, lock, gpu_state, models)
+
+
+def _make_lifecycle_with_active_shared(name):
+    """Lifecycle whose only active service is a shared GPU-bound model."""
+    state = MagicMock()
+    state.get_active_services.return_value = [name]
+    state.get_sleep_state.return_value = None
+    state.get_all_sleep_states.return_value = {}
+    state.gpu_mode = GPUMode.SHARED
+
+    proc = MagicMock()
+    health = MagicMock()
+    lock = MagicMock()
+    gpu_state = MagicMock()
+    gpu_state._get_current_vram_pct.return_value = 0
+
+    model = MagicMock()
+    model.name = name
+    model.type = "vllm"
+    model.is_vllm = True
+    model.is_exclusive = False
+    model.is_gpu_none = False
+    model.is_sglang = False
+    model.is_comfyui = False
+    model.is_ninfer = False
+    model.is_ollama_cpp = False
+    model.is_tts_server = False
+    model.is_asr_server = False
+    model.needs_gpu = False
+    model.gpu_role = "shared"
+    model.peak_vram_mb = 0
+    model.typical_vram_pct = 0
+    model.vllm.port = 8101
+
+    models = {name: model}
+
+    return ModelLifecycle(state, proc, health, lock, gpu_state, models)
+
+
 # ═══════════════════════════════════════════════════════════════
 # 1. _start_model dispatch
 # ═══════════════════════════════════════════════════════════════
@@ -314,3 +388,36 @@ def test_wake_shared_from_shared_gpu(mock_get_adapter):
     assert result["status"] != "error"
     # adapter.wake was called
     mock_adapter.wake.assert_called_once()
+
+
+# ═══════════════════════════════════════════════════════════════
+# 4. stop_service exclusive → _switch_to_idle delegation (Task 0.3)
+# ═══════════════════════════════════════════════════════════════
+
+
+def test_stop_service_exclusive_delegates_to_switch_idle(monkeypatch):
+    """B 方案：exclusive 模型 stop_service 应转走 _switch_to_idle，返回 status=stopped。"""
+    from inferfabric.model_lifecycle import ModelLifecycle
+    from inferfabric.state import GPUMode
+    lc = _make_lifecycle_with_active_exclusive("Qwen38-27B-TXT")  # 既有 helper 或新建
+    called = {}
+    def fake_switch_to_idle():
+        called["switch_to_idle"] = True
+        return {"status": "switched", "model": "idle", "stopped": ["Qwen38-27B-TXT"], "elapsed_sec": 1.2}
+    monkeypatch.setattr(lc, "_switch_to_idle", fake_switch_to_idle)
+
+    result = lc.stop_service("Qwen38-27B-TXT")
+    assert called.get("switch_to_idle") is True, "exclusive stop 应转走 _switch_to_idle"
+    assert result["status"] == "stopped", "返回值归一为 stopped（CLI/handler 依赖）"
+    assert result.get("gpu_mode") == "idle"
+    assert "Qwen38-27B-TXT" in result.get("stopped", [])
+
+
+def test_stop_service_shared_still_calls_stop_model_process(monkeypatch):
+    """B 方案不破坏 shared：shared 模型仍走 _stop_model_process，不转 idle。"""
+    lc = _make_lifecycle_with_active_shared("ovis-ocr2")
+    called = {"switch_to_idle": False, "stop_model_process": False}
+    monkeypatch.setattr(lc, "_switch_to_idle", lambda: called.__setitem__("switch_to_idle", True))
+    monkeypatch.setattr(lc, "_stop_model_process", lambda m, n: called.__setitem__("stop_model_process", True))
+    lc.stop_service("ovis-ocr2")
+    assert called["stop_model_process"] and not called["switch_to_idle"]
