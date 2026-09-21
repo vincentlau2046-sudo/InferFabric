@@ -367,6 +367,37 @@ A macOS-inspired sidebar dashboard for model management, monitoring, and chat te
 
 ---
 
+## 安装
+
+### 依赖
+
+InferFabric 是单文件 Python 应用，运行时依赖 `aiohttp` + `cachetools`（及 aiohttp 生态的传递依赖）。`requirements.txt` 已 pin 全部版本。
+
+```bash
+git clone https://github.com/vincentlau2046-sudo/InferFabric.git
+cd InferFabric
+pip install -r requirements.txt
+```
+
+> **本地开发（vendored 依赖）：** 仓库根目录的 `_deps/`（未提交到 git）是 vendored 依赖快照。若存在，`proxy_manager` 启动时会优先把它插到 `sys.path` 前面，**无需 pip install**。克隆获取不到 `_deps/`，请用上面的 `pip install -r requirements.txt`。
+
+### Python 与 GPU 环境
+
+- **Python 3.10+**
+- **vLLM 0.24**（不要升级——适配器针对此版本调优）
+- NVIDIA GPU + CUDA（推理引擎自身依赖，非 InferFabric 直接依赖）
+- 各引擎按需安装：vLLM / NInfer / SGLang / Ollama / ComfyUI 等
+
+### 启动
+
+```bash
+./iff status                                    # CLI（线程模式，stdlib http.server）
+python3 -m inferfabric.proxy.handler --async    # 生产异步引擎（aiohttp, :8999）
+# Dashboard: http://localhost:8999
+```
+
+---
+
 ## Quick Start
 
 ```bash

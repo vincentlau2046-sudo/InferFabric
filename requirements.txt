@@ -1,0 +1,24 @@
+# InferFabric runtime dependencies.
+#
+# 本地开发若存在 _deps/（vendored），proxy_manager 会优先把它插到 sys.path
+# 前面，无需 pip install。_deps/ 不在 git 中，新用户克隆后请运行：
+#
+#     pip install -r requirements.txt
+#
+# 版本与 _deps/ vendored 快照精确对齐（见 README "安装" 段）。
+#
+# 直接依赖（inferfabric 顶层 import 的第三方包）：
+aiohttp==3.14.3
+cachetools==7.1.8
+PyYAML==6.0.3
+#
+# 传递依赖（aiohttp 生态，pinned 以保证可复现）：
+aiosignal==1.4.0
+attrs==26.1.0
+aiohappyeyeballs==2.7.1
+frozenlist==1.8.0
+multidict==6.8.0
+yarl==1.24.5
+propcache==0.5.2
+idna==3.19
+typing_extensions==4.16.0
