@@ -146,6 +146,55 @@ class VLLMProcessManager(BaseProcessManager):
                 self.stop_vllm()
                 return {"status": "timeout", "message": f"vLLM didn't become healthy within {health_timeout}s"}
 
+    def start_vllm_docker(self, cfg: VLLMConfig, container_name: str) -> dict:
+        """Start vLLM via Docker container (deployment: docker).
+
+        Mirrors start_sglang / start_ninfer. container_name from
+        ModelConfig.container_name (single source). start_new_session →
+        PID == PGID, so the tracked vllm_pid is a valid os.killpg target
+        for gpu_state liveness checks (the `docker run` client stays alive
+        while the container runs, exits when it stops).
+        """
+        log_file = self._log_dir / f"vllm_{cfg.served_name}.log"
+
+        cmd = cfg.build_docker_cmd(container_name)
+        env = os.environ.copy()
+
+        log.info("Starting vLLM container %s: %s", container_name, " ".join(cmd[:8]) + "...")
+        with open(log_file, "w") as f:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=f,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                env=env,
+            )
+        pgid = proc.pid  # With start_new_session, PID == PGID
+        self._set_vllm_pid(pgid)
+        log.info("vLLM docker PID=%s PGID=%s container=%s", proc.pid, pgid, container_name)
+
+        health_timeout = cfg.startup_timeout if cfg.startup_timeout > 0 else HEALTH_CHECK_TIMEOUT
+        start = time.time()
+        while time.time() - start < health_timeout:
+            time.sleep(2)
+            if proc.poll() is not None:
+                try:
+                    err = log_file.read_text()[-2000:]
+                except Exception:
+                    err = ""
+                log.error("vLLM container exited (ret=%s): %s", proc.poll(), err[-500:])
+                self._set_vllm_pid(None)
+                return {"status": "error", "message": "vLLM container exited",
+                        "log": str(log_file)}
+            if check_http_status(f"http://localhost:{cfg.port}/health", timeout=2) == "✅":
+                return {"status": "healthy", "port": cfg.port, "pid": proc.pid}
+        # Health timeout → best-effort docker stop cleanup
+        subprocess.run(["docker", "stop", container_name], timeout=10,
+                       capture_output=True, check=False)
+        self._set_vllm_pid(None)
+        return {"status": "timeout",
+                "message": f"vLLM didn't become healthy within {health_timeout}s"}
+
     def stop_vllm(self, port: Optional[int] = None) -> dict:
         """Stop vLLM using process group kill. SIGTERM → wait → SIGKILL entire group.
 

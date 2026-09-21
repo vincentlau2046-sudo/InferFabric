@@ -43,7 +43,8 @@ class VLLMAdapter(EngineAdapter):
         if model.resolved_deployment == "conda" and not model.vllm.conda_env:
             issues.append("vllm.conda_env is empty (required for conda deployment)")
         if model.resolved_deployment == "docker":
-            issues.append("vllm docker start not yet supported — use deployment: conda")
+            if not model.vllm.docker_image:
+                issues.append("vllm.docker_image is empty (required for docker deployment)")
         if model.vllm.port <= 0:
             issues.append(f"Invalid vllm.port: {model.vllm.port}")
         if not (0 < model.vllm.gpu_memory_utilization <= 1):
@@ -51,18 +52,15 @@ class VLLMAdapter(EngineAdapter):
         return issues
 
     def start(self, model: ModelConfig) -> dict:
-        """Start vllm, dispatching by deployment: docker → not-implemented error, conda → PM.
+        """Start vllm, dispatching by deployment: docker → PM.start_vllm_docker, conda → PM.start_vllm.
 
-        D2: docker start is scaffolded (error + log.warning) but not implemented;
-        validate_config rejects deployment:docker to prevent the trap.
+        container_name threaded from ModelConfig.container_name (single source).
         """
         if self._proc is None:
             raise RuntimeError("ProcessManager not set — call inject ._proc on the adapter instance first")
-        if model.resolved_deployment == "docker":
-            log.warning("vllm docker start not implemented for %s — set deployment: conda", model.name)
-            return {"status": "error",
-                    "message": "vllm docker start not implemented — set deployment: conda"}
         cfg = getattr(model, 'vllm')
+        if model.resolved_deployment == "docker":
+            return self._proc.start_vllm_docker(cfg, model.container_name)
         return self._proc.start_vllm(cfg)
 
     def stop(self, model: ModelConfig) -> dict:
@@ -102,11 +100,20 @@ class VLLMAdapter(EngineAdapter):
         return self._proc.sleep_vllm(model.vllm.port)
 
     def wake(self, model: ModelConfig) -> dict:
-        """Resume sleeping vLLM process."""
+        """Resume sleeping vLLM process.
+
+        docker: stop the container (process-group killpg in wake_vllm doesn't
+        stop a container); lifecycle's wake_model sees killed_for_restart and
+        redeploys via _deploy_model → start_vllm_docker. conda: wake_vllm
+        (kill sleeping process group, caller restarts).
+        """
         if self._proc is None:
             return {"status": "error", "message": "No process manager set"}
         if not model.vllm:
             return {"status": "error", "message": "Missing vllm config"}
+        if model.resolved_deployment == "docker":
+            self._stop_docker_container(model)
+            return {"status": "killed_for_restart", "port": model.vllm.port, "elapsed_sec": 0}
         return self._proc.wake_vllm(model.vllm.port)
 
     def get_pid(self, model: ModelConfig) -> int | None:
