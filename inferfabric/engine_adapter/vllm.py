@@ -89,6 +89,8 @@ class VLLMAdapter(EngineAdapter):
         gauges, counters, histos = parse_prometheus_text(text)
         result = VllmMetricsCollector.compute(model.vllm.port, gauges, counters, histos, prefix="vllm:")
         result["sleep_state"] = 0
+        if model.vllm.max_num_seqs:
+            result["max_batch"] = model.vllm.max_num_seqs
         return result if result else {"sleep_state": 0}
 
     def sleep(self, model: ModelConfig) -> dict:

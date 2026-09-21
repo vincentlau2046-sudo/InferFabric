@@ -85,6 +85,8 @@ class SGLangAdapter(EngineAdapter):
             prefix = "vllm:"
         result = VllmMetricsCollector.compute(model.sglang.port, gauges, counters, histos, prefix=prefix)
         result["sleep_state"] = 0
+        if model.sglang.max_running_requests:
+            result["max_batch"] = model.sglang.max_running_requests
         return result if result else {"sleep_state": 0}
 
     def get_port(self, model: ModelConfig) -> int | None:

@@ -729,6 +729,84 @@ class TestNInferAdapterStartContainerName:
         assert adapter.get_pid_state_key() == "ninfer_pid"
 
 
+class TestNInferEngineMetricsRunningBatch:
+    """fetch_engine_metrics 的 Batch Size 必须是「当前在途并发请求数」(live running
+    batch, 0..max_concurrency)，不是累计完成数 (seq_count)。ninfer 日志 throughput 行
+    每 5s 打印 `running N`，取最近一条即当前在途数；max_batch 来自 cfg.max_concurrency。"""
+
+    def _make_model(self, log_file, max_concurrency=4):
+        from inferfabric.config import ModelConfig, NInferConfig
+        cfg = NInferConfig(
+            port=8007, container_name="iff-ninfer-qwen38",
+            weight_path="/w/m.bin", docker_image="ninfer:auto",
+            model_id="Qwen38-27B-TXT", max_concurrency=max_concurrency,
+            max_context=262144, kv_capacity=0, default_max_tokens=32000,
+            pending_timeout_ms=600000, kv_dtype="nvfp4", prefill_chunk=4096,
+            log_file=str(log_file),
+        )
+        return ModelConfig(name="Qwen38-27B-TXT", description="d",
+                           type="ninfer", ninfer=cfg)
+
+    def _log(self, tmp_path, lines):
+        p = tmp_path / "ninfer-test.log"
+        p.write_text("\n".join(lines) + "\n")
+        return p
+
+    DONE = ("2026-09-21 13:20:42.877  INFO  req#52 done | anthropic | stop string | "
+            "prompt 91,688 | output 907 | cache 28,079 (30.6%) | TTFT 16.0s | "
+            "total 20.9s | decode 184.6 tok/s")
+
+    def test_running_batch_is_live_count_not_cumulative(self, tmp_path):
+        """最近一条 throughput 行 running 2 → running_batch=2（非累计 seq_count=1）。"""
+        log = self._log(tmp_path, [
+            "2026-09-21 13:20:40.977  INFO  throughput | 5.0s | decode 107.8 tok/s (539 tok) | running 1 (decode-ready 1) | batch 1.00 | host 44.2% (2.2s)",
+            self.DONE,
+            "2026-09-21 13:23:05.977  INFO  throughput | 5.0s | prefill 1.31k tok/s (6,574 tok) | decode 151.0 tok/s (755 tok) | running 2 (prefill 1, decode-ready 1) | batch 1.95 | host 59.0% (2.9s)",
+        ])
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        model = self._make_model(log)
+        r = NInferAdapter().fetch_engine_metrics(model)
+        assert r.get("running_batch") == 2
+        assert r.get("max_batch") == 4
+        assert r.get("seq_count") == 1  # 累计完成数仍在，但 KPI 不再用它
+
+    def test_running_batch_idle_zero(self, tmp_path):
+        """最近 throughput 行 running 0（idle）→ running_batch=0。"""
+        log = self._log(tmp_path, [
+            "2026-09-21 13:20:40.977  INFO  throughput | 5.0s | decode 107.8 tok/s (539 tok) | running 1 | batch 1.00 | host 44.2% (2.2s)",
+            self.DONE,
+            "2026-09-21 13:22:25.977  INFO  throughput | 5.0s | decode 140.2 tok/s (701 tok) | running 0 | batch 1.00 | host 0.1% (4.49 ms)",
+        ])
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        model = self._make_model(log)
+        r = NInferAdapter().fetch_engine_metrics(model)
+        assert r.get("running_batch") == 0
+
+    def test_running_batch_absent_when_no_throughput_line(self, tmp_path):
+        """日志无 throughput 行 → running_batch 不设键（前端落 —）。"""
+        log = self._log(tmp_path, [self.DONE])
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        model = self._make_model(log)
+        r = NInferAdapter().fetch_engine_metrics(model)
+        assert "running_batch" not in r
+
+
+class TestVllmMetricsRunningBatch:
+    """VllmMetricsCollector.compute 映射 num_requests_running → running_batch
+    （vllm + sglang 共享 compute）。当前在途并发请求数，非累计。"""
+
+    def test_running_batch_from_num_requests_running(self):
+        from inferfabric.prometheus import VllmMetricsCollector
+        gauges = {"vllm:num_requests_running": 3.0}
+        result = VllmMetricsCollector.compute(8001, gauges, {}, {}, prefix="vllm:")
+        assert result.get("running_batch") == 3
+
+    def test_running_batch_absent_when_gauge_missing(self):
+        from inferfabric.prometheus import VllmMetricsCollector
+        result = VllmMetricsCollector.compute(8001, {}, {}, {}, prefix="vllm:")
+        assert "running_batch" not in result
+
+
 class TestSGLangAdapterStartContainerName:
     """SGLangAdapter.start 委托 start_sglang(cfg, model.container_name)（Task 5）。"""
 

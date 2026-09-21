@@ -105,6 +105,12 @@ class VllmMetricsCollector:
         if kv is not None:
             result["kv_cache_usage_perc"] = round(kv * 100, 1)
 
+        # Live running batch — 当前在途并发请求数（非累计 seq_count）。
+        # vllm:num_requests_running / sglang 同名 gauge；0..max_num_seqs。
+        running = gauges.get(prefix + "num_requests_running")
+        if running is not None:
+            result["running_batch"] = int(running)
+
         # TTFT
         ttft = histos.get(prefix + "time_to_first_token_seconds")
         if ttft and ttft["count"] > 0:

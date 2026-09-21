@@ -384,8 +384,9 @@
   }
 
   /* ── 4. 六联 KPI（2 行 × 3 列）──
-   * GET /api/engine_metrics?model=<active> → kv_cache_usage_perc / seq_count(batch) /
-   * seq_length / tpot_seconds.mean(→ms) / ttft_seconds.mean(→s) / throughput */
+   * GET /api/engine_metrics?model=<active> → kv_cache_usage_perc /
+   * running_batch(live 在途并发, 0..max_batch) / seq_length /
+   * tpot_seconds.mean(→ms) / ttft_seconds.mean(→s) / throughput */
   function kpiTile(label, val, tip) {
     return '<div class="kpi" title="' + escHtml(tip) + '">' +
       '<span class="kpi-label">' + escHtml(label) + '</span>' +
@@ -400,29 +401,32 @@
       el.innerHTML = '<div class="if-empty">引擎指标暂不可用</div>';
       return;
     }
-    // 休眠模型或无指标数据
+    // 休眠模型或无指标数据（running_batch 存在 = 引擎存活，即便 0 也不算休眠）
     if (data.sleep_state === 0 && data.kv_cache_usage_perc == null &&
         data.seq_length == null && data.throughput == null &&
-        data.ttft_seconds == null && data.tpot_seconds == null) {
+        data.ttft_seconds == null && data.tpot_seconds == null &&
+        data.running_batch == null) {
       el.innerHTML = '<div class="if-empty">模型休眠中，无实时指标 — 到推理 TAB 唤醒</div>';
       return;
     }
 
     var kv = data.kv_cache_usage_perc;
-    var batch = data.seq_count;
+    var batch = data.running_batch;        // live 在途并发请求数（非累计 seq_count）
+    var maxBatch = data.max_batch;         // 引擎上限 max_concurrency / max_num_seqs
     var seq = data.seq_length;
     var tpot = data.tpot_seconds;
     var ttft = data.ttft_seconds;
     var thr = data.throughput;
 
     // 单位统一：TPOT → ms（2 位小数）；TTFT → 秒 s（2 位小数）。
-    // 新增 Batch Size（seq_count，滑窗内并发请求数）置于第 2 位；6 指标 2 行 × 3 列。
+    // Batch Size = 当前在途并发请求数（live running batch，上限 max_batch），非累计完成数。
     el.innerHTML =
       '<div class="mon-kpi-grid">' +
         kpiTile('KV Cache', kv != null ? Number(kv).toFixed(1) + '%' : '—',
           'KV 缓存占用率（来自引擎 /metrics）') +
-        kpiTile('Batch Size', batch != null ? UI.fmtNum(batch) : '—',
-          '滑窗内并发请求数（batch size）') +
+        kpiTile('Batch Size',
+          batch != null ? (maxBatch ? batch + ' / ' + maxBatch : String(batch)) : '—',
+          '当前在途并发请求数（live running batch，非累计；上限 max_concurrency）') +
         kpiTile('Seq Length', seq != null ? UI.fmtNum(seq) : '—',
           '平均请求序列长度（prompt + generation tokens）') +
         kpiTile('TPOT', tpot && tpot.mean != null ? (tpot.mean * 1000).toFixed(2) + 'ms' : '—',
