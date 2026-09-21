@@ -77,11 +77,14 @@ class StateStore {
 
       if (res.status === 304) {
         // Control plane unchanged — keep last state, update sync meta only.
+        // lastOk = 最近一次成功响应（304 也算"在线"）；ts 仍是最近一次 200 数据时间。
+        // 两者分离：稳态下连续 304 不再触发"已断线"（C1 附带：store.js:353 误报）。
         this.set('api_error', null);
         this.set('sync_meta', {
           etag: this._etag,
           rev: (this._etag || '').slice(1, 9) || '',
           ts: this._lastTs,
+          lastOk: Date.now() / 1000,
           changed: false,
           stale: false,
         });
@@ -166,6 +169,7 @@ class StateStore {
         etag: this._etag,
         rev: (this._etag || '').slice(1, 9) || '',
         ts: snap.ts || this._lastTs,
+        lastOk: Date.now() / 1000,
         changed: true,
         stale: false,
       });
@@ -350,7 +354,9 @@ function updateSyncIndicator(meta) {
   if (!meta) return;
   const dot = document.getElementById('sidebarStatusDot');
   const txt = document.getElementById('sidebarSyncTxt');
-  const stale = meta.stale || (!meta.changed && ((Date.now() / 1000) - (meta.ts || 0) > 6));
+  // lastOk（最近一次成功响应 200/304）驱动"在线"判定；ts（最近一次 200 数据时间）仅用于显示。
+  // 稳态连续 304 时 lastOk 持续刷新 → 不误报"已断线"（C1 附带：store.js:353 误报）。
+  const stale = meta.stale || (!meta.changed && ((Date.now() / 1000) - (meta.lastOk || meta.ts || 0) > 6));
   if (dot) {
     dot.className = 'sidebar-status-dot ' + (stale ? 'err' : 'ok');
   }

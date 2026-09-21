@@ -16,6 +16,7 @@ import socket
 import logging
 import json
 import hmac
+import hashlib
 import ipaddress
 import http.server
 import socketserver
@@ -46,6 +47,80 @@ from inferfabric.token_stats import TokenStatsCollector
 from inferfabric.watchdog import ModelWatchdog
 
 log = logging.getLogger("inferfabric.proxy")
+
+# C2: 昂贵采集（mgr.status 健康探测 + metrics 24h 扫描）的 TTL 缓存窗口（秒）。
+# 窗口内 304 命中 / 200 都复用缓存 → 昂贵工作最多每 SNAPSHOT_EXP_TTL 秒跑一次，
+# 避免 3s 轮询把 100k 样本扫描 + 3×3s 健康探测打到与 chat 转发共享的 32 线程池上。
+SNAPSHOT_EXP_TTL = 15.0
+
+
+def _snapshot_etag(payload: dict) -> str:
+    """C1: snapshot etag = 全 payload 字段组内容哈希（排除 ts/rev/etag 易变元数据）。
+
+    覆盖 status/system/models/history/token_stats/request_log/metrics_24h/
+    local_models，任意一组变化即失效 etag → dashboard 重取，杜绝稳态冻结
+    （recent requests / 24h 指标 / GPU 温度被吞掉）。
+    """
+    content = {k: v for k, v in payload.items() if k not in ("ts", "rev", "etag")}
+    raw = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+class _ExpensiveCache:
+    """C2: 昂贵采集（mgr.status 健康探测 + metrics 24h 扫描）的 TTL 单飞缓存。
+
+    - TTL 内复用缓存 → 昂贵工作最多每 ttl 秒跑一次。
+    - 单飞 (single-flight)：同一时刻至多一个线程重算；慢重算（GPU 驱动挂起时
+      健康探测 3×3s）期间，并发调用方拿旧值而非排队 → 不会堆叠占满 32 线程池。
+    """
+
+    def __init__(self, ttl: float):
+        self._ttl = ttl
+        self._lock = threading.Lock()      # 保护 _entry
+        self._relock = threading.Lock()    # 保护"重算进行中"（单飞）
+        self._entry = None                 # (value_dict, at)
+
+    def get_or_refresh(self, compute):
+        """返回昂贵采集结果；缓存新鲜则复用，过期则单飞重算。
+
+        compute: 无参可调用，返回 dict（昂贵采集结果）。
+        """
+        now = time.time()
+        with self._lock:
+            e = self._entry
+            if e is not None and now - e[1] <= self._ttl:
+                return e[0]
+        # 缓存过期或为空 → 尝试成为唯一的重算线程
+        if self._relock.acquire(blocking=False):
+            try:
+                value = compute()
+                with self._lock:
+                    self._entry = (value, time.time())
+                return value
+            finally:
+                self._relock.release()
+        # 已有线程在重算：拿旧值（有界陈旧 = 一次重算时长），不触发第二次慢采集
+        with self._lock:
+            e = self._entry
+            if e is not None:
+                return e[0]
+        # 竞态首调（尚无 entry 且重算进行中）：自行重算（罕见，仅启动瞬间）
+        return compute()
+
+
+def _compute_expensive(pm) -> dict:
+    """C2: 采集昂贵字段组（mgr.status 健康探测 + metrics 24h 扫描）。
+    各组独立兜底（单组失败不拖垮另一组）。"""
+    exp = {}
+    try:
+        exp["status"] = pm.mgr.status()
+    except Exception:
+        exp["status"] = {}
+    try:
+        exp["metrics_24h"] = pm.metrics.get_metrics("24h")
+    except Exception:
+        exp["metrics_24h"] = {}
+    return exp
 
 
 # ═══ v5.2 Route Tables ═══════════════════════════════════════
@@ -849,14 +924,33 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         recent request logs + 24h metrics into ONE response so the dashboard
         polls a single endpoint (eliminates cross-panel state gaps).
 
-        Change detection: response carries `etag` (SHA-1 hash of the
-        control-plane content) and `rev` (first 8 chars of the etag). The
-        dashboard sends the previous etag as `If-None-Match` and gets a
-        cheap `304 Not Modified` when the control plane is unchanged.
+        Change detection: response carries `etag` (content hash over ALL payload
+        field groups, excluding volatile meta) and `rev` (first 8 chars). The
+        dashboard sends the previous etag as `If-None-Match` and gets a cheap
+        `304 Not Modified` when unchanged.
+
+        C1: etag covers every field group (not just status+models), so any change
+        (request_log / metrics / GPU temp) invalidates it and the dashboard
+        refetches instead of freezing on a stale value.
+        C2: the expensive collectors (mgr.status health probes + metrics 24h scan)
+        are served from a per-process TTL single-flight cache (_ExpensiveCache);
+        a matching If-None-Match with a fresh cache serves 304 without re-running
+        them, and a slow health-probe burst cannot pile up across the 32-thread
+        pool that chat forwarding shares.
         """
-        import hashlib
         now = time.time()
-        status = pm.mgr.status()
+
+        # C2: 昂贵采集（status 健康探测 + metrics 24h 扫描）走 TTL 单飞缓存，
+        # 窗口内复用 → 昂贵工作最多每 SNAPSHOT_EXP_TTL 秒跑一次。
+        exp_cache = getattr(pm, "_snap_exp_cache", None)
+        if exp_cache is None:
+            exp_cache = _ExpensiveCache(ttl=float(getattr(pm, "_snap_exp_ttl", SNAPSHOT_EXP_TTL)))
+            pm._snap_exp_cache = exp_cache
+        exp = exp_cache.get_or_refresh(lambda: _compute_expensive(pm))
+        status = exp.get("status") or {}
+        metrics_24h = exp.get("metrics_24h") or {}
+
+        # 便宜字段每次轮询都重取（保证 request_log / GPU 温度等实时性，C1）
         system = self._system_info()
         models = pm.mgr.list_models()
         try:
@@ -879,26 +973,19 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             ]
         except Exception:
             request_log = []
-        try:
-            metrics_24h = pm.metrics.get_metrics("24h")
-        except Exception:
-            metrics_24h = {}
 
-        control = json.dumps(
-            {"status": status, "models": models},
-            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-        )
-        etag_raw = hashlib.sha1(control.encode("utf-8")).hexdigest()[:16]
-        etag = f'"{etag_raw}"'
-
-        payload = {
-            "ts": now, "rev": etag_raw[:8], "etag": etag,
+        # C1: etag 覆盖全部 payload 字段组（内容哈希，排除 ts/rev/etag）
+        content = {
             "status": status, "system": system, "models": models,
             "history": history, "token_stats": token_stats or {},
             "request_log": request_log, "metrics_24h": metrics_24h or {},
             "local_models": {"discovered": [], "configured": list(pm.mgr._models.keys()),
              "cache_enabled": getattr(pm, 'response_cache', None) is not None},
         }
+        etag_raw = _snapshot_etag(content)
+        etag = f'"{etag_raw}"'
+
+        payload = {"ts": now, "rev": etag_raw[:8], "etag": etag, **content}
 
         inm = self.headers.get("If-None-Match", "")
         if inm:
