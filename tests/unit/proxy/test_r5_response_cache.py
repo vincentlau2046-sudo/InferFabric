@@ -22,7 +22,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 # 添加 _deps 路径（cachetools 等额外依赖）
-_deps = Path(__file__).parent.parent.parent.parent.parent / "_deps"
+# 4 级 parent = 仓库根（tests/unit/proxy/ → 根）；旧代码多走一级指向
+# 仓库父目录 → is_dir() 恒 False，_deps 永不生效（靠别的测试文件
+# 先加 sys.path 才碰巧能跑，单独运行此文件即 ModuleNotFoundError）。
+_deps = Path(__file__).parent.parent.parent.parent / "_deps"
 if _deps.is_dir():
     sys.path.insert(0, str(_deps))
 
@@ -169,6 +172,39 @@ def test_clear():
     cache.clear()
     assert cache.size == 0
     assert cache.get("m", body) is None
+
+
+# ═══════════════════════════════════════════════════════════════
+# 5. stats() — 命中计数（网关控制卡 LRU 生效可见性，方案 A）
+# ═══════════════════════════════════════════════════════════════
+
+
+def test_stats_initial():
+    """新缓存：hits=0 / size=0 / max=构造上限。"""
+    cache = ResponseCache(maxsize=100)
+    assert cache.stats() == {"hits": 0, "size": 0, "max": 100}
+
+
+def test_stats_counts_hits_only():
+    """get 命中才累计 hits；miss / put 不累计；size 随条目数变化。"""
+    cache = ResponseCache(maxsize=50)
+    body = {"messages": [{"role": "user", "content": "hi"}], "temperature": 0}
+    cache.put("m", body, {"r": 1}, {})
+    assert cache.get("m", body) is not None          # hit 1
+    assert cache.get("m", {"messages": []}) is None  # miss（键不同）
+    assert cache.stats() == {"hits": 1, "size": 1, "max": 50}
+
+
+def test_stats_clear_keeps_cumulative_hits():
+    """clear 清条目但 hits 是累计计数器（与 uptime 同类），不归零。"""
+    cache = ResponseCache(maxsize=50)
+    body = {"messages": [{"role": "user", "content": "hi"}], "temperature": 0}
+    cache.put("m", body, {"r": 1}, {})
+    cache.get("m", body)
+    cache.clear()
+    s = cache.stats()
+    assert s["size"] == 0
+    assert s["hits"] == 1, "hits 是累计值，clear 不应重置"
 
 
 if __name__ == "__main__":

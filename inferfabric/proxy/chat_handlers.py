@@ -245,17 +245,12 @@ def handle_chat(handler, pm, data):
         if cached is not None:
             cached_resp = cached.get(model, data)
             if cached_resp is not None:
+                # 缓存命中不记 RequestLog（方案 A，与 /v1/messages 路径一致）：
+                # 回放历史响应未发生推理，落库会重复计数 token/费用并产生
+                # 「1ms 带数万 tokens」假完成行。LRU 生效见 snapshot
+                # local_models.cache_stats（ResponseCache.stats()）。
                 log.info("/v1/chat/completions → cache HIT for %s", model)
                 handler._send_json(cached_resp["body"], 200)
-                pm.logger.log(RequestLog(
-                    req_id=req_id, key_name=key_name, model=model,
-                    status=200, error=None, route="local",
-                    tokens_in=cached_resp["usage"].get("prompt_tokens", 0),
-                    tokens_in_cached=cached_resp["usage"].get("prompt_tokens_cached", 0),
-                    tokens_out=cached_resp["usage"].get("completion_tokens", 0),
-                    ttft_ms=0,
-                    duration_ms=(time.monotonic() - handler._req_start) * 1000,
-                ))
                 return
             # A3: 改写前快照 — 后续 model 改写（data["model"]=served_name）与
             # tools 归一化（_normalize_tools_for_openai）都会 mutate data，

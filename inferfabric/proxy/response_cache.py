@@ -24,6 +24,8 @@ class ResponseCache:
     def __init__(self, maxsize: int = 500, max_body_bytes: int = 512 * 1024):
         self._cache = LRUCache(maxsize=maxsize)
         self._max_body_bytes = max_body_bytes
+        self._maxsize = maxsize
+        self._hits = 0  # 累计命中次数（clear 不归零，供网关控制卡展示）
         self._lock = threading.Lock()
 
     # ── 缓存键 ──
@@ -65,6 +67,7 @@ class ResponseCache:
         with self._lock:
             try:
                 entry = self._cache[key]  # LRUCache.__getitem__ → 自动 move_to_end
+                self._hits += 1
                 return entry
             except KeyError:
                 return None
@@ -94,3 +97,12 @@ class ResponseCache:
     @property
     def size(self) -> int:
         return len(self._cache)
+
+    def stats(self) -> dict:
+        """LRU 生效可见性（网关控制卡展示）：命中次数 / 在用条目 / 上限。
+
+        累计值语义：hits 在当前缓存实例内单调递增，clear() 不归零；
+        开关 关→开 会重建实例（计数随之归零，与新 LRU 对齐）。"""
+        with self._lock:
+            return {"hits": self._hits, "size": len(self._cache),
+                    "max": self._maxsize}

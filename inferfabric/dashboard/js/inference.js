@@ -7,7 +7,8 @@
  *       sleep_states   — { name: sleep_label }（L2 休眠中的模型）
  *       services_info  — { name: { mode, type, port } }（活跃模型端口等）
  *       services_health— { name: health_str }
- *       local_models   — { cache_enabled, configured, discovered }（缓存开关状态）
+ *       local_models   — { cache_enabled, cache_stats: {hits,size,max}|null,
+ *                          configured, discovered }（缓存开关 + LRU 生效计数）
  *   - POST /switch | /stop | /sleep | /wake  — 模型生命周期操作（admin header）
  *   - POST /admin/cache/toggle               — LRU 缓存开关（admin header）
  *
@@ -15,8 +16,10 @@
  *   - 事件委托（无 inline onclick）；数字等宽 tabular-nums；零 emoji（SVG 图标）
  *   - 破坏性操作（stop）UI.confirm danger；switch/sleep/wake UI.confirm 写明后果
  *   - switch 依赖 store 既有的 switch_target → #switchOverlay 机制（overlay 自动出现）
- *   - cacheHits 展示缓存状态（开/关，来自 snapshot cache_enabled）+ 上限 500（response_cache.py:24）
- *     —— 后端不暴露命中计数 / 实时条目数，不臆造（R10）
+ *   - cacheHits 展示 LRU 生效（方案 A）：开 → 命中 N 次 · 在用 size/max（snapshot
+ *     cache_stats = ResponseCache.stats() 真计数器）；关 → 状态 + 上限 500
+ *     （R10 旧契约「后端不暴露命中数」已作废 —— 计数器由后端真实提供，
+ *      且缓存命中不再落 RequestLog，命中数成为唯一可见通道）
  *   - rlMeta 静态标签 —— manager.status() 无 rate-limit 字段，配置见 iff.yaml（R11）
  *
  * 暴露：
@@ -184,10 +187,18 @@
     var lm = store.get('local_models') || {};
     var cacheOn = !!lm.cache_enabled;
 
-    // #cacheHits — R10：状态 + 上限（不臆造命中计数 / 命中率）
+    // #cacheHits — LRU 生效可见性（方案 A）：真计数器来自 snapshot
+    // local_models.cache_stats（ResponseCache.stats()：命中次数 / 在用条目
+    // / 上限）。缓存关闭或字段缺失时回退「状态 + 上限」信息性标签。
+    var stats = (lm.cache_stats && typeof lm.cache_stats === 'object') ? lm.cache_stats : null;
     var cacheLabel = $('cacheHits');
     if (cacheLabel) {
-      cacheLabel.textContent = 'LRU 缓存 · ' + (cacheOn ? '开' : '关') + ' · 上限 ' + CACHE_MAXSIZE + ' 条';
+      if (cacheOn && stats) {
+        cacheLabel.textContent = 'LRU 缓存 · 开 · 命中 ' + UI.fmtNum(stats.hits || 0) +
+          ' 次 · 在用 ' + (stats.size || 0) + '/' + (stats.max || CACHE_MAXSIZE) + ' 条';
+      } else {
+        cacheLabel.textContent = 'LRU 缓存 · ' + (cacheOn ? '开' : '关') + ' · 上限 ' + CACHE_MAXSIZE + ' 条';
+      }
     }
 
     // #cacheToggle — 按钮文本随状态翻转

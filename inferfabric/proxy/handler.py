@@ -390,17 +390,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             response_cache = getattr(pm, 'response_cache', None)
             cached = response_cache.get(original_model, data) if response_cache is not None else None
             if cached is not None:
+                # 缓存命中不记 RequestLog（方案 A）：回放的是历史响应，
+                # 未发生推理 —— 落库会让 token 统计/费用重复计数，日志表
+                # 出现「1ms 却带数万 tokens」的假完成行。LRU 生效由
+                # ResponseCache.stats()（snapshot local_models.cache_stats）
+                # 与 journal 的 cache HIT 行反映。
                 log.info("/v1/messages → cache HIT for %s", original_model)
                 self._send_json(cached["body"], 200)
-                pm.logger.log(RequestLog(
-                    req_id=req_id, key_name=key_name, model=original_model,
-                    status=200, error=None, route="local",
-                    tokens_in=cached["usage"].get("prompt_tokens", 0),
-                    tokens_in_cached=cached["usage"].get("prompt_tokens_cached", 0),
-                    tokens_out=cached["usage"].get("completion_tokens", 0),
-                    ttft_ms=0,
-                    duration_ms=(time.monotonic() - req_start) * 1000,
-                ))
                 return
 
         log.info("/v1/messages body: max_tokens=%s, model=%s, messages_count=%d, tools_count=%d, body_size=%d",
@@ -998,7 +994,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             "history": history, "token_stats": token_stats or {},
             "request_log": request_log, "metrics_24h": metrics_24h or {},
             "local_models": {"discovered": [], "configured": list(pm.mgr._models.keys()),
-             "cache_enabled": getattr(pm, 'response_cache', None) is not None},
+             "cache_enabled": getattr(pm, 'response_cache', None) is not None,
+             "cache_stats": (getattr(pm, 'response_cache', None).stats()
+                             if getattr(pm, 'response_cache', None) is not None else None)},
         }
         etag_raw = _snapshot_etag(content)
         etag = f'"{etag_raw}"'

@@ -663,27 +663,33 @@ def test_inference_js_node_syntax():
         "node --check inference.js failed:\nstdout:%s\nstderr:%s" % (proc.stdout, proc.stderr)
 
 
-def test_inference_no_fabricated_cache_hits():
-    """#cacheHits 不得臆造命中计数 / 命中率（R10：后端不暴露）。
+def test_inference_cache_hits_from_snapshot_stats():
+    """#cacheHits 命中数必须来自 snapshot cache_stats（方案 A，R10 契约更新）。
 
-    inference.js 只展示缓存状态（开/关，来自 snapshot cache_enabled）+ 上限 500。
-    不得出现 hit_rate / 命中率 / 命中数 等臆造字段，也不得从 /api/metrics
-    读取命中计数。"""
+    R10 旧契约（后端不暴露命中数 → 前端不显示）已作废：后端现在真实提供
+    ResponseCache.stats()（经 snapshot local_models.cache_stats），且缓存
+    命中不再落 RequestLog —— 命中计数是 LRU 生效的唯一可见通道，必须显示。
+
+    仍锁死的纪律：
+      * 不得出现 hit_rate（命中率 = hits/requests 无意义分母，禁止臆造）
+      * 不得 fetch /api/metrics（数据走 snapshot 3s 轮询，不新增端点）
+      * 缓存关闭 / 字段缺失时回退「状态 + 上限 500 条」信息性标签"""
     js = (ROOT / "inferfabric" / "dashboard" / "js" / "inference.js").read_text(encoding="utf-8")
-    # 不得出现命中率字段
-    assert "hit_rate" not in js, "inference.js fabricates hit_rate (R10 violation)"
-    # 不得从 /api/metrics 读取 cache 命中数据（后端无此字段）
+    # 命中计数走 snapshot 真字段（cache_stats），不得臆造 hit_rate
+    assert "cache_stats" in js, "cacheHits must read hits from snapshot cache_stats (plan A)"
+    assert "hit_rate" not in js, "inference.js fabricates hit_rate (forbidden)"
+    # 不得从 /api/metrics 读取 cache 数据（API 冻结：走 snapshot 轮询）
     import re
     metrics_fetch = re.findall(r"fetch\([^)]*api/metrics", js)
     assert not metrics_fetch, (
-        "inference.js fetches /api/metrics for cache data (R10: no hits field exists)"
+        "inference.js fetches /api/metrics for cache data (API frozen: use snapshot)"
     )
-    # cacheHits 文本必须含"上限"+ maxsize（信息性标签）
-    assert "上限" in js, "cacheHits label missing maxsize info (R10)"
-    assert "500" in js, "cacheHits label missing maxsize value 500"
-    # cacheHits 文本只含状态 + 上限，不得含命中数变量插值
-    # （合法文本：'LRU 缓存 · 开/关 · 上限 500 条'）
-    assert "条" in js, "cacheHits label missing unit suffix"
+    # 回退标签：缓存关闭 / cache_stats 缺失时仍显示「上限 500 条」
+    assert "上限" in js, "cacheHits fallback label missing maxsize info"
+    assert "500" in js, "cacheHits fallback label missing maxsize value 500"
+    # 命中行文本（开 + stats 时的插值契约）
+    assert "命中" in js, "cacheHits label missing hits text"
+    assert "在用" in js, "cacheHits label missing size/max text"
 
 
 def test_inference_no_new_api():
