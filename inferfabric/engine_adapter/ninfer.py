@@ -104,14 +104,19 @@ class NInferAdapter(EngineAdapter):
         with open(log_path) as f:
             if chunk < size: f.seek(size - chunk); f.readline()
             lines = f.readlines()
-        cap = None; reqs = []; tput = None; running = None
+        cap = None; reqs = []; tput = None; run_samples = []; saw_running = False
         for line in lines:
             line = line.strip()
-            # live running batch：throughput 行每 5s 打印 `running N`，取最近一条。
-            # 覆盖 prefill-only / decode / idle（running 0）所有行，非累计。
+            # live running batch：throughput 行每 5s 打印 `running N`（在途并发数，非累计）。
+            # 收非零采样供 running_batch 求平均（跳过 idle 间隙的 0，避免单点跌 0）；
+            # saw_running 标记引擎存活（即便全 0 idle 也算活着）。
             if "throughput" in line:
                 mr = _re.search(r"running\s+(\d+)", line)
-                if mr: running = int(mr.group(1))
+                if mr:
+                    v = int(mr.group(1))
+                    saw_running = True
+                    if v > 0:
+                        run_samples.append(v)
             m = _re.search(r"capacity.*?pages\s+([\d,]+)/([\d,]+)", line)
             if m: cap = (int(m.group(1).replace(",","")), int(m.group(2).replace(",",""))); continue
             m = _re.search(r"throughput.*?decode\s+([\d.]+)(k?)\s+tok", line)
@@ -142,11 +147,12 @@ class NInferAdapter(EngineAdapter):
         if tput: r["throughput"] = str(round(tput,1)); r["throughput_inst"] = str(round(tput,1))
         if rec: r["throughput_cum_n"] = sum(x["output"] for x in rec)
         # Batch Size：当前在途并发请求数（live running batch，0..max_concurrency），
-        # 非 seq_count 累计完成数。max_batch 来自引擎配置上限。
-        if running is not None:
-            r["running_batch"] = running
+        # 非 seq_count 累计完成数。取最近 20 条非零采样的平均 —— 用 live 值但跳过
+        # idle 间隙的 0 采样，避免单点跌 0 / 被零值拉低。全程 idle（无非零采样）不设键。
+        if run_samples:
+            r["running_batch"] = round(sum(run_samples[-20:]) / len(run_samples[-20:]), 1)
         r["max_batch"] = cfg.max_concurrency
-        return r if r.get("kv_cache_usage_perc") or rec or running is not None else {"sleep_state": 0}
+        return r if r.get("kv_cache_usage_perc") or rec or saw_running else {"sleep_state": 0}
 
 
 register("ninfer", NInferAdapter)

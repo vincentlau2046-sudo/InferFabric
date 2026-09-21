@@ -730,9 +730,10 @@ class TestNInferAdapterStartContainerName:
 
 
 class TestNInferEngineMetricsRunningBatch:
-    """fetch_engine_metrics 的 Batch Size 必须是「当前在途并发请求数」(live running
-    batch, 0..max_concurrency)，不是累计完成数 (seq_count)。ninfer 日志 throughput 行
-    每 5s 打印 `running N`，取最近一条即当前在途数；max_batch 来自 cfg.max_concurrency。"""
+    """fetch_engine_metrics 的 Batch Size = 当前在途并发请求数（live running batch，
+    0..max_concurrency），非累计完成数 (seq_count)。ninfer 日志 throughput 行每 5s 打印
+    `running N`；running_batch 取「最近 20 条非零 running 采样的平均值」——用 live 值
+    但跳过 idle 间隙的 0 采样，避免单点跌 0 / 被零值拉低。max_batch 来自 cfg.max_concurrency。"""
 
     def _make_model(self, log_file, max_concurrency=4):
         from inferfabric.config import ModelConfig, NInferConfig
@@ -752,35 +753,47 @@ class TestNInferEngineMetricsRunningBatch:
         p.write_text("\n".join(lines) + "\n")
         return p
 
+    def _tp(self, running):
+        return (f"2026-09-21 13:20:00.000  INFO  throughput | 5.0s | "
+                f"decode 100.0 tok/s (500 tok) | running {running} | host 50.0% (1.0s)")
+
     DONE = ("2026-09-21 13:20:42.877  INFO  req#52 done | anthropic | stop string | "
             "prompt 91,688 | output 907 | cache 28,079 (30.6%) | TTFT 16.0s | "
             "total 20.9s | decode 184.6 tok/s")
 
-    def test_running_batch_is_live_count_not_cumulative(self, tmp_path):
-        """最近一条 throughput 行 running 2 → running_batch=2（非累计 seq_count=1）。"""
-        log = self._log(tmp_path, [
-            "2026-09-21 13:20:40.977  INFO  throughput | 5.0s | decode 107.8 tok/s (539 tok) | running 1 (decode-ready 1) | batch 1.00 | host 44.2% (2.2s)",
-            self.DONE,
-            "2026-09-21 13:23:05.977  INFO  throughput | 5.0s | prefill 1.31k tok/s (6,574 tok) | decode 151.0 tok/s (755 tok) | running 2 (prefill 1, decode-ready 1) | batch 1.95 | host 59.0% (2.9s)",
-        ])
+    def test_running_batch_is_nonzero_average_not_single_point(self, tmp_path):
+        """非零 running 采样 [1, 2] → running_batch=1.5（非单点取最后一条，也非含零均值）。"""
+        log = self._log(tmp_path, [self._tp(1), self.DONE, self._tp(2)])
         from inferfabric.engine_adapter.ninfer import NInferAdapter
         model = self._make_model(log)
         r = NInferAdapter().fetch_engine_metrics(model)
-        assert r.get("running_batch") == 2
+        assert r.get("running_batch") == 1.5
         assert r.get("max_batch") == 4
         assert r.get("seq_count") == 1  # 累计完成数仍在，但 KPI 不再用它
 
-    def test_running_batch_idle_zero(self, tmp_path):
-        """最近 throughput 行 running 0（idle）→ running_batch=0。"""
-        log = self._log(tmp_path, [
-            "2026-09-21 13:20:40.977  INFO  throughput | 5.0s | decode 107.8 tok/s (539 tok) | running 1 | batch 1.00 | host 44.2% (2.2s)",
-            self.DONE,
-            "2026-09-21 13:22:25.977  INFO  throughput | 5.0s | decode 140.2 tok/s (701 tok) | running 0 | batch 1.00 | host 0.1% (4.49 ms)",
-        ])
+    def test_running_batch_ignores_zero_samples(self, tmp_path):
+        """running 序列 0,1,0,2,0 → 只取非零 [1,2] 平均=1.5（非单点 last=0，非含零均值 0.6）。"""
+        log = self._log(tmp_path, [self._tp(0), self._tp(1), self._tp(0), self._tp(2), self._tp(0)])
         from inferfabric.engine_adapter.ninfer import NInferAdapter
         model = self._make_model(log)
         r = NInferAdapter().fetch_engine_metrics(model)
-        assert r.get("running_batch") == 0
+        assert r.get("running_batch") == 1.5
+
+    def test_running_batch_window_caps_at_20(self, tmp_path):
+        """>20 条非零采样：只取最近 20 条。前 5 条=1、后 20 条=3 → 均值取后 20 条=3.0（若含全部则 2.6）。"""
+        log = self._log(tmp_path, [self._tp(1)] * 5 + [self._tp(3)] * 20)
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        model = self._make_model(log)
+        r = NInferAdapter().fetch_engine_metrics(model)
+        assert r.get("running_batch") == 3.0
+
+    def test_running_batch_all_zero_absent(self, tmp_path):
+        """全程 running 0（持续 idle，无非零采样）→ running_batch 不设键（前端落 —）。"""
+        log = self._log(tmp_path, [self._tp(0), self._tp(0)])
+        from inferfabric.engine_adapter.ninfer import NInferAdapter
+        model = self._make_model(log)
+        r = NInferAdapter().fetch_engine_metrics(model)
+        assert "running_batch" not in r
 
     def test_running_batch_absent_when_no_throughput_line(self, tmp_path):
         """日志无 throughput 行 → running_batch 不设键（前端落 —）。"""

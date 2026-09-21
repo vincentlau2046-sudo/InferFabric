@@ -411,7 +411,7 @@
     }
 
     var kv = data.kv_cache_usage_perc;
-    var batch = data.running_batch;        // live 在途并发请求数（非累计 seq_count）
+    var batch = data.running_batch;        // live 在途并发（最近 20 条非零采样平均，跳过 idle 0）
     var maxBatch = data.max_batch;         // 引擎上限 max_concurrency / max_num_seqs
     var seq = data.seq_length;
     var tpot = data.tpot_seconds;
@@ -419,14 +419,15 @@
     var thr = data.throughput;
 
     // 单位统一：TPOT → ms（2 位小数）；TTFT → 秒 s（2 位小数）。
-    // Batch Size = 当前在途并发请求数（live running batch，上限 max_batch），非累计完成数。
+    // Batch Size = 在途并发请求数的「最近 20 条非零采样平均」（live 值，跳过 idle 0 采样，
+    // 避免单点跌 0 / 被零值拉低；上限 max_batch），非累计完成数。
     el.innerHTML =
       '<div class="mon-kpi-grid">' +
         kpiTile('KV Cache', kv != null ? Number(kv).toFixed(1) + '%' : '—',
           'KV 缓存占用率（来自引擎 /metrics）') +
         kpiTile('Batch Size',
           batch != null ? (maxBatch ? batch + ' / ' + maxBatch : String(batch)) : '—',
-          '当前在途并发请求数（live running batch，非累计；上限 max_concurrency）') +
+          '在途并发请求数（live，最近 20 条非零采样平均，跳过 idle 0 采样；上限 max_concurrency）') +
         kpiTile('Seq Length', seq != null ? UI.fmtNum(seq) : '—',
           '平均请求序列长度（prompt + generation tokens）') +
         kpiTile('TPOT', tpot && tpot.mean != null ? (tpot.mean * 1000).toFixed(2) + 'ms' : '—',
