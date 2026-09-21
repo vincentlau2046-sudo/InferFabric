@@ -10,6 +10,8 @@ G-1b: 在流式转发路径中旁路观察 SSE 事件，提取 usage 字段。
 import json
 import logging
 
+from inferfabric.proxy.usage import normalize_usage
+
 log = logging.getLogger("inferfabric.sse_buffer")
 
 
@@ -24,14 +26,15 @@ class SSELineBuffer:
             # 2. 旁路观察
             buf.feed(chunk)
         buf.flush()
-        usage = buf.usage  # {"prompt_tokens": int, "completion_tokens": int}
+        usage = buf.usage  # {"prompt_tokens", "prompt_tokens_cached", "completion_tokens"}
     """
 
     __slots__ = ("_buffer", "usage")
 
     def __init__(self):
         self._buffer = b""
-        self.usage = {"prompt_tokens": 0, "completion_tokens": 0}
+        self.usage = {"prompt_tokens": 0, "prompt_tokens_cached": 0,
+                      "completion_tokens": 0}
 
     def feed(self, chunk: bytes):
         """喂入原始 chunk。在 resp.read() → _safe_write() 之间调用。
@@ -89,11 +92,19 @@ class SSELineBuffer:
                 if isinstance(msg, dict):
                     usage = msg.get("usage")
             if usage and isinstance(usage, dict):
-                # key 归一化：OpenAI 命名 (prompt/completion_tokens) 优先，
-                # 缺失时回退 Anthropic/百度命名 (input/output_tokens)
-                pt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
-                ct = usage.get("completion_tokens") or usage.get("output_tokens") or 0
-                if pt:
-                    self.usage["prompt_tokens"] = pt
-                if ct:
-                    self.usage["completion_tokens"] = ct
+                # 双协议归一化（OpenAI prompt_tokens 含缓存 / Anthropic 补回
+                # cache_read+cache_creation），口径统一见 proxy/usage.py。
+                # 按字段取 max：单请求内 token 计数单调不减；Anthropic 流中
+                # message_start 带 cache_read、message_delta 常只报 input+output
+                # （last-wins 会把总量打回未含缓存的小值），max 保真。
+                # 零值事件自然不覆盖（max(x, 0) = x）。
+                n = normalize_usage(usage)
+                if n["prompt_tokens"]:
+                    self.usage["prompt_tokens"] = max(
+                        self.usage["prompt_tokens"], n["prompt_tokens"])
+                    self.usage["prompt_tokens_cached"] = max(
+                        self.usage["prompt_tokens_cached"],
+                        n["prompt_tokens_cached"])
+                if n["completion_tokens"]:
+                    self.usage["completion_tokens"] = max(
+                        self.usage["completion_tokens"], n["completion_tokens"])

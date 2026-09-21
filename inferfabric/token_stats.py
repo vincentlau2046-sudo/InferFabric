@@ -212,9 +212,12 @@ class TokenStatsCollector:
             model = r.get("model") or "unknown"
             target = cloud if r.get("cloud_provider") else local
             bucket = target.setdefault(date_str, {}).setdefault(
-                model, {"prompt_tokens": 0, "generation_tokens": 0, "requests": 0})
+                model, {"prompt_tokens": 0, "prompt_tokens_cached": 0,
+                        "generation_tokens": 0, "requests": 0})
             try:
                 bucket["prompt_tokens"] += int(r.get("tokens_in") or 0)
+                # 缓存命中率 = prompt_tokens_cached / prompt_tokens（双协议统一口径）
+                bucket["prompt_tokens_cached"] += int(r.get("tokens_in_cached") or 0)
                 bucket["generation_tokens"] += int(r.get("tokens_out") or 0)
             except (TypeError, ValueError):
                 pass

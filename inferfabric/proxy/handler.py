@@ -359,7 +359,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self._req_id = req_id
         self._req_start = req_start
         self._key_name = key_name
-        self._usage = {"prompt_tokens": 0, "completion_tokens": 0}
+        self._usage = {"prompt_tokens": 0, "prompt_tokens_cached": 0,
+                       "completion_tokens": 0}
         req_model = data.get("model", "")
         req_status = 200
         req_error = None
@@ -395,6 +396,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     req_id=req_id, key_name=key_name, model=original_model,
                     status=200, error=None, route="local",
                     tokens_in=cached["usage"].get("prompt_tokens", 0),
+                    tokens_in_cached=cached["usage"].get("prompt_tokens_cached", 0),
                     tokens_out=cached["usage"].get("completion_tokens", 0),
                     ttft_ms=0,
                     duration_ms=(time.monotonic() - req_start) * 1000,
@@ -547,6 +549,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                         key_name=key_name, req_id=req_id,
                         cloud_provider=provider_name,
                         tokens_in=result.usage.get("prompt_tokens", 0),
+                        tokens_in_cached=result.usage.get("prompt_tokens_cached", 0),
                         tokens_out=result.usage.get("completion_tokens", 0),
                         ttft_ms=result.ttft_ms,
                         duration_ms=result.duration_ms,
@@ -610,6 +613,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     ttft_ms=getattr(self, '_ttft_ms', None),
                     route="local",
                     tokens_in=int(usage.get("prompt_tokens") or 0),
+                    tokens_in_cached=int(usage.get("prompt_tokens_cached") or 0),
                     tokens_out=int(usage.get("completion_tokens") or 0),
                     duration_ms=(time.monotonic() - getattr(self, '_req_start', time.monotonic())) * 1000,
                 ))
@@ -864,11 +868,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # 月档 x 轴为日号 (1-31)，其余档 x 从 0 起
             x_start = 1 if g == "month" else 0
             # 每桶含 prompt/completion 拆分（供 Prompt/Completion 堆叠条图表用）；
-            # tokens 保留（= prompt+completion，向后兼容已有消费者）
+            # tokens 保留（= prompt+completion，向后兼容已有消费者）；
+            # cached = 缓存命中 token 数（供缓存命中率 = cached/prompt）
             local_b = [{"x": x_start + i, "tokens": 0, "prompt": 0,
-                        "completion": 0, "requests": 0} for i in range(n)]
+                        "completion": 0, "cached": 0, "requests": 0}
+                       for i in range(n)]
             cloud_b = [{"x": x_start + i, "tokens": 0, "prompt": 0,
-                        "completion": 0, "requests": 0} for i in range(n)]
+                        "completion": 0, "cached": 0, "requests": 0}
+                       for i in range(n)]
 
             def x_of(ts):
                 dt = datetime.fromtimestamp(ts, tz=tz8)
@@ -887,6 +894,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     try:
                         tokens_in = int(r.get("tokens_in") or 0)
                         tokens_out = int(r.get("tokens_out") or 0)
+                        cached = int(r.get("tokens_in_cached") or 0)
                     except (ValueError, TypeError):
                         continue
                     tokens = tokens_in + tokens_out
@@ -895,6 +903,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                         target[idx]["tokens"] += tokens
                         target[idx]["prompt"] += tokens_in
                         target[idx]["completion"] += tokens_out
+                        target[idx]["cached"] += cached
                         target[idx]["requests"] += 1
                     continue
                 try:
@@ -903,6 +912,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     continue
                 tokens_in = int(r.get("tokens_in") or 0)
                 tokens_out = int(r.get("tokens_out") or 0)
+                cached = int(r.get("tokens_in_cached") or 0)
                 tokens = tokens_in + tokens_out
                 target = cloud_b if r.get("cloud_provider") else local_b
                 idx = x - x_start
@@ -910,6 +920,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     target[idx]["tokens"] += tokens
                     target[idx]["prompt"] += tokens_in
                     target[idx]["completion"] += tokens_out
+                    target[idx]["cached"] += cached
                     target[idx]["requests"] += 1
 
             self._send_json({

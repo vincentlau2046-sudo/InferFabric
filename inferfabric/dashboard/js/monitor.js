@@ -309,10 +309,55 @@
     return { xs: xs, prompt: prompt, completion: comp };
   }
 
+  /* 缓存命中率（Cache Hit Rate）= 缓存命中 prompt tokens / 总 prompt tokens。
+   * 双协议统一口径：OpenAI 系取 prompt_tokens_details.cached_tokens（计入
+   * prompt_tokens）；Anthropic 系取 cache_read_input_tokens（creation 计入
+   * 总量、不计命中）。窗口随当前粒度：hour → token-curve 60 桶 cached/prompt；
+   * day → 最近 30 天 token_stats；month → 全部 token_stats（30 天留存）。 */
+  function _scopeCacheHitRate(scope) {
+    var p = 0, c = 0, i, k;
+    if (_tokenGran === 'hour') {
+      var buckets = (_tokenHourCache && _tokenHourCache[scope]) || [];
+      for (k = 0; k < buckets.length; k++) {
+        var b = buckets[k] || {};
+        p += b.prompt || 0;
+        c += b.cached || 0;
+      }
+      return p > 0 ? c / p : null;
+    }
+    var stats = _tokenStatsSource();
+    var s = stats[scope] || {};
+    var keys = Object.keys(s).sort();
+    if (_tokenGran === 'day') keys = keys.slice(-30);
+    for (i = 0; i < keys.length; i++) {
+      var models = s[keys[i]] || {};
+      for (var m in models) {
+        if (!models[m]) continue;
+        p += models[m].prompt_tokens || 0;
+        c += models[m].prompt_tokens_cached || 0;
+      }
+    }
+    return p > 0 ? c / p : null;
+  }
+
+  function renderCacheHitBadges() {
+    var pairs = [['monTokenLocalCacheHit', 'local'],
+                 ['monTokenCloudCacheHit', 'cloud']];
+    for (var i = 0; i < pairs.length; i++) {
+      var el = $(pairs[i][0]);
+      if (!el) continue;
+      var rate = _scopeCacheHitRate(pairs[i][1]);
+      el.textContent = rate == null
+        ? 'Cache Hit Rate —'
+        : 'Cache Hit Rate ' + (rate * 100).toFixed(1) + '%';
+    }
+  }
+
   /* 本地 / 云端两张图：同一粒度下各渲染一张（prompt/completion 堆叠条）。 */
   function renderTokenChart() {
     ensureCharts();
     if (!_charts.tokenLocal || !_charts.tokenCloud) return;
+    renderCacheHitBadges();
 
     var scopes = [
       { chart: _charts.tokenLocal, empty: 'monTokenLocalEmpty', scope: 'local' },
@@ -507,6 +552,13 @@
       var stCls = (l.status || 0) < 400 ? 'ok' : 'crit';
       var tokIn = UI.fmtNum(l.tokens_in) || '0';
       var tokOut = UI.fmtNum(l.tokens_out) || '0';
+      // 缓存命中率（Cache Hit Rate）= tokens_in_cached / tokens_in；
+      // 双协议统一口径（OpenAI/Anthropic 均由 normalize_usage 归一化）
+      var cacheRate = '—';
+      if (l.tokens_in > 0) {
+        var _c = Math.min(l.tokens_in_cached || 0, l.tokens_in);
+        cacheRate = (_c / l.tokens_in * 100).toFixed(1) + '%';
+      }
       var ttft = l.ttft_ms != null ? l.ttft_ms.toFixed(0) + 'ms' : '—';
       var dur = l.duration_ms != null ? l.duration_ms.toFixed(0) + 'ms' : '—';
       rows += '<tr>' +
@@ -514,6 +566,7 @@
         '<td>' + escHtml(shortName(l.model)) + '</td>' +
         '<td><span class="badge ' + stCls + '">' + escHtml(l.status) + '</span></td>' +
         '<td class="mono num">' + escHtml(tokIn + ' / ' + tokOut) + '</td>' +
+        '<td class="mono num">' + escHtml(cacheRate) + '</td>' +
         '<td class="mono num">' + escHtml(ttft) + '</td>' +
         '<td class="mono num">' + escHtml(dur) + '</td>' +
       '</tr>';
@@ -522,7 +575,9 @@
       '<div class="cp-table-wrap">' +
       '<table class="if-table mon-tbl">' +
         '<thead><tr><th>时间</th><th>模型</th><th>状态</th>' +
-        '<th>Tokens in/out</th><th>TTFT</th><th>耗时</th></tr></thead>' +
+        '<th>Tokens in/out</th>' +
+        '<th title="Cache Hit Rate（缓存命中率）= tokens_in_cached / tokens_in；OpenAI 系取 prompt_tokens_details.cached_tokens，Anthropic 系取 cache_read_input_tokens，口径统一">缓存命中率</th>' +
+        '<th>TTFT</th><th>耗时</th></tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
       '</table>' +
       '</div>';

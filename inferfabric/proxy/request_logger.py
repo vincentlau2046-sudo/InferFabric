@@ -33,6 +33,7 @@ class RequestLog:
     status: int
     ttft_ms: float | None = None       # 首 token 延迟
     tokens_in: int = 0
+    tokens_in_cached: int = 0          # tokens_in 中命中前缀缓存的部分（缓存命中率 = cached/in）
     tokens_out: int = 0
     duration_ms: float = 0.0
     route: str = "local"               # "local" | "cloud"
@@ -110,6 +111,7 @@ class RequestLogger:
                 "status": entry.status,
                 "ttft_ms": entry.ttft_ms,
                 "tokens_in": entry.tokens_in,
+                "tokens_in_cached": entry.tokens_in_cached,
                 "tokens_out": entry.tokens_out,
                 "duration_ms": entry.duration_ms,
                 "route": entry.route,

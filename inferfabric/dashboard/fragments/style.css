@@ -817,11 +817,20 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
   gap: 10px;
 }
 .mon-token-panel-hdr {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: .02em;
   color: var(--ink-2);
   margin-bottom: 4px;
+}
+/* 面板头右侧：缓存命中率读数（Cache Hit Rate） */
+.mon-token-panel-hdr-sub {
+  font-weight: 400;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
 }
 .mon-chart--split {
   height: 190px;

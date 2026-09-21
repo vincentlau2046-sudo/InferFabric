@@ -338,14 +338,19 @@ class IFFDB:
     def insert_request_log(self, entries: list[dict]):
         if not entries:
             return
+        # 旧调用方（v6.1 前构造的 entry dict / 测试 fixture）可能缺
+        # tokens_in_cached 键 → 缺省 0，保持后向兼容。
+        entries = [dict(e, tokens_in_cached=e.get("tokens_in_cached", 0)) for e in entries]
         with self._write_lock:
             with self.connect(REQUEST_LOG_DB) as conn:
                 conn.executemany(
                     "INSERT OR IGNORE INTO request_log "
-                    "(req_id, key_name, model, status, ttft_ms, tokens_in, tokens_out, "
+                    "(req_id, key_name, model, status, ttft_ms, tokens_in, "
+                    " tokens_in_cached, tokens_out, "
                     " duration_ms, route, cloud_provider, error, timestamp, ts) "
                     "VALUES (:req_id, :key_name, :model, :status, :ttft_ms, :tokens_in, "
-                    ":tokens_out, :duration_ms, :route, :cloud_provider, :error, "
+                    ":tokens_in_cached, :tokens_out, "
+                    ":duration_ms, :route, :cloud_provider, :error, "
                     ":timestamp, :ts)",
                     entries,
                 )

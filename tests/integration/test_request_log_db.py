@@ -856,3 +856,78 @@ class TestIntegration:
         finally:
             logger.close()
             # Thread is daemon — will be stopped automatically
+
+
+# ─── v006: tokens_in_cached（缓存命中率统计） ─────────────────────
+
+class TestTokensInCachedColumn:
+    """request_log.tokens_in_cached 列（migration v006）+ 后向兼容。"""
+
+    def test_fresh_db_has_column(self, tmp_path):
+        db = RequestLogDB(tmp_path / "test.db")
+        cols = db.columns
+        assert "tokens_in_cached" in cols
+
+    def test_insert_and_query_roundtrip(self, tmp_path):
+        db = RequestLogDB(tmp_path / "test.db")
+        db.insert_request_log([{
+            "req_id": "iff-cached-1", "key_name": "primary", "model": "m1",
+            "status": 200, "ttft_ms": 100.0,
+            "tokens_in": 145514, "tokens_in_cached": 129428, "tokens_out": 2112,
+            "duration_ms": 60000.0, "route": "local", "cloud_provider": None,
+            "error": None, "timestamp": time.time(), "ts": "2026-09-21T00:00:00Z",
+        }])
+        rows = db.query_request_log(since=0)
+        assert rows[0]["tokens_in"] == 145514
+        assert rows[0]["tokens_in_cached"] == 129428
+
+    def test_legacy_entry_without_key_defaults_zero(self, tmp_path):
+        """v6.1 前的 entry dict（无 tokens_in_cached 键）→ 列默认 0，不报错。"""
+        db = RequestLogDB(tmp_path / "test.db")
+        db.insert_request_log([{
+            "req_id": "iff-legacy-1", "key_name": "primary", "model": "m1",
+            "status": 200, "ttft_ms": None,
+            "tokens_in": 48447, "tokens_out": 1200,
+            "duration_ms": 5000.0, "route": "local", "cloud_provider": None,
+            "error": None, "timestamp": time.time(), "ts": "2026-09-21T00:00:00Z",
+        }])
+        rows = db.query_request_log(since=0)
+        assert rows[0]["tokens_in_cached"] == 0
+
+    def test_upgrade_old_db_adds_column(self, tmp_path):
+        """v6.1 前的旧库（v002 schema, user_version=5）打开后自动补列；旧行 = 0。"""
+        db_path = tmp_path / "old.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript("""
+            CREATE TABLE request_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                req_id TEXT NOT NULL UNIQUE,
+                key_name TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL,
+                status INTEGER NOT NULL,
+                ttft_ms REAL,
+                tokens_in INTEGER NOT NULL DEFAULT 0,
+                tokens_out INTEGER NOT NULL DEFAULT 0,
+                duration_ms REAL NOT NULL DEFAULT 0.0,
+                route TEXT NOT NULL DEFAULT 'local',
+                cloud_provider TEXT,
+                error TEXT,
+                timestamp REAL NOT NULL,
+                ts TEXT NOT NULL DEFAULT '',
+                cost TEXT DEFAULT 'local',
+                metadata TEXT DEFAULT '{}'
+            );
+            PRAGMA user_version = 5;
+        """)
+        conn.execute(
+            "INSERT INTO request_log (req_id, model, status, tokens_in, "
+            "tokens_out, timestamp) VALUES ('iff-old-1', 'm1', 200, 9826, "
+            "500, 1000.0)")
+        conn.commit()
+        conn.close()
+
+        # 打开 → 触发 v006 migration
+        db = RequestLogDB(db_path)
+        rows = db.query_request_log(since=0)
+        assert rows[0]["req_id"] == "iff-old-1"
+        assert rows[0]["tokens_in_cached"] == 0

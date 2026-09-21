@@ -12,6 +12,7 @@ from inferfabric.proxy_manager import AUTO_SWITCH
 from inferfabric import forwarder
 from inferfabric.proxy.sse_buffer import SSELineBuffer
 from inferfabric.proxy.request_logger import RequestLog
+from inferfabric.proxy.usage import normalize_usage
 from inferfabric.anomaly_collector import AnomalyEvent
 
 log = logging.getLogger("inferfabric.proxy.chat")
@@ -210,7 +211,9 @@ def handle_chat(handler, pm, data):
     key_name = pm.auth.key_name(auth_header) if pm.auth.enabled else "anonymous"
 
     # G-1b: Initialize usage (before any early return)
-    handler._usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    # prompt_tokens = 总输入（含缓存命中）；prompt_tokens_cached = 缓存命中部分
+    handler._usage = {"prompt_tokens": 0, "prompt_tokens_cached": 0,
+                      "completion_tokens": 0}
 
     # PR-A: Auth check
     if pm.auth.enabled:
@@ -248,6 +251,7 @@ def handle_chat(handler, pm, data):
                     req_id=req_id, key_name=key_name, model=model,
                     status=200, error=None, route="local",
                     tokens_in=cached_resp["usage"].get("prompt_tokens", 0),
+                    tokens_in_cached=cached_resp["usage"].get("prompt_tokens_cached", 0),
                     tokens_out=cached_resp["usage"].get("completion_tokens", 0),
                     ttft_ms=0,
                     duration_ms=(time.monotonic() - handler._req_start) * 1000,
@@ -324,6 +328,7 @@ def handle_chat(handler, pm, data):
                     key_name=key_name, req_id=req_id,
                     cloud_provider=provider_name,
                     tokens_in=result.usage.get("prompt_tokens", 0),
+                    tokens_in_cached=result.usage.get("prompt_tokens_cached", 0),
                     tokens_out=result.usage.get("completion_tokens", 0),
                     ttft_ms=result.ttft_ms,
                     duration_ms=result.duration_ms,
@@ -395,6 +400,7 @@ def handle_chat(handler, pm, data):
                     req_id=req_id, key_name=key_name, model=model,
                     status=200, ttft_ms=ttft, route="local",
                     tokens_in=usage.get("prompt_tokens", 0),
+                    tokens_in_cached=usage.get("prompt_tokens_cached", 0),
                     tokens_out=usage.get("completion_tokens", 0),
                     duration_ms=(time.monotonic()-handler._req_start)*1000,
                 ))
@@ -486,8 +492,8 @@ def _forward_request(handler, pm, target_port, body, stream, model_name="", upst
                     body_obj = json.loads(resp_body)
                     usage = body_obj.get("usage", {})
                     if usage:
-                        handler._usage["prompt_tokens"] = usage.get("prompt_tokens", 0) or 0
-                        handler._usage["completion_tokens"] = usage.get("completion_tokens", 0) or 0
+                        # 双协议归一化（OpenAI/Anthropic/百度），含缓存命中拆分
+                        handler._usage = normalize_usage(usage)
                 except (json.JSONDecodeError, AttributeError):
                     body_obj = None
                 # A3 (R5): 非流式 200 响应写缓存 — 修复前 OpenAI 路径只有

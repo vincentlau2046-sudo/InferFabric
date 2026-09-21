@@ -20,13 +20,15 @@ from inferfabric.config import (
     should_retry_on_status,
 )
 from inferfabric.proxy.sse_buffer import SSELineBuffer
+from inferfabric.proxy.usage import normalize_usage
 
 
 @dataclass
 class CloudResult:
     """cloud 路由请求结果 — 供 RequestLog 补全"""
     status: int = 200
-    usage: dict = field(default_factory=dict)  # {prompt_tokens, completion_tokens}
+    # {prompt_tokens, prompt_tokens_cached, completion_tokens}（normalize_usage 口径）
+    usage: dict = field(default_factory=dict)
     ttft_ms: float | None = None
     duration_ms: float = 0.0
     error: str | None = None
@@ -163,10 +165,8 @@ def handle_json_response(handler, resp, model_obj, original_model, data, auth_he
         result = json.loads(resp_body)
         usage = result.get("usage")
         if usage and isinstance(usage, dict):
-            u = getattr(handler, '_usage', None) or {"prompt_tokens": 0, "completion_tokens": 0}
-            u["prompt_tokens"] = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
-            u["completion_tokens"] = usage.get("completion_tokens") or usage.get("output_tokens") or 0
-            handler._usage = u
+            # 双协议归一化（含缓存命中拆分），口径统一见 proxy/usage.py
+            handler._usage = normalize_usage(usage)
         send_json(handler, result)
         # R5: 缓存成功的非流式响应
         if response_cache is not None and resp_status == 200:
@@ -262,11 +262,9 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
                 result = json.loads(resp_body)
                 resp.close()
                 send_json(handler, result)
-                usage = result.get("usage", {})
-                if "input_tokens" in usage and "prompt_tokens" not in usage:
-                    usage["prompt_tokens"] = usage.get("input_tokens", 0)
-                if "output_tokens" in usage and "completion_tokens" not in usage:
-                    usage["completion_tokens"] = usage.get("output_tokens", 0)
+                # 双协议归一化（含缓存命中拆分）— CloudResult.usage 携带
+                # prompt_tokens / prompt_tokens_cached / completion_tokens
+                usage = normalize_usage(result.get("usage", {}))
                 return CloudResult(
                     status=200,
                     usage=usage,

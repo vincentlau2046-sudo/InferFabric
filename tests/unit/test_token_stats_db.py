@@ -117,6 +117,36 @@ def test_query_db_no_db_returns_none():
     assert c.query_db("weekly") is None
 
 
+def test_aggregate_rows_sums_prompt_tokens_cached():
+    """bucket 累计 prompt_tokens_cached（= tokens_in_cached），供缓存命中率。"""
+    now = time.time()
+    rows = [
+        {"model": "Qwen38-27B-TXT", "cloud_provider": None,
+         "tokens_in": 145514, "tokens_in_cached": 129428,
+         "tokens_out": 2112, "timestamp": now},
+        {"model": "Qwen38-27B-TXT", "cloud_provider": None,
+         "tokens_in": 48447, "tokens_in_cached": 0,
+         "tokens_out": 1200, "timestamp": now + 5},
+    ]
+    agg = TokenStatsCollector._aggregate_rows(rows)
+    b = agg["local"][time.strftime("%Y-%m-%d", time.gmtime(now))]["Qwen38-27B-TXT"]
+    assert b["prompt_tokens"] == 145514 + 48447
+    assert b["prompt_tokens_cached"] == 129428
+    # 缓存命中率 = cached / prompt（双协议统一口径）
+    rate = b["prompt_tokens_cached"] / b["prompt_tokens"] if b["prompt_tokens"] else 0
+    assert 0.6 < rate < 0.7
+
+
+def test_aggregate_rows_missing_cached_key_defaults_zero():
+    """v6.1 前的历史行（无 tokens_in_cached 键）→ cached 计 0，不报错。"""
+    now = time.time()
+    rows = [{"model": "m", "cloud_provider": None,
+             "tokens_in": 100, "tokens_out": 10, "timestamp": now}]
+    agg = TokenStatsCollector._aggregate_rows(rows)
+    b = agg["local"][time.strftime("%Y-%m-%d", time.gmtime(now))]["m"]
+    assert b["prompt_tokens_cached"] == 0
+
+
 # ── 旧扁平文件迁移 ─────────────────────────────────────────
 
 def test_load_from_file_migrates_legacy_flat_to_local(monkeypatch, tmp_path):

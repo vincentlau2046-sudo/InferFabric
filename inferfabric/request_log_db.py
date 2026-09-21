@@ -66,8 +66,9 @@ class RequestLogDB:
         if self._columns is None:
             self._columns = [
                 "id", "req_id", "key_name", "model", "status",
-                "ttft_ms", "tokens_in", "tokens_out", "duration_ms",
-                "route", "cloud_provider", "error", "timestamp", "ts",
+                "ttft_ms", "tokens_in", "tokens_in_cached", "tokens_out",
+                "duration_ms", "route", "cloud_provider", "error",
+                "timestamp", "ts",
             ]
         return self._columns
 

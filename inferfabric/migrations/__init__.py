@@ -20,3 +20,7 @@ IFFDB.register_migration(4, "state", "sleep_state")
 # v005: reconcile manual_stops KV → table (v5.x)
 from inferfabric.migrations import v005_reconcile_manual_stops
 IFFDB.register_migration(5, "state", "reconcile_manual_stops")
+
+# v006: request_log.tokens_in_cached (v6.1 缓存命中率统计)
+from inferfabric.migrations import v006_add_tokens_in_cached
+IFFDB.register_migration(6, "request_log", "add_tokens_in_cached")

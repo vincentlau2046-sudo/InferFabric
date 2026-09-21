@@ -27,7 +27,15 @@ class TestRequestLog:
         assert entry.cloud_provider is None
         assert entry.ttft_ms is None
         assert entry.tokens_in == 0
+        assert entry.tokens_in_cached == 0
         assert entry.error is None
+
+    def test_tokens_in_cached_field(self):
+        """缓存命中 token 计数（v6.1 缓存命中率统计）。"""
+        entry = RequestLog(req_id="iff-2", key_name="primary", model="qwen38",
+                           status=200, tokens_in=145514,
+                           tokens_in_cached=129428, tokens_out=2112)
+        assert entry.tokens_in_cached == 129428
 
     def test_asdict(self):
         entry = RequestLog(

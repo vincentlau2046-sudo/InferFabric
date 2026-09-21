@@ -240,3 +240,58 @@ class TestSSELineBuffer:
         buf.flush()
         assert buf.usage["prompt_tokens"] == 105
         assert buf.usage["completion_tokens"] == 70
+
+
+class TestSSELineBufferCacheFields:
+    """缓存命中统计：总输入 = 新增 + cache_read（OpenAI 系 cached 为子集不重复加）。"""
+
+    def test_anthropic_stream_with_cache_hit(self):
+        """Anthropic 流式 + 缓存命中（ninfer 真实场景）：总量补回 cache_read。"""
+        buf = SSELineBuffer()
+        buf.feed(b"event: message_start\ndata: " + json.dumps({
+            "type": "message_start",
+            "message": {"id": "msg_x", "usage": {
+                "input_tokens": 16086,
+                "output_tokens": 1,
+                "cache_read_input_tokens": 129428,
+            }},
+        }).encode() + b"\n\n")
+        buf.feed(b"event: message_delta\ndata: " + json.dumps({
+            "type": "message_delta",
+            "delta": {"stop_reason": "stop"},
+            "usage": {"input_tokens": 16086, "output_tokens": 2112},
+        }).encode() + b"\n\n")
+        buf.flush()
+        assert buf.usage["prompt_tokens"] == 145514      # 16086 + 129428
+        assert buf.usage["prompt_tokens_cached"] == 129428
+        assert buf.usage["completion_tokens"] == 2112
+
+    def test_openai_stream_with_cached_details(self):
+        """OpenAI 流式：prompt_tokens 已含缓存，cached 取 details 子集。"""
+        obj = _usage_chunk(1000, 50)
+        obj["usage"]["prompt_tokens_details"] = {"cached_tokens": 800}
+        buf = SSELineBuffer()
+        buf.feed(_sse_chunk(obj))
+        buf.flush()
+        assert buf.usage["prompt_tokens"] == 1000
+        assert buf.usage["prompt_tokens_cached"] == 800
+
+    def test_no_usage_has_zero_cached_key(self):
+        """无 usage 流 → 三个键全 0（含新增的 prompt_tokens_cached）。"""
+        buf = SSELineBuffer()
+        buf.feed(_sse_chunk(_content_chunk("hi")))
+        buf.flush()
+        assert buf.usage["prompt_tokens"] == 0
+        assert buf.usage["prompt_tokens_cached"] == 0
+        assert buf.usage["completion_tokens"] == 0
+
+    def test_zero_usage_chunk_keeps_cached(self):
+        """零值 usage 事件不清空已提取的缓存命中。"""
+        obj = _usage_chunk(1000, 50)
+        obj["usage"]["prompt_tokens_details"] = {"cached_tokens": 800}
+        buf = SSELineBuffer()
+        buf.feed(_sse_chunk(obj))
+        buf.feed(_sse_chunk(_usage_chunk(0, 0)))
+        buf.flush()
+        assert buf.usage["prompt_tokens"] == 1000
+        assert buf.usage["prompt_tokens_cached"] == 800
