@@ -88,6 +88,9 @@ class NInferAdapter(EngineAdapter):
     def get_port(self, model: ModelConfig) -> int | None:
         return model.ninfer.port if model.ninfer else None
 
+    def get_pid_state_key(self) -> str | None:
+        return 'ninfer_pid'
+
     
     def fetch_engine_metrics(self, model: ModelConfig) -> dict | None:
         if not model.ninfer: return None
