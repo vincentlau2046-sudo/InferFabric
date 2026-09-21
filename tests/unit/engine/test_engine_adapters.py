@@ -244,19 +244,19 @@ class TestVLLMAdapterStartDispatch:
         adapter.start(model)
         pm.start_vllm.assert_called_once()
 
-    def test_start_docker_returns_error(self, caplog):
-        """docker 部署：start 返回 error + log.warning（D2 脚手架，未实现）。"""
-        import logging
+    def test_start_docker_calls_start_vllm_docker(self):
+        """docker 部署：start 调 PM.start_vllm_docker(cfg, model.container_name)，不调 start_vllm。"""
         from inferfabric.engine_adapter.vllm import VLLMAdapter
         adapter = VLLMAdapter()
         pm = MagicMock()
         adapter.set_process_manager(pm)
         model = self._make_model(deployment="docker", conda_env="")
         assert model.resolved_deployment == "docker"
-        with caplog.at_level(logging.WARNING, logger="inferfabric.vllm_adapter"):
-            result = adapter.start(model)
-        assert result["status"] == "error"
-        assert "docker" in result["message"].lower()
+        assert model.container_name == "vllm-t"  # property derives vllm-{served_name}
+        adapter.start(model)
+        pm.start_vllm_docker.assert_called_once()
+        args = pm.start_vllm_docker.call_args
+        assert args[0][1] == "vllm-t"  # container_name 透传
         pm.start_vllm.assert_not_called()
 
     def test_start_no_proc_raises(self):
@@ -269,13 +269,148 @@ class TestVLLMAdapterStartDispatch:
             adapter.start(model)
 
     def test_validate_rejects_docker_deployment(self):
-        """validate_config 拦截 deployment:docker（D2，防止 start 硬失败陷阱）。"""
+        """validate_config 不再拦截 deployment:docker（D2 脚手架已实现 start_vllm_docker）。
+
+        docker 部署现在校验 docker_image 非空，而非一刀切拒绝。
+        """
         from inferfabric.engine_adapter.vllm import VLLMAdapter
         adapter = VLLMAdapter()
         model = self._make_model(deployment="docker", conda_env="")
         issues = adapter.validate_config(model)
-        assert any("docker" in i.lower() and "conda" in i.lower() for i in issues), \
-            f"validate 应拦截 vllm docker: {issues}"
+        # 不应再出现"not yet supported / use deployment: conda"拦截语
+        assert not any("conda" in i.lower() and "not" in i.lower() for i in issues), \
+            f"validate 不应再拒绝 vllm docker: {issues}"
+
+    def test_validate_docker_requires_docker_image(self):
+        """docker 部署：docker_image 空 → 报 issue（默认值非空，显式清空才触发）。"""
+        from inferfabric.engine_adapter.vllm import VLLMAdapter
+        adapter = VLLMAdapter()
+        model = self._make_model(deployment="docker", conda_env="", docker_image="")
+        issues = adapter.validate_config(model)
+        assert any("docker_image" in i for i in issues), f"docker 应校验 docker_image: {issues}"
+
+
+class TestVLLMAdapterWakeDispatch:
+    """VLLMAdapter.wake 按 resolved_deployment 分派（docker → docker stop，conda → wake_vllm）。"""
+
+    def _make_model(self, deployment="", **vllm_overrides):
+        from inferfabric.config import ModelConfig, VLLMConfig
+        defaults = dict(model_dir="/m", served_name="t", conda_env="vllm",
+                        port=8000, max_model_len=4096, gpu_memory_utilization=0.9)
+        defaults.update(vllm_overrides)
+        return ModelConfig(
+            name="t", description="d", type="vllm", deployment=deployment,
+            gpu_role="exclusive", vllm=VLLMConfig(**defaults),
+        )
+
+    def test_wake_conda_calls_wake_vllm(self):
+        """conda 部署：wake 调 PM.wake_vllm(port)（现有路径不动）。"""
+        from inferfabric.engine_adapter.vllm import VLLMAdapter
+        adapter = VLLMAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        model = self._make_model(deployment="")  # 推导 conda
+        assert model.resolved_deployment == "conda"
+        result = adapter.wake(model)
+        pm.wake_vllm.assert_called_once_with(8000)
+
+    def test_wake_docker_calls_docker_stop_and_signals_restart(self, monkeypatch):
+        """docker 部署：wake 调 docker stop <container>，返回 killed_for_restart（不走 wake_vllm 进程组 kill）。"""
+        import subprocess
+        import inferfabric.engine_adapter.vllm as vmod
+        from inferfabric.config import ModelConfig
+        adapter = vmod.VLLMAdapter()
+        pm = MagicMock()
+        adapter.set_process_manager(pm)
+        model = self._make_model(deployment="docker", conda_env="")
+        assert model.resolved_deployment == "docker"
+        assert model.container_name == "vllm-t"
+        docker_calls = []
+        def fake_run(*args, **kwargs):
+            docker_calls.append(args)
+            return MagicMock(returncode=0, stderr=b"")
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = adapter.wake(model)
+        assert result["status"] == "killed_for_restart", f"应 killed_for_restart: {result}"
+        assert any("docker" in str(c) and "stop" in str(c) for c in docker_calls), "应调 docker stop"
+        pm.wake_vllm.assert_not_called()
+
+
+class TestVLLMConfigDockerCmd:
+    """VLLMConfig.build_docker_cmd —— vLLM docker 化（镜像 sglang.build_docker_cmd）。"""
+
+    def _make_cfg(self, **over):
+        from inferfabric.config import VLLMConfig
+        defaults = dict(model_dir="/m", served_name="t", conda_env="vllm",
+                        port=8000, max_model_len=4096, gpu_memory_utilization=0.9)
+        defaults.update(over)
+        return VLLMConfig(**defaults)
+
+    def test_build_docker_cmd_uses_container_name_param(self):
+        """build_docker_cmd(container_name) 用参数做 --name。"""
+        cfg = self._make_cfg()
+        cmd = cfg.build_docker_cmd("vllm-custom")
+        assert "--name" in cmd
+        idx = cmd.index("--name")
+        assert cmd[idx + 1] == "vllm-custom"
+
+    def test_build_docker_cmd_structure_gpus_port_image(self):
+        """基础结构：docker run --rm --gpus all -p port:port --entrypoint vllm + 默认镜像。"""
+        cfg = self._make_cfg(port=8000)
+        cmd = cfg.build_docker_cmd("vllm-t")
+        assert cmd[:3] == ["docker", "run", "--rm"]
+        assert "--gpus" in cmd and cmd[cmd.index("--gpus") + 1] == "all"
+        assert "-p" in cmd and cmd[cmd.index("-p") + 1] == "8000:8000"
+        assert "--entrypoint" in cmd and cmd[cmd.index("--entrypoint") + 1] == "vllm"
+        assert "vllm/vllm-openai:v0.24.0" in cmd  # 默认镜像
+
+    def test_build_docker_cmd_entrypoint_vllm_serve_args(self):
+        """--entrypoint vllm + 容器内 cmd = ['serve', model_path, ...]（build_cmd()[1:]，去掉 'vllm'）。"""
+        cfg = self._make_cfg()
+        cmd = cfg.build_docker_cmd("vllm-t")
+        img_idx = cmd.index("vllm/vllm-openai:v0.24.0")
+        container_cmd = cmd[img_idx + 1:]
+        assert container_cmd[0] == "serve", f"容器 cmd 应以 'serve' 开头: {container_cmd[:3]}"
+        assert "--port" in container_cmd and "8000" in container_cmd
+
+    def test_build_docker_cmd_extra_env_as_e_flags(self):
+        """extra_env → -e K=V 标志。"""
+        cfg = self._make_cfg(extra_env={"FOO": "bar", "BAZ": "1"})
+        cmd = cfg.build_docker_cmd("vllm-t")
+        assert "-e" in cmd
+        assert "FOO=bar" in cmd and "BAZ=1" in cmd
+
+    def test_build_docker_cmd_expandable_segments_env(self):
+        """无 kv-offloading → -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True（镜像 conda start_vllm）。"""
+        cfg = self._make_cfg()
+        cmd = cfg.build_docker_cmd("vllm-t")
+        assert "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True" in cmd
+
+    def test_build_docker_cmd_kv_offload_skips_expandable_segments(self):
+        """有 kv-offloading → 不加 expandable_segments（镜像 conda start_vllm 的冲突规避）。"""
+        cfg = self._make_cfg(kv_offloading_size=2.0)
+        cmd = cfg.build_docker_cmd("vllm-t")
+        assert not any("expandable_segments" in c for c in cmd), \
+            f"kv-offloading 时不应加 expandable_segments: {cmd}"
+
+    def test_build_docker_cmd_sleep_mode_flag_and_env(self):
+        """sleep_mode.enabled → --enable-sleep-mode flag + -e VLLM_SERVER_DEV_MODE=1。"""
+        from inferfabric.config import SleepModeConfig
+        cfg = self._make_cfg(sleep_mode=SleepModeConfig(enabled=True))
+        cmd = cfg.build_docker_cmd("vllm-t")
+        assert "--enable-sleep-mode" in cmd
+        assert "VLLM_SERVER_DEV_MODE=1" in cmd
+
+    def test_build_docker_cmd_sleep_mode_conflict_raises(self):
+        """sleep_mode + extra_env 含 VLLM_SERVER_DEV_MODE → ConfigError（镜像 conda start_vllm 守卫）。"""
+        import pytest
+        from inferfabric.config import SleepModeConfig, ConfigError
+        cfg = self._make_cfg(
+            sleep_mode=SleepModeConfig(enabled=True),
+            extra_env={"VLLM_SERVER_DEV_MODE": "0"},
+        )
+        with pytest.raises(ConfigError):
+            cfg.build_docker_cmd("vllm-t")
 
 
 class TestOllamaCppAdapter:

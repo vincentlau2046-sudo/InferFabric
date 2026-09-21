@@ -84,6 +84,7 @@ class VLLMConfig:
     sleep_mode: Optional[SleepModeConfig] = None
     startup_timeout: int = 0  # seconds for health check; 0 = use global HEALTH_CHECK_TIMEOUT
     extra_env: dict[str, str] = field(default_factory=dict)  # inject into subprocess env
+    docker_image: str = "vllm/vllm-openai:v0.24.0"  # vLLM 0.24 pinned (CLAUDE.md: do not upgrade)
 
     def build_cmd(self) -> list[str]:
         """Build vLLM command. JSON args stay as single elements."""
@@ -109,6 +110,56 @@ class VLLMConfig:
             import shlex
             flags.extend(shlex.split(self.extra_flags))
         return flags
+
+    def build_docker_cmd(self, container_name: str) -> list[str]:
+        """Build docker run command for vLLM serving.
+
+        container_name threaded from ModelConfig.container_name (single source).
+        Mirrors SGLangConfig.build_docker_cmd; translates the conda start_vllm env
+        handling (PYTORCH_CUDA_ALLOC_CONF expandable_segments, sleep-mode
+        VLLM_SERVER_DEV_MODE, extra_env) into docker -e flags so the container
+        behaves like the conda launch.
+        """
+        model_path = MODEL_BASE / self.model_dir
+        # build_cmd() → ["vllm", "serve", path, ...]; --entrypoint vllm supplies
+        # the binary, so drop the leading "vllm" and keep "serve" + args.
+        container_cmd = self.build_cmd()[1:]
+
+        docker_flags = [
+            "docker", "run", "--rm",
+            "--gpus", "all",
+            "--ipc=host",
+            "--ulimit", "memlock=-1",
+            "--ulimit", "stack=67108864",
+            "-p", f"{self.port}:{self.port}",
+            "-v", f"{model_path}:{model_path}",
+            "-v", f"{MODEL_BASE}:/models",
+            "-v", f"{Path.home() / '.cache/huggingface'}:/root/.cache/huggingface",
+            "--name", container_name,
+            "--entrypoint", "vllm",
+        ]
+
+        # Env translation (mirror start_vllm conda env handling)
+        has_kv_offload = "--kv-offloading-size" in " ".join(container_cmd)
+        if not has_kv_offload:
+            docker_flags.extend(["-e", "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"])
+
+        if self.sleep_mode and self.sleep_mode.enabled:
+            # extra_env must not override VLLM_SERVER_DEV_MODE (sleep mode requires it)
+            if "VLLM_SERVER_DEV_MODE" in self.extra_env:
+                raise ConfigError(
+                    f"extra_env overrides VLLM_SERVER_DEV_MODE for {self.served_name} — "
+                    f"sleep mode will not work. Remove VLLM_SERVER_DEV_MODE from extra_env "
+                    f"or disable sleep_mode."
+                )
+            docker_flags.extend(["-e", "VLLM_SERVER_DEV_MODE=1"])
+            container_cmd.append("--enable-sleep-mode")
+
+        if self.extra_env:
+            for k, v in self.extra_env.items():
+                docker_flags.extend(["-e", f"{k}={v}"])
+
+        return docker_flags + [self.docker_image] + container_cmd
 
 
 @dataclass
@@ -476,7 +527,8 @@ class ModelConfig:
             return self.ninfer.container_name or f"ninfer-{self.ninfer.port}"
         if self.sglang:
             return f"sglang-{self.sglang.served_name}"
-        # 未来 docker+vllm 等：YAML 显式 container_name 字段（本计划不先加，留扩展点）
+        if self.vllm:
+            return f"vllm-{self.vllm.served_name}"
         return None
 
     @property
