@@ -510,7 +510,6 @@ python3 -m inferfabric.proxy.handler --async
 |------|---------|--------|----------|
 | 8001 | qwen38-27b-vl | vLLM | exclusive |
 | 8002 | qwen3-vl-4b | vLLM | shared |
-| 8003 | qwen3-vl-4b-prefill | vLLM | shared |
 | 8004 | ovis-ocr2 | vLLM | shared |
 | 8005 | gemma4-31b-vl | vLLM | exclusive |
 | 8006 | muse-glimmer-vl | SGLang | exclusive |

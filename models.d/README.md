@@ -108,8 +108,6 @@
 | 8005 | `gemma4-31b-vl.yaml` | `gemma4-31b-vl` | vllm | exclusive | Gemma4-31B IT NVFP4 Dense VL |
 | 8006 | `muse-glimmer-vl.yaml` | `muse-glimmer` | vllm | exclusive | Meta Muse Glimmer 30B NVFP4 VL （SGLang） |
 | 8008 | `qwen36-35b-vl.yaml` | `qwen36-35b-vl` | vllm | exclusive | Qwen3.6-35B A3B MoE NVFP4 VL |
-| 8010 | `qwen3-vl-4b-prefill.yaml` | `qwen3-vl-4b-prefill` | vllm | shared | Qwen3-VL-4B GPTQ W4A16 P/D Prefill (P) 实例 |
-| 8011 | `qwen3-vl-4b-decode.yaml` | `qwen3-vl-4b-decode` | vllm | shared | Qwen3-VL-4B GPTQ W4A16 P/D Decode (D) 实例 |
 | 8188 | `comfyui.yaml` | — | comfyui | shared | ComfyUI 图像生成 |
 | 8880 | `tts-qwen3.yaml` | — | tts_server | shared | Qwen3-TTS 1.7B 语音合成 |
 | 8881 | `asr-sensevoice.yaml` | — | asr_server | shared | ASR SenseVoice-Small 中文语音识别 |
@@ -120,6 +118,7 @@
 **注释**：
 - `model_affinity.yaml` 为云模型路由配置，不占用端口。
 - GPU 角色：`exclusive` = 独占 GPU、`shared` = 共享 GPU、`none` = CPU 运行。
+- `qwen3-vl-4b-prefill` / `qwen3-vl-4b-decode`（P/D 分离，端口 8010/8011）已归档至 `archive/*.yaml.bak`（2026-09-21，暂不启用 PD 分离；如需恢复：还原文件名回 `models.d/` 并在本表加回两行）。
 
 ---
 
