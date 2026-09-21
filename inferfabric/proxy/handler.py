@@ -761,6 +761,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     "model": r["model"],
                     "status": r["status"],
                     "tokens_in": r["tokens_in"],
+                    "tokens_in_cached": int(r.get("tokens_in_cached") or 0),
                     "tokens_out": r["tokens_out"],
                     "ttft_ms": round(r["ttft_ms"], 1) if r["ttft_ms"] else None,
                     "duration_ms": round(r["duration_ms"], 1) if r["duration_ms"] else None,
@@ -980,7 +981,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             rows = pm.telemetry.query_request_log(since=int(now - 3600), limit=50)
             request_log = [
                 {"timestamp": r["timestamp"], "model": r["model"], "status": r["status"],
-                 "tokens_in": r["tokens_in"], "tokens_out": r["tokens_out"],
+                 "tokens_in": r["tokens_in"],
+                 "tokens_in_cached": int(r.get("tokens_in_cached") or 0),
+                 "tokens_out": r["tokens_out"],
                  "ttft_ms": round(r["ttft_ms"], 1) if r["ttft_ms"] else None,
                  "duration_ms": round(r["duration_ms"], 1) if r["duration_ms"] else None,
                  "route": r["route"], "key_name": r.get("key_name", ""), "error": r.get("error", "")}
