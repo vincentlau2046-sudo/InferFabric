@@ -949,7 +949,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         try:
             import subprocess as _sub
             r = _sub.run(
-                ["nvidia-smi", "--query-gpu=utilization.gpu,clocks.current.graphics,power.draw",
+                ["nvidia-smi", "--query-gpu=utilization.gpu,clocks.current.graphics,power.draw,temperature.gpu",
                  "--format=csv,noheader,nounits"],
                 capture_output=True, text=True, timeout=5
             )
@@ -958,6 +958,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 info["gpu_util_pct"] = round(float(vals[0].strip().replace(" ", "")), 1)
                 info["gpu_clock_mhz"] = int(vals[1].strip().replace(" ", ""))
                 info["gpu_power_w"] = round(float(vals[2].strip().replace(" ", "")), 1)
+                if len(vals) >= 4:
+                    info["gpu_temp_c"] = round(float(vals[3].strip().replace(" ", "")), 1)
         except Exception:
             pass
         info["version"] = __version__
