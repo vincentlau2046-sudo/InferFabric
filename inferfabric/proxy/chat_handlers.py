@@ -236,6 +236,7 @@ def handle_chat(handler, pm, data):
 
     # R5: 响应缓存查找
     cache_enabled = getattr(pm, '_runtime_config', {}).get("cache", {}).get("enabled", True)
+    cache_body = None
     if cache_enabled and not stream and data.get("temperature", 0) in (0, None):
         cached = getattr(pm, 'response_cache', None)
         if cached is not None:
@@ -252,6 +253,10 @@ def handle_chat(handler, pm, data):
                     duration_ms=(time.monotonic() - handler._req_start) * 1000,
                 ))
                 return
+            # A3: 改写前快照 — 后续 model 改写（data["model"]=served_name）与
+            # tools 归一化（_normalize_tools_for_openai）都会 mutate data，
+            # 转发后 PUT 侧必须用此快照，保证与 GET 侧键一致。
+            cache_body = json.loads(json.dumps(data))
 
     # Auto-switch
     service_name = pm.model_to_service(model)
@@ -382,7 +387,7 @@ def handle_chat(handler, pm, data):
         return
     try:
         for attempt in range(3):
-            if _forward_request(handler, pm, target_port, body, stream, model_name=model, upstream_path=upstream_path):
+            if _forward_request(handler, pm, target_port, body, stream, model_name=model, upstream_path=upstream_path, cache_body=cache_body):
                 # PR-B: Log successful request with TTFT + usage
                 ttft = getattr(handler, '_ttft_ms', None)
                 usage = getattr(handler, '_usage', {})
@@ -406,12 +411,15 @@ def handle_chat(handler, pm, data):
         gate.release()
 
 
-def _forward_request(handler, pm, target_port, body, stream, model_name="", upstream_path=None):
+def _forward_request(handler, pm, target_port, body, stream, model_name="", upstream_path=None, cache_body=None):
     """Forward a request to an upstream service.
 
     Args:
         upstream_path: 上游 API 路径（由模型引擎 YAML type 字段驱动）。
                        为 None 时回退 handler.path（兼容旧调用方）。
+        cache_body: A3 (R5) — 转发前请求 body 快照（model 为客户端原名、
+                    tools 未归一化）。非流式 200 且 JSON 可解析时用它写
+                    响应缓存，保证与 GET 侧缓存键一致；None 则不写。
 
     Returns True if the response was fully sent to the client.
     Returns False if the caller should retry (headers not yet sent).
@@ -470,6 +478,7 @@ def _forward_request(handler, pm, target_port, body, stream, model_name="", upst
             # PR-B: TTFT for non-streaming
             if hasattr(handler, '_req_start'):
                 handler._ttft_ms = (time.monotonic() - handler._req_start) * 1000
+            body_obj = None
             try:
                 resp_body = resp.read()
                 # G-1b: 非流式 — 解析 JSON body 提取 usage
@@ -480,7 +489,17 @@ def _forward_request(handler, pm, target_port, body, stream, model_name="", upst
                         handler._usage["prompt_tokens"] = usage.get("prompt_tokens", 0) or 0
                         handler._usage["completion_tokens"] = usage.get("completion_tokens", 0) or 0
                 except (json.JSONDecodeError, AttributeError):
-                    pass
+                    body_obj = None
+                # A3 (R5): 非流式 200 响应写缓存 — 修复前 OpenAI 路径只有
+                # GET 没有 PUT，缓存永久冷。键用改写前快照 cache_body
+                # （model=客户端原名 + 未被转发 mutate 的 body）。
+                if resp_status == 200 and cache_body is not None and isinstance(body_obj, dict):
+                    rc = getattr(pm, 'response_cache', None)
+                    if rc is not None:
+                        try:
+                            rc.put(model_name, cache_body, body_obj, handler._usage or {})
+                        except Exception:
+                            log.debug("R5 cache put failed (non-critical)")
             finally:
                 resp.close()
             headers_sent = True

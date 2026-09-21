@@ -33,8 +33,11 @@ class ResponseCache:
         """生成缓存键：sha256(model + sort_keys_json(body))。
 
         排除 stream 字段（stream=true/false 不影响模型输出）。
+        排除 body 的 model 字段（A2）：转发路径会把 body.model 改写为
+        served_name，而 GET 侧用客户端原名（别名）——纳入键则两侧键
+        永不一致。模型隔离仅由 model 参数（客户端原名）承担。
         """
-        canonical = {k: v for k, v in body.items() if k != "stream"}
+        canonical = {k: v for k, v in body.items() if k not in ("stream", "model")}
         raw = model + "\n" + json.dumps(canonical, sort_keys=True, ensure_ascii=False)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
