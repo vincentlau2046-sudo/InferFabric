@@ -1,7 +1,8 @@
 /* InferFabric Console — Monitor tab (v2, Task 5)
  * 纯遥测、只读、零操作（spec §4.3）。
  *   - 3 ECharts: GPU vram+util 时间曲线 / Token prompt+completion 堆叠条 / 延迟 P50+P95 双线
- *   - 5 KPI: KV Cache / Seq Length / TPOT / TTFT / Throughput（GET /api/engine_metrics）
+ *   - 6 KPI（2 行 × 3 列）: KV Cache / Batch Size / Seq Length / TPOT(ms) / TTFT(s) / Throughput
+ *     （GET /api/engine_metrics）
  *   - 2 表: 请求日志 + 切换历史（13px 紧凑）
  *   - 1 卡: 费用概览
  *
@@ -10,7 +11,7 @@
  *     + token_stats（双 scope {local,cloud}，DB 驱动、引擎无关 → 天/月图实时）
  *   - GET /api/token-curve?granularity=hour → 小时图 60 分钟桶（local/cloud 双 scope）
  *   - window.__TOKEN_STATS__ → 天/月图兜底（代理启动时烘焙的双 scope 快照）
- *   - GET /api/engine_metrics?model=<active> → 5 KPI 原始指标
+ *   - GET /api/engine_metrics?model=<active> → 6 KPI 原始指标
  *
  * 窗口/粒度切换 = 客户端 display filter（不触达服务端状态变更）。
  *
@@ -261,7 +262,7 @@
     var s = stats[scope] || {};
     var keys = Object.keys(s).sort();
     if (!keys.length) return { xs: [], prompt: [], completion: [] };
-    var recent = keys.slice(-14);   // 最近 14 天
+    var recent = keys.slice(-30);   // 最近 30 天（柱状图标准化为 30 天）
     var xs = [], prompt = [], comp = [];
     for (var i = 0; i < recent.length; i++) {
       var day = recent[i];
@@ -382,9 +383,9 @@
     });
   }
 
-  /* ── 4. 五联 KPI ──
-   * GET /api/engine_metrics?model=<active> → kv_cache_usage_perc / seq_length /
-   * tpot_seconds.mean / ttft_seconds.mean / throughput */
+  /* ── 4. 六联 KPI（2 行 × 3 列）──
+   * GET /api/engine_metrics?model=<active> → kv_cache_usage_perc / seq_count(batch) /
+   * seq_length / tpot_seconds.mean(→ms) / ttft_seconds.mean(→s) / throughput */
   function kpiTile(label, val, tip) {
     return '<div class="kpi" title="' + escHtml(tip) + '">' +
       '<span class="kpi-label">' + escHtml(label) + '</span>' +
@@ -408,21 +409,26 @@
     }
 
     var kv = data.kv_cache_usage_perc;
+    var batch = data.seq_count;
     var seq = data.seq_length;
     var tpot = data.tpot_seconds;
     var ttft = data.ttft_seconds;
     var thr = data.throughput;
 
+    // 单位统一：TPOT → ms（2 位小数）；TTFT → 秒 s（2 位小数）。
+    // 新增 Batch Size（seq_count，滑窗内并发请求数）置于第 2 位；6 指标 2 行 × 3 列。
     el.innerHTML =
       '<div class="mon-kpi-grid">' +
         kpiTile('KV Cache', kv != null ? Number(kv).toFixed(1) + '%' : '—',
           'KV 缓存占用率（来自引擎 /metrics）') +
+        kpiTile('Batch Size', batch != null ? UI.fmtNum(batch) : '—',
+          '滑窗内并发请求数（batch size）') +
         kpiTile('Seq Length', seq != null ? UI.fmtNum(seq) : '—',
           '平均请求序列长度（prompt + generation tokens）') +
-        kpiTile('TPOT', tpot && tpot.mean != null ? (tpot.mean * 1000).toFixed(1) + 'ms' : '—',
-          'Time Per Output Token — 每输出 token 生成耗时') +
-        kpiTile('TTFT', ttft && ttft.mean != null ? (ttft.mean * 1000).toFixed(1) + 'ms' : '—',
-          'Time To First Token — 首 token 延迟') +
+        kpiTile('TPOT', tpot && tpot.mean != null ? (tpot.mean * 1000).toFixed(2) + 'ms' : '—',
+          'Time Per Output Token — 每输出 token 生成耗时（ms，保留 2 位）') +
+        kpiTile('TTFT', ttft && ttft.mean != null ? ttft.mean.toFixed(2) + 's' : '—',
+          'Time To First Token — 首 token 延迟（秒，保留 2 位）') +
         kpiTile('Throughput', thr != null ? UI.fmtNum(Math.round(thr)) + ' tok/s' : '—',
           'EMA 平滑吞吐（tokens/s）') +
       '</div>';

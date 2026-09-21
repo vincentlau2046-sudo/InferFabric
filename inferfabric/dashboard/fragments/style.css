@@ -858,14 +858,17 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
   outline-offset: -2px;
 }
 
-/* KPI 五联网格：窄卡内自适应换行 */
+/* KPI 六联网格：2 行 × 3 列（窄卡内不再挤溢出） */
 .mon-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--sp-1);
 }
 .mon-kpi-grid .kpi { padding: var(--sp-1); }
-.mon-kpi-grid .kpi-val { font-size: var(--fs-body); }
+.mon-kpi-grid .kpi-val {
+  font-size: var(--fs-body);
+  overflow-wrap: anywhere;   /* 长值（如 88,035 / 21.75s）换行而非溢出 */
+}
 
 /* 紧凑表：13px 行高更密（.if-table 已 13px，这里收紧行距） */
 .mon-tbl th, .mon-tbl td { padding: 5px var(--sp-1); }
