@@ -1482,6 +1482,115 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             })
         self._send_json({"presets": result})
 
+    def _pipeline_guard(self, pm, model_name: str, data: dict, model_type: str) -> dict:
+        """Shared security pipeline for /v1/embeddings and /v1/rerank (A1/A7).
+
+        Applies, in the same order as the chat path:
+          1. model resolution (404)
+          2. auth (401)
+          3. switch guard (503 when SWITCHING and not the switching target)
+          4. model-type / port validation (400 / 500)
+          5. AUTO_SWITCH respect (503 when model inactive and AUTO_SWITCH=off, A7)
+          6. dual_gate rate limit (429)
+
+        Every blocking outcome writes a RequestLog entry (R1) and returns:
+          {"blocked": True, "status": int, "body": dict, "headers": dict|None}
+        On pass returns:
+          {"blocked": False, "gate": <gate>, "ctx": {
+               "req_id","req_start","key_name","svc_name","model_obj","port"}}
+        The caller forwards and records the terminal outcome, releasing gate.
+        """
+        from inferfabric.state import ServiceState
+
+        req_id = pm.new_request_id()
+        req_start = time.monotonic()
+        auth_header = self.headers.get("Authorization", "") or self.headers.get("x-api-key", "")
+        key_name = pm.auth.key_name(auth_header) if pm.auth.enabled else "anonymous"
+
+        def _block(status, body, error, headers=None):
+            pm.logger.log(RequestLog(
+                req_id=req_id, key_name=key_name, model=model_name,
+                status=status, error=error,
+                duration_ms=(time.monotonic() - req_start) * 1000,
+            ))
+            return {"blocked": True, "status": status, "body": body, "headers": headers}
+
+        # 1. Model resolution
+        svc_name = pm.model_to_service(model_name)
+        if not svc_name:
+            pm.anomalies.record(AnomalyEvent(
+                category="routing", severity="warning", model=model_name,
+                status_code=404,
+                message=f"Unknown model '{model_name}' (embeddings/rerank)",
+                possible_cause="Model not configured in models.d or not a matching endpoint type",
+            ))
+            return _block(404, {"error": f"Unknown model: {model_name}"}, "unknown_model")
+
+        # 2. Auth
+        if pm.auth.enabled:
+            model_for_auth = model_name.split("/")[-1] if "/" in model_name else model_name
+            auth_ok, auth_reason = pm.auth.check(auth_header, model_for_auth)
+            if not auth_ok:
+                return _block(401, {"error": auth_reason, "status": "unauthorized"}, auth_reason)
+
+        # 3. Switch guard
+        profile_state = pm.mgr.state.get("profile_state", "")
+        if profile_state == ServiceState.SWITCHING:
+            switching_target = pm.mgr.state.get("switching_target") or ""
+            if svc_name != switching_target:
+                pm.anomalies.record(AnomalyEvent(
+                    category="routing", severity="warning", model=model_name,
+                    status_code=503,
+                    message=f"Model switching to {switching_target}, {model_name} request rejected",
+                    possible_cause="本地模型正在切换中，请求的是另一个模型。",
+                ))
+                return _block(
+                    503,
+                    {"error": "Model is switching, please retry", "status": "switching", "retry_after": 30},
+                    "model_switching",
+                    headers={"Retry-After": "30"},
+                )
+
+        # 4. Model-type / port validation
+        model_obj = pm.mgr.get_model(svc_name)
+        if not model_obj or model_obj.model_type != model_type:
+            return _block(400, {"error": f"Model '{model_name}' is not a {model_type} model"}, "model_type_mismatch")
+        port = model_obj.port
+        if not port:
+            return _block(500, {"error": f"No port configured for model '{model_name}'"}, "no_port")
+
+        # 5. AUTO_SWITCH respect (A7): inactive + AUTO_SWITCH=off → 503, do NOT switch
+        if svc_name not in pm.mgr.active_services:
+            if not AUTO_SWITCH:
+                pm.anomalies.record(AnomalyEvent(
+                    category="routing", severity="warning", model=model_name,
+                    status_code=503,
+                    message=f"Model {svc_name} not active and AUTO_SWITCH=off",
+                    possible_cause="模型在配置中但未启动，且 auto_switch 被禁用。手动 /switch 或启用 AUTO_SWITCH。",
+                ))
+                return _block(
+                    503,
+                    {"error": f"Model {svc_name} not active, auto-switch disabled",
+                     "status": "not_active", "retry_after": 10},
+                    "auto_switch_disabled",
+                    headers={"Retry-After": "10"},
+                )
+            # AUTO_SWITCH on: caller will auto-start
+
+        # 6. Rate limit
+        gate = pm.dual_gate.acquire(model_name, timeout=30)
+        if not gate.ok:
+            return _block(429, {"error": f"Rate limited: {gate.reason}", "status": "rate_limit"}, gate.reason)
+
+        return {
+            "blocked": False,
+            "gate": gate,
+            "ctx": {
+                "req_id": req_id, "req_start": req_start, "key_name": key_name,
+                "svc_name": svc_name, "model_obj": model_obj, "port": port,
+            },
+        }
+
     def _handle_embeddings(self, pm):
         """Handle OpenAI-compatible /v1/embeddings requests."""
         data = self._read_body()
@@ -1493,58 +1602,63 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": "model field is required"}, 400)
             return
 
-        svc_name = pm.model_to_service(model_name)
-        if not svc_name:
-            self._send_json({"error": f"Unknown model: {model_name}"}, 404)
+        # A1/A7: security pipeline (auth → switch guard → AUTO_SWITCH → rate limit)
+        guard = self._pipeline_guard(pm, model_name, data, "embedding")
+        if guard["blocked"]:
+            self._send_json(guard["body"], guard["status"], extra_headers=guard.get("headers"))
             return
 
-        model_obj = pm.mgr.get_model(svc_name)
-        if not model_obj or model_obj.model_type != "embedding":
-            self._send_json({"error": f"Model '{model_name}' is not an embedding model"}, 400)
-            return
-
-        port = model_obj.port
-        if not port:
-            self._send_json({"error": f"No port configured for model '{model_name}'"}, 500)
-            return
-
-        # Auto-start if not running
-        if svc_name not in pm.mgr.active_services:
-            log.info("Embedding model %s not running — auto-starting", svc_name)
-            result = pm.mgr.switch(svc_name)
-            if result.get("status") != "switched":
-                msg = result.get("message", "unknown error")
-                log.error("Failed to start embedding model %s: %s", svc_name, msg)
-                self._send_json({"error": f"Failed to start embedding model: {msg}"}, 503)
-                return
-            if not pm._wait_healthy(svc_name, timeout=30):
-                self._send_json({"error": f"Embedding model '{svc_name}' failed health check within 30s"}, 503)
-                return
-        elif not pm._wait_healthy(svc_name, timeout=10):
-            log.warning("Embedding model %s not healthy, attempting restart", svc_name)
-            pm.mgr.stop_independent(svc_name)
-            result = pm.mgr.switch(svc_name)
-            if result.get("status") != "switched" or not pm._wait_healthy(svc_name, timeout=30):
-                self._send_json({"error": f"Embedding model '{svc_name}' failed to restart"}, 503)
-                return
-
-        body = json.dumps(data).encode("utf-8")
-        conn = pm.make_conn(port, timeout=30)
+        gate = guard["gate"]
+        ctx = guard["ctx"]
+        svc_name = ctx["svc_name"]
+        port = ctx["port"]
+        status = 503
         try:
-            conn.request("POST", "/v1/embeddings", body=body,
-                         headers={"Content-Type": "application/json"})
-            resp = conn.getresponse()
-            resp_body = resp.read()
-            self.send_response(resp.status)
-            for k, v in resp.getheaders():
-                self.send_header(k, v)
-            self.end_headers()
-            self._safe_write(resp_body)
-        except Exception as e:
-            log.error("Embedding request failed: %s", e)
-            self._send_json({"error": "Upstream unavailable", "detail": str(e)}, 503)
+            # Auto-start if not running (guard only passes when AUTO_SWITCH=on)
+            if svc_name not in pm.mgr.active_services:
+                log.info("Embedding model %s not running — auto-starting", svc_name)
+                result = pm.mgr.switch(svc_name)
+                if result.get("status") != "switched":
+                    msg = result.get("message", "unknown error")
+                    log.error("Failed to start embedding model %s: %s", svc_name, msg)
+                    self._send_json({"error": f"Failed to start embedding model: {msg}"}, 503)
+                    return
+                if not pm._wait_healthy(svc_name, timeout=30):
+                    self._send_json({"error": f"Embedding model '{svc_name}' failed health check within 30s"}, 503)
+                    return
+            elif not pm._wait_healthy(svc_name, timeout=10):
+                log.warning("Embedding model %s not healthy, attempting restart", svc_name)
+                pm.mgr.stop_independent(svc_name)
+                result = pm.mgr.switch(svc_name)
+                if result.get("status") != "switched" or not pm._wait_healthy(svc_name, timeout=30):
+                    self._send_json({"error": f"Embedding model '{svc_name}' failed to restart"}, 503)
+                    return
+
+            body = json.dumps(data).encode("utf-8")
+            conn = pm.make_conn(port, timeout=30)
+            try:
+                conn.request("POST", "/v1/embeddings", body=body,
+                             headers={"Content-Type": "application/json"})
+                resp = conn.getresponse()
+                resp_body = resp.read()
+                status = resp.status
+                self.send_response(status)
+                for k, v in resp.getheaders():
+                    self.send_header(k, v)
+                self.end_headers()
+                self._safe_write(resp_body)
+            except Exception as e:
+                log.error("Embedding request failed: %s", e)
+                self._send_json({"error": "Upstream unavailable", "detail": str(e)}, 503)
+            finally:
+                conn.close()
         finally:
-            conn.close()
+            pm.logger.log(RequestLog(
+                req_id=ctx["req_id"], key_name=ctx["key_name"], model=model_name,
+                status=status, route="local",
+                duration_ms=(time.monotonic() - ctx["req_start"]) * 1000,
+            ))
+            gate.release()
 
     def _handle_rerank(self, pm):
         """Handle /v1/rerank requests — direct port, same pattern as embeddings."""
@@ -1557,58 +1671,63 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": "model field is required"}, 400)
             return
 
-        svc_name = pm.model_to_service(model_name)
-        if not svc_name:
-            self._send_json({"error": f"Unknown model: {model_name}"}, 404)
+        # A1/A7: security pipeline (auth → switch guard → AUTO_SWITCH → rate limit)
+        guard = self._pipeline_guard(pm, model_name, data, "rerank")
+        if guard["blocked"]:
+            self._send_json(guard["body"], guard["status"], extra_headers=guard.get("headers"))
             return
 
-        model_obj = pm.mgr.get_model(svc_name)
-        if not model_obj or model_obj.model_type != "rerank":
-            self._send_json({"error": f"Model '{model_name}' is not a rerank model"}, 400)
-            return
-
-        port = model_obj.port
-        if not port:
-            self._send_json({"error": f"No port configured for model '{model_name}'"}, 500)
-            return
-
-        # Auto-start if not running
-        if svc_name not in pm.mgr.active_services:
-            log.info("Rerank model %s not running — auto-starting", svc_name)
-            result = pm.mgr.switch(svc_name)
-            if result.get("status") != "switched":
-                msg = result.get("message", "unknown error")
-                log.error("Failed to start rerank model %s: %s", svc_name, msg)
-                self._send_json({"error": f"Failed to start rerank model: {msg}"}, 503)
-                return
-            if not pm._wait_healthy(svc_name, timeout=30):
-                self._send_json({"error": f"Rerank model '{svc_name}' failed health check within 30s"}, 503)
-                return
-        elif not pm._wait_healthy(svc_name, timeout=10):
-            log.warning("Rerank model %s not healthy, attempting restart", svc_name)
-            pm.mgr.stop_independent(svc_name)
-            result = pm.mgr.switch(svc_name)
-            if result.get("status") != "switched" or not pm._wait_healthy(svc_name, timeout=30):
-                self._send_json({"error": f"Rerank model '{svc_name}' failed to restart"}, 503)
-                return
-
-        body = json.dumps(data).encode("utf-8")
-        conn = pm.make_conn(port, timeout=30)
+        gate = guard["gate"]
+        ctx = guard["ctx"]
+        svc_name = ctx["svc_name"]
+        port = ctx["port"]
+        status = 503
         try:
-            conn.request("POST", "/v1/rerank", body=body,
-                         headers={"Content-Type": "application/json"})
-            resp = conn.getresponse()
-            resp_body = resp.read()
-            self.send_response(resp.status)
-            for k, v in resp.getheaders():
-                self.send_header(k, v)
-            self.end_headers()
-            self._safe_write(resp_body)
-        except Exception as e:
-            log.error("Rerank request failed: %s", e)
-            self._send_json({"error": "Upstream unavailable", "detail": str(e)}, 503)
+            # Auto-start if not running (guard only passes when AUTO_SWITCH=on)
+            if svc_name not in pm.mgr.active_services:
+                log.info("Rerank model %s not running — auto-starting", svc_name)
+                result = pm.mgr.switch(svc_name)
+                if result.get("status") != "switched":
+                    msg = result.get("message", "unknown error")
+                    log.error("Failed to start rerank model %s: %s", svc_name, msg)
+                    self._send_json({"error": f"Failed to start rerank model: {msg}"}, 503)
+                    return
+                if not pm._wait_healthy(svc_name, timeout=30):
+                    self._send_json({"error": f"Rerank model '{svc_name}' failed health check within 30s"}, 503)
+                    return
+            elif not pm._wait_healthy(svc_name, timeout=10):
+                log.warning("Rerank model %s not healthy, attempting restart", svc_name)
+                pm.mgr.stop_independent(svc_name)
+                result = pm.mgr.switch(svc_name)
+                if result.get("status") != "switched" or not pm._wait_healthy(svc_name, timeout=30):
+                    self._send_json({"error": f"Rerank model '{svc_name}' failed to restart"}, 503)
+                    return
+
+            body = json.dumps(data).encode("utf-8")
+            conn = pm.make_conn(port, timeout=30)
+            try:
+                conn.request("POST", "/v1/rerank", body=body,
+                             headers={"Content-Type": "application/json"})
+                resp = conn.getresponse()
+                resp_body = resp.read()
+                status = resp.status
+                self.send_response(status)
+                for k, v in resp.getheaders():
+                    self.send_header(k, v)
+                self.end_headers()
+                self._safe_write(resp_body)
+            except Exception as e:
+                log.error("Rerank request failed: %s", e)
+                self._send_json({"error": "Upstream unavailable", "detail": str(e)}, 503)
+            finally:
+                conn.close()
         finally:
-            conn.close()
+            pm.logger.log(RequestLog(
+                req_id=ctx["req_id"], key_name=ctx["key_name"], model=model_name,
+                status=status, route="local",
+                duration_ms=(time.monotonic() - ctx["req_start"]) * 1000,
+            ))
+            gate.release()
 
 
 # ─── Threaded HTTP Server ────────────────────────────────────────
