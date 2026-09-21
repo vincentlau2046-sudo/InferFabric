@@ -1066,8 +1066,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def _handle_reload_config(self, pm):
         """POST /reload-config — 热加载 models.d/*.yaml 并刷新 dashboard 缓存。"""
         if hasattr(pm, 'config_reloader') and pm.config_reloader:
-            pm.config_reloader.reload_all()
-            self._send_json({"status": "reloaded"})
+            failed = pm.config_reloader.reload_all() or []
+            body = {"status": "reloaded"}
+            if failed:
+                # B2: 如实回报失败域，不再无条件声称成功
+                body["failed"] = failed
+            self._send_json(body)
         else:
             # Fallback: direct reload if ConfigReloader not available
             pm.mgr.reload_models()
