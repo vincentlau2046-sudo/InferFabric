@@ -580,6 +580,19 @@ class TestNInferAdapterStartContainerName:
         with pytest.raises(RuntimeError):
             adapter.start(model)
 
+    def test_get_pid_state_key_returns_ninfer_pid(self):
+        """get_pid_state_key 返回 'ninfer_pid'（镜像 vllm/sglang/comfyui/tts/asr）。
+
+        NInferAdapter 原先继承基类 None → gpu_state._detect_orphan_pids /
+        _restore_dead_pids 跳过 ninfer：容器死了 state.db 残留 ninfer_pid 不被清理，
+        服务在跑但 pid 丢失也不经 fuser 恢复。返回 'ninfer_pid' 把 ninfer 纳入扫描，
+        与所有 GPU 引擎对齐。facade 已有 ninfer_pid 属性，start_ninfer 存的是 PGID
+        （start_new_session=True），os.killpg 判活正确。
+        """
+        from inferfabric.engine_adapter import get_adapter
+        adapter = get_adapter("ninfer")
+        assert adapter.get_pid_state_key() == "ninfer_pid"
+
 
 class TestSGLangAdapterStartContainerName:
     """SGLangAdapter.start 委托 start_sglang(cfg, model.container_name)（Task 5）。"""
