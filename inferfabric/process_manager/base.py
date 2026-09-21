@@ -99,6 +99,8 @@ class BaseProcessManager:
             log.warning("pid cmdline decode failed: %s", e)
             return False
 
+        return expected_substring.lower() in cmdline.lower()
+
     # ─── Internal Helpers ────────────────────────────────────────
 
     def _cleanup_pid_files(self, prefix: str):
