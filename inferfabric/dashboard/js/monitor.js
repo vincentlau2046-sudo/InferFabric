@@ -7,7 +7,8 @@
  *
  * 数据源（全部 GET，只读）：
  *   - store /api/snapshot → metrics_24h request_log history gpu gpu_util active_services
- *   - window.__TOKEN_STATS__ → 按日聚合 prompt/completion tokens
+ *   - GET /api/token-curve?granularity=hour → 小时图 60 分钟桶（prompt/completion 拆分）
+ *   - window.__TOKEN_STATS__ → 按日聚合 prompt/completion tokens（day/month 图）
  *   - GET /api/engine_metrics?model=<active> → 5 KPI 原始指标
  *
  * 窗口/粒度切换 = 客户端 display filter（不触达服务端状态变更）。
@@ -43,6 +44,14 @@
   var _engineModel = null;
   var _lastEngineFetch = 0;
   var ENGINE_TTL = 15000;        // 15s
+
+  // Token 小时图节流 + 数据源切换（方案 B）：
+  // 旧版复用 snapshot 的 request_log（limit=50）→ 重流量下只画 ~4 根柱子。
+  // 改为单独 fetch /api/token-curve?granularity=hour（服务端 60 桶聚合 + limit=100000）。
+  // local[i] = idx i（i=0 最旧 59 分钟前、i=59 最新），含 prompt/completion 拆分。
+  var _tokenHourCache = null;
+  var _lastTokenHourFetch = 0;
+  var TOKEN_HOUR_TTL = 15000;    // 15s — 同 ENGINE_TTL
 
   /* ── 小工具 ── */
   function escHtml(s) {
@@ -168,7 +177,8 @@
   /* ── 2. Token 用量：prompt/completion 堆叠条 ──
    * 2 系列（Prompt + Completion），单 y 轴。
    * 粒度 hour/day/month = display filter。
-   *   - hour: snapshot request_log 按分钟分桶（最近 1h，60 桶）
+   *   - hour: /api/token-curve?granularity=hour（服务端 60 分钟桶 + limit=100000）
+   *         — 不再用 snapshot request_log（limit=50，重流量下只画 ~4 根柱子）
    *   - day:  __TOKEN_STATS__ 按日（已有 prompt_tokens/generation_tokens 拆分）
    *   - month: __TOKEN_STATS__ 按月聚合 */
   function buildTokenData(gran) {
@@ -178,31 +188,51 @@
   }
 
   function buildTokenHour() {
-    var logs = store.get('request_log') || [];
-    var buckets = [];
-    for (var i = 0; i < 60; i++) buckets.push({ p: 0, c: 0 });
+    // 数据源：/api/token-curve?granularity=hour（服务端 60 桶 + limit=100000）。
+    // 旧版复用 snapshot request_log（limit=50）→ 重流量下只画 ~4 根柱子（Ruling 根因）。
     var now = Date.now();
-    for (var i2 = 0; i2 < logs.length; i2++) {
-      var l = logs[i2];
-      if (!l || !l.timestamp) continue;
-      var d = new Date(l.timestamp * 1000);
-      var diff = now - d.getTime();
-      if (diff < 0 || diff > 3600000) continue;
-      var minAgo = Math.floor(diff / 60000);
-      var idx = 59 - minAgo;
-      if (idx >= 0 && idx < 60) {
-        buckets[idx].p += (l.tokens_in || 0);
-        buckets[idx].c += (l.tokens_out || 0);
-      }
+
+    // 同步返回缓存（命中 TTL）；否则启动异步 fetch 并返回上次缓存或全零（不阻塞渲染）。
+    if (_tokenHourCache && (now - _lastTokenHourFetch) < TOKEN_HOUR_TTL) {
+      return _tokenHourFromBuckets(_tokenHourCache, now);
     }
+    if (!_tokenHourFetchInflight) {
+      _tokenHourFetchInflight = true;
+      fetch('/api/token-curve?granularity=hour', { cache: 'no-store' })
+        .then(function (res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function (data) {
+          _tokenHourCache = (data && data.local) || [];
+          _lastTokenHourFetch = Date.now();
+        })
+        .catch(function (e) {
+          console.warn('[monitor] token-curve fetch failed:', e);
+          // 失败不清缓存（保留下次可用旧值）；无缓存则置空
+          _lastTokenHourFetch = Date.now();
+        })
+        .then(function () {
+          _tokenHourFetchInflight = false;
+          if (isMonitorActive()) renderTokenChart();
+        });
+    }
+    return _tokenHourFromBuckets(_tokenHourCache, now);
+  }
+
+  // 把 token-curve 的 local 桶数组（idx 0=最旧→59=最新）转成图表数据。
+  // 无缓存时返回 60 个零桶（空图 + empty state）。
+  var _tokenHourFetchInflight = false;
+  function _tokenHourFromBuckets(local, now) {
     var xs = [];
     var prompt = [];
     var comp = [];
     for (var k = 0; k < 60; k++) {
       var dd = new Date(now - (59 - k) * 60000);
       xs.push(dd.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }));
-      prompt.push(buckets[k].p);
-      comp.push(buckets[k].c);
+      var b = (local && local[k]) || {};
+      prompt.push(b.prompt || 0);
+      comp.push(b.completion || 0);
     }
     return { xs: xs, prompt: prompt, completion: comp };
   }

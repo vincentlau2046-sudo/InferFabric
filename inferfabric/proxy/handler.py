@@ -776,15 +776,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"error": f"invalid granularity: {g}"}, 400)
                 return
             spec = specs[g]
-            since = int(time.time() - spec["since"])
+            now_ts = time.time()
+            since = int(now_ts - spec["since"])
             tz8 = timezone(timedelta(hours=8))
             rows = pm.telemetry.query_request_log(since=since, limit=100000)
 
             n = spec["buckets"]
             # 月档 x 轴为日号 (1-31)，其余档 x 从 0 起
             x_start = 1 if g == "month" else 0
-            local_b = [{"x": x_start + i, "tokens": 0, "requests": 0} for i in range(n)]
-            cloud_b = [{"x": x_start + i, "tokens": 0, "requests": 0} for i in range(n)]
+            # 每桶含 prompt/completion 拆分（供 Prompt/Completion 堆叠条图表用）；
+            # tokens 保留（= prompt+completion，向后兼容已有消费者）
+            local_b = [{"x": x_start + i, "tokens": 0, "prompt": 0,
+                        "completion": 0, "requests": 0} for i in range(n)]
+            cloud_b = [{"x": x_start + i, "tokens": 0, "prompt": 0,
+                        "completion": 0, "requests": 0} for i in range(n)]
 
             def x_of(ts):
                 dt = datetime.fromtimestamp(ts, tz=tz8)
@@ -794,15 +799,38 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 ts = r.get("timestamp")
                 if ts is None:
                     continue
+                # hour 档按"相对年龄"分桶（idx = 59 - 分钟差），与图表 x 轴语义一致
+                # （最旧在左 idx=0、最新在右 idx=59）。避免时钟分钟把"m 分钟前的整点"
+                # 与"m-(60) 分钟前"合并不连续时段。
+                if g == "hour":
+                    min_ago = int((now_ts - ts) // 60)
+                    idx = 59 - min_ago
+                    try:
+                        tokens_in = int(r.get("tokens_in") or 0)
+                        tokens_out = int(r.get("tokens_out") or 0)
+                    except (ValueError, TypeError):
+                        continue
+                    tokens = tokens_in + tokens_out
+                    target = cloud_b if r.get("cloud_provider") else local_b
+                    if 0 <= idx < n:
+                        target[idx]["tokens"] += tokens
+                        target[idx]["prompt"] += tokens_in
+                        target[idx]["completion"] += tokens_out
+                        target[idx]["requests"] += 1
+                    continue
                 try:
                     x = x_of(ts)
                 except (ValueError, OSError):
                     continue
-                tokens = int(r.get("tokens_in") or 0) + int(r.get("tokens_out") or 0)
+                tokens_in = int(r.get("tokens_in") or 0)
+                tokens_out = int(r.get("tokens_out") or 0)
+                tokens = tokens_in + tokens_out
                 target = cloud_b if r.get("cloud_provider") else local_b
                 idx = x - x_start
                 if 0 <= idx < n:
                     target[idx]["tokens"] += tokens
+                    target[idx]["prompt"] += tokens_in
+                    target[idx]["completion"] += tokens_out
                     target[idx]["requests"] += 1
 
             self._send_json({
