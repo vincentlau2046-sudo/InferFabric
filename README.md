@@ -22,7 +22,7 @@
 | 推理引擎 | 9 种适配器：vLLM/NInfer/SGLang/Ollama/Ollama.cpp/ComfyUI/TTS/ASR/OllamaDaemon | 一种引擎一套工具链 |
 | 云端代理 | 9 个预设 + 自动发现 + 同一 API 路由 | 每个云商一套 SDK/Key 管理 |
 | 治理 | 重试/熔断/缓存/限流/超时/负载均衡/异常采集/全链路日志 | 无（直连引擎） |
-| 管理界面 | macOS 风格 Dashboard（监控/切换/聊天/部署/OpenAPI 阅览） | 终端 curl 或 YAML 编辑 |
+| 管理界面 | macOS 风格 Dashboard（监控/切换/部署/OpenAPI 阅览） | 终端 curl 或 YAML 编辑 |
 
 **设计哲学**：吃自己的狗粮。InferFabric 把本地模型暴露为 Anthropic 兼容 API——你可以把 `ANTHROPIC_BASE_URL` 指回本地 `localhost:8999`，用 Claude Code 驱动开发同时验证推理网关的兼容性和性能。反馈闭环即产品验证。**自 5.8.0 起是一条命令加 `--async` 即可启用生产级 aiohttp 异步引擎。**
 
@@ -341,29 +341,31 @@ API Keys are never stored in plaintext—automatically converted to `${ENV_VAR}`
 
 ---
 
-## Dashboard (v5.5.x)
+## Dashboard (v6.0.x)
 
-A macOS-inspired sidebar dashboard for model management, monitoring, and chat testing:
+A macOS-inspired sidebar dashboard for model management, monitoring, and multi-engine inference:
 
 | | |
 |:---:|:---:|
-| **Overview — GPU metrics + model cards** | **Cloud providers management** |
-| ![Dashboard Overview](docs/screenshots/00-dashboard-overview.png) | ![Cloud Providers](docs/screenshots/02-cloud-providers.png) |
-| **Chat inference panel** | **Metrics & monitoring** |
-| ![Chat Panel](docs/screenshots/03-chat-panel.png) | ![Metrics](docs/screenshots/04-metrics.png) |
-| **GPU status & vLLM performance** | |
-| ![GPU Status](docs/screenshots/05-gpu-status.png) | |
+| **Overview — GPU metrics + model cards** | **Inference — model lifecycle & engine metrics** |
+| ![Dashboard Overview](docs/screenshots/00-dashboard-overview.png) | ![Inference](docs/screenshots/03-inference.png) |
+| **Metrics & monitoring** | **Cloud providers management** |
+| ![Metrics](docs/screenshots/04-metrics.png) | ![Cloud Providers](docs/screenshots/02-cloud-providers.png) |
+| **Anomaly detection** | |
+| ![Anomaly](docs/screenshots/05-anomaly.png) | |
 
 **Features**:
-- Sidebar navigation (推理/监控/云端/部署/Chat)
-- Live 4-metric bar: GPU memory · GPU load · System memory · CPU load
-- Model card grid with macOS-icon-box layout, status badges, start/stop controls
-- vLLM performance panels: token throughput, latency distribution, KV cache usage
-- Token usage charts with time-series visualization
-- Cloud provider management: CRUD, auto-discover, connection test
-- Chat inference panel with local + cloud model support, streaming responses
-- Dark mode, typography hierarchy, WCAG AA contrast
-- OpenAPI spec viewer (📖 link in top bar)
+- Sidebar navigation（总览/推理/监控/部署/云端/异常）
+- Live status rail: GPU memory · GPU load · GPU temp · VRAM · System memory · CPU
+- Overview: model card grid with macOS-icon-box layout, status badges, start/stop controls, live snapshot freshness (ETag / 304 + TTL single-flight cache)
+- Monitor: **6-KPI 2×3 panel**（KV Cache · Batch Size · Seq Length · TPOT ms · TTFT s · Throughput）, GPU time-series ring buffer (3s sampling), local + cloud token-usage charts standardized to **30-day** bars (day / hour / month granularity)
+- **Engine-agnostic token stats**: DB-sourced instead of engine Prometheus counters — works across vLLM / sglang / ninfer; `/api/engine_metrics` route exposes per-model KV cache, batch size, sequence length, latency & throughput
+- **Two-scope token charts**: local engine vs. cloud provider consumption split side-by-side
+- Cloud provider management: CRUD, auto-discover, connection test, API key masked-then-expanded forwarding
+- Anomaly detection: top-N anomalies with severity classification
+- Dual-protocol routing: local vLLM/sglang + cloud OpenAI-compatible, unified via YAML engine-type aliases
+- Dark mode (default) + light mode, typography hierarchy, WCAG AA contrast
+- OpenAPI 3.1.0 spec viewer（📖 link in top bar, 37 endpoints）
 
 ---
 
@@ -564,6 +566,7 @@ bash scripts/iff-recovery.sh --full  # Nuclear: SIGKILL all + nvidia-smi -gpu-re
 | v5.6.7 | 2026-09 | R0: `ensure_service` cooldown fix |
 | v5.6.8 | 2026-09 | **Gateway Hardening**: R1-R10, Prometheus /metrics, AnomalyCollector, silent fallback removal |
 | **v5.8.0** | **2026-09** | **PR-19: Production-grade aiohttp async edge (`--async`)** — hybrid executor model, 7 stream routes with incremental SSE pump, 30+ buffered routes with full header propagation, chunked request body support, 100MB client_max_size, EADDRINUSE retry, systemd sd_notify, C extension wheel rebuild (2.7x perf), dead route cleanup, **path normalization fix**: `/v1/completions`/`/api/chat`/`/api/generate` aliased to `/v1/chat/completions` (engine-type-driven via YAML). |
+| **v6.0.0** | **2026-09** | **Dashboard data-chain engine-agnostic + two-scope** — token stats DB-sourced (no longer vLLM Prometheus-only, works across vLLM/sglang/ninfer); local vs. cloud two-scope token charts; `/api/engine_metrics` route (KV cache / batch size / seq length / TPOT / TTFT / throughput); **6-KPI 2×3 panel** with Batch Size + unified TPOT(ms, 2dp)/TTFT(s, 2dp) units; 30-day standardized bar charts; live snapshot freshness (ETag/304 + TTL single-flight cache); AnomalyCollector tab. |
 
 ---
 
