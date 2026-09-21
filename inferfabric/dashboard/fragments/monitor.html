@@ -57,9 +57,22 @@
           </div>
         </div>
         <div class="if-card-body">
-          <div class="mon-chart-wrap">
-            <div id="monTokenChart" class="mon-chart"></div>
-            <div id="monTokenEmpty" class="mon-chart-empty" style="display:none">暂无 Token 数据</div>
+          <!-- 双 scope：本地引擎（vllm/sglang/ninfer/ollama）与云端透传分开成两张图 -->
+          <div class="mon-token-split">
+            <div class="mon-token-panel">
+              <div class="mon-token-panel-hdr">本地模型</div>
+              <div class="mon-chart-wrap">
+                <div id="monTokenLocalChart" class="mon-chart mon-chart--split"></div>
+                <div id="monTokenLocalEmpty" class="mon-chart-empty" style="display:none">暂无本地 Token 数据</div>
+              </div>
+            </div>
+            <div class="mon-token-panel">
+              <div class="mon-token-panel-hdr">云端模型</div>
+              <div class="mon-chart-wrap">
+                <div id="monTokenCloudChart" class="mon-chart mon-chart--split"></div>
+                <div id="monTokenCloudEmpty" class="mon-chart-empty" style="display:none">暂无云端 Token 数据</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>

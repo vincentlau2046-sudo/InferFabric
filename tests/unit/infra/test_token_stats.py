@@ -28,7 +28,8 @@ class TestTokenStatsCollectorInit:
 
         collector = TokenStatsCollector(manager_ref=None, interval=60, db=None)
 
-        assert collector._state == {}
+        # 双 scope 结构：{local:{}, cloud:{}}（v5.2 DB 聚合路径拆分本地/云端）
+        assert collector._state == {"local": {}, "cloud": {}}
         assert collector._snapshots == {}
         assert collector.interval == 60
         assert collector._thread is None
@@ -138,11 +139,12 @@ class TestTokenStatsAggregate:
 
         collector._aggregate("test-model", {"prompt_sum": 100, "gen_sum": 200, "req_total": 5})
 
-        assert today in collector._state
-        assert "test-model" in collector._state[today]
-        assert collector._state[today]["test-model"]["prompt_tokens"] == 100
-        assert collector._state[today]["test-model"]["generation_tokens"] == 200
-        assert collector._state[today]["test-model"]["requests"] == 5
+        # 默认 scope="local"（Prometheus 路径只统计本地引擎）
+        assert today in collector._state["local"]
+        assert "test-model" in collector._state["local"][today]
+        assert collector._state["local"][today]["test-model"]["prompt_tokens"] == 100
+        assert collector._state["local"][today]["test-model"]["generation_tokens"] == 200
+        assert collector._state["local"][today]["test-model"]["requests"] == 5
 
     def test_aggregate_accumulates(self):
         """多次聚合累加。"""
@@ -154,9 +156,14 @@ class TestTokenStatsAggregate:
         collector._aggregate("m1", {"prompt_sum": 10, "gen_sum": 20, "req_total": 1})
         collector._aggregate("m1", {"prompt_sum": 5, "gen_sum": 10, "req_total": 1})
 
-        assert collector._state[today]["m1"]["prompt_tokens"] == 15
-        assert collector._state[today]["m1"]["generation_tokens"] == 30
-        assert collector._state[today]["m1"]["requests"] == 2
+        assert collector._state["local"][today]["m1"]["prompt_tokens"] == 15
+        assert collector._state["local"][today]["m1"]["generation_tokens"] == 30
+        assert collector._state["local"][today]["m1"]["requests"] == 2
+
+        # scope 参数：cloud 行独立计入 cloud scope，不与 local 混算
+        collector._aggregate("m1", {"prompt_sum": 7, "gen_sum": 9, "req_total": 1}, scope="cloud")
+        assert collector._state["cloud"][today]["m1"]["prompt_tokens"] == 7
+        assert collector._state["local"][today]["m1"]["prompt_tokens"] == 15  # local 不受影响
 
     def test_aggregate_multiple_models(self):
         """不同模型独立聚合。"""
@@ -168,8 +175,8 @@ class TestTokenStatsAggregate:
         collector._aggregate("m1", {"prompt_sum": 10, "gen_sum": 20, "req_total": 1})
         collector._aggregate("m2", {"prompt_sum": 30, "gen_sum": 40, "req_total": 2})
 
-        assert collector._state[today]["m1"]["prompt_tokens"] == 10
-        assert collector._state[today]["m2"]["prompt_tokens"] == 30
+        assert collector._state["local"][today]["m1"]["prompt_tokens"] == 10
+        assert collector._state["local"][today]["m2"]["prompt_tokens"] == 30
 
 
 class TestTokenStatsCleanup:
@@ -184,13 +191,16 @@ class TestTokenStatsCleanup:
         old_date = (datetime.now(tz=timezone.utc) - timedelta(days=31)).strftime("%Y-%m-%d")
         today = collector._today_key()
 
-        collector._state[old_date] = {"m1": {"prompt_tokens": 100}}
-        collector._state[today] = {"m1": {"prompt_tokens": 200}}
+        collector._state["local"][old_date] = {"m1": {"prompt_tokens": 100}}
+        collector._state["local"][today] = {"m1": {"prompt_tokens": 200}}
+        collector._state["cloud"][old_date] = {"m2": {"prompt_tokens": 10}}
 
         collector._cleanup()
 
-        assert old_date not in collector._state
-        assert today in collector._state
+        # 两个 scope 各自按 30 天保留
+        assert old_date not in collector._state["local"]
+        assert today in collector._state["local"]
+        assert old_date not in collector._state["cloud"]
 
     def test_cleanup_preserves_recent_data(self):
         """_cleanup 保留近期数据。"""
@@ -201,13 +211,15 @@ class TestTokenStatsCleanup:
         recent_date = (datetime.now(tz=timezone.utc) - timedelta(days=15)).strftime("%Y-%m-%d")
         today = collector._today_key()
 
-        collector._state[recent_date] = {"m1": {"prompt_tokens": 100}}
-        collector._state[today] = {"m1": {"prompt_tokens": 200}}
+        collector._state["local"][recent_date] = {"m1": {"prompt_tokens": 100}}
+        collector._state["local"][today] = {"m1": {"prompt_tokens": 200}}
+        collector._state["cloud"][recent_date] = {"m2": {"prompt_tokens": 5}}
 
         collector._cleanup()
 
-        assert recent_date in collector._state
-        assert today in collector._state
+        assert recent_date in collector._state["local"]
+        assert today in collector._state["local"]
+        assert recent_date in collector._state["cloud"]
 
 
 class TestTokenStatsLifecycle:

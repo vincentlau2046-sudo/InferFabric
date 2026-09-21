@@ -26,7 +26,10 @@ class TokenStatsCollector:
         self.manager_ref = manager_ref  # callable returning manager instance
         self.interval = interval
         self._db = db  # v5.2: IFFDB reference for DB-backed queries
-        self._state = {}  # {date_str: {model: {prompt, generation, requests}}}
+        # 双 scope 结构：local（本地引擎 vllm/sglang/ninfer/ollama…）/ cloud（云端透传）。
+        # 每 scope = {date_str: {model: {prompt_tokens, generation_tokens, requests}}}。
+        # 云端行在 request_log.db 里带 cloud_provider 字段，据此拆分（引擎无关）。
+        self._state = {"local": {}, "cloud": {}}
         self._snapshots = {}  # {port: {prompt_sum, gen_sum, req_total, ts}}
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -136,12 +139,14 @@ class TokenStatsCollector:
     def _today_key(self) -> str:
         return datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
 
-    def _aggregate(self, model_name: str, delta: dict):
+    def _aggregate(self, model_name: str, delta: dict, scope: str = "local"):
+        """Legacy Prometheus 路径：计数器增量累加到指定 scope（默认 local）。"""
         with self._lock:
             day = self._today_key()
-            if day not in self._state:
-                self._state[day] = {}
-            day_data = self._state[day]
+            scope_state = self._state.setdefault(scope, {})
+            if day not in scope_state:
+                scope_state[day] = {}
+            day_data = scope_state[day]
             if model_name not in day_data:
                 day_data[model_name] = {"prompt_tokens": 0, "generation_tokens": 0, "requests": 0}
             day_data[model_name]["prompt_tokens"] += delta.get("prompt_sum", 0)
@@ -175,9 +180,10 @@ class TokenStatsCollector:
         cutoff = datetime.now(tz=timezone.utc) - timedelta(days=30)
         cutoff_str = cutoff.strftime("%Y-%m-%d")
         with self._lock:
-            expired = [d for d in self._state if d < cutoff_str]
-            for d in expired:
-                del self._state[d]
+            for scope in ("local", "cloud"):
+                expired = [d for d in self._state.get(scope, {}) if d < cutoff_str]
+                for d in expired:
+                    del self._state[scope][d]
         if expired:
             log.info("Cleaned up %d expired date(s)", len(expired))
             # No immediate persist needed — next _collect_once() cycle will write
@@ -185,12 +191,48 @@ class TokenStatsCollector:
 
     # --- 查询 ---
 
-    def query_db(self, window: str = "weekly") -> list[dict] | None:
-        """Query token stats from request_log.db (v5.2 unified path)."""
+    @staticmethod
+    def _aggregate_rows(rows) -> dict:
+        """把 request_log 行聚合成双 scope 的按日结构。
+
+        返回 {"local": {date:{model:bucket}}, "cloud": {date:{model:bucket}}}。
+        云端行（带 cloud_provider）计入 cloud，其余计入 local —— 引擎无关，
+        涵盖 vllm/sglang/ninfer/ollama/… 所有本地引擎（修复 ninfer 缺口根因）。
+        """
+        local: dict[str, dict[str, dict]] = {}
+        cloud: dict[str, dict[str, dict]] = {}
+        for r in rows or []:
+            ts = r.get("timestamp")
+            if ts is None:
+                continue
+            try:
+                date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+            except (ValueError, OSError, TypeError):
+                continue
+            model = r.get("model") or "unknown"
+            target = cloud if r.get("cloud_provider") else local
+            bucket = target.setdefault(date_str, {}).setdefault(
+                model, {"prompt_tokens": 0, "generation_tokens": 0, "requests": 0})
+            try:
+                bucket["prompt_tokens"] += int(r.get("tokens_in") or 0)
+                bucket["generation_tokens"] += int(r.get("tokens_out") or 0)
+            except (TypeError, ValueError):
+                pass
+            bucket["requests"] += 1
+        return {
+            "local": dict(sorted(local.items())),
+            "cloud": dict(sorted(cloud.items())),
+        }
+
+    def query_db(self, window: str = "weekly") -> dict | None:
+        """Query token stats from request_log.db (v5.2 unified path, engine-agnostic).
+
+        返回双 scope 结构 {"local":{date:{model:bucket}},"cloud":{...}}；无 db → None。
+        """
         if not self._db:
             return None
-        from datetime import datetime, timezone, timedelta
-        now = datetime.now(timezone.utc)
+        from datetime import timedelta
+        now = datetime.now(tz=timezone.utc)
         if window == "weekly":
             since = (now - timedelta(days=7)).timestamp()
         elif window == "24h":
@@ -200,27 +242,7 @@ class TokenStatsCollector:
         else:
             since = (now - timedelta(days=30)).timestamp()
         rows = self._db.query_request_log(since=since, limit=100000)
-        if not rows:
-            return None
-        # Aggregate: date → model → {prompt_tokens, generation_tokens}
-        aggregated: dict[str, dict[str, dict]] = {}
-        for r in rows:
-            try:
-                ts = datetime.fromtimestamp(r.get("timestamp", 0), tz=timezone.utc)
-            except (ValueError, OSError):
-                continue
-            date_str = ts.strftime("%Y-%m-%d")
-            model = r.get("model", "unknown")
-            if date_str not in aggregated:
-                aggregated[date_str] = {}
-            if model not in aggregated[date_str]:
-                aggregated[date_str][model] = {
-                    "prompt_tokens": 0, "generation_tokens": 0, "requests": 0,
-                }
-            aggregated[date_str][model]["prompt_tokens"] += r.get("tokens_in", 0)
-            aggregated[date_str][model]["generation_tokens"] += r.get("tokens_out", 0)
-            aggregated[date_str][model]["requests"] += 1
-        return dict(sorted(aggregated.items()))
+        return self._aggregate_rows(rows)
 
     def query(self, window: str = "weekly") -> list[dict]:
         """Query aggregated data for a time window.
@@ -243,14 +265,15 @@ class TokenStatsCollector:
         all_data = self._load_full_state()
 
         total = {}
-        for date_str, models in all_data.items():
-            if since and date_str < since.strftime("%Y-%m-%d"):
-                continue
-            for model, vals in models.items():
-                if model not in total:
-                    total[model] = {"total_tokens": 0, "requests": 0}
-                total[model]["total_tokens"] += vals.get("prompt_tokens", 0) + vals.get("generation_tokens", 0)
-                total[model]["requests"] += vals.get("requests", 0)
+        for scope in ("local", "cloud"):
+            for date_str, models in all_data.get(scope, {}).items():
+                if since and date_str < since.strftime("%Y-%m-%d"):
+                    continue
+                for model, vals in models.items():
+                    if model not in total:
+                        total[model] = {"total_tokens": 0, "requests": 0}
+                    total[model]["total_tokens"] += vals.get("prompt_tokens", 0) + vals.get("generation_tokens", 0)
+                    total[model]["requests"] += vals.get("requests", 0)
 
         return [{"model": m, "total_tokens": d["total_tokens"], "requests": d["requests"]} for m, d in total.items()]
 
@@ -267,17 +290,30 @@ class TokenStatsCollector:
             with open(STATE_FILE) as f:
                 file_data = json.load(f)
             with self._lock:
-                for date_str, models in file_data.items():
-                    if date_str not in self._state:
-                        self._state[date_str] = models
+                if "local" in file_data or "cloud" in file_data:
+                    # 双 scope 新格式
+                    for scope in ("local", "cloud"):
+                        scope_state = self._state.setdefault(scope, {})
+                        for date_str, models in (file_data.get(scope) or {}).items():
+                            if date_str not in scope_state:
+                                scope_state[date_str] = models
+                else:
+                    # 旧版扁平格式 {date:{model:bucket}} → 全部归入 local（历史仅本地引擎）
+                    scope_state = self._state.setdefault("local", {})
+                    for date_str, models in file_data.items():
+                        if date_str not in scope_state:
+                            scope_state[date_str] = models
         except Exception as e:
             log.warning("Load from file failed: %s", e)
 
     def _load_full_state(self) -> dict:
-        """Return complete state (file + memory)."""
+        """Return complete two-scope state (file + memory): {"local":{...},"cloud":{...}}."""
         self._load_from_file()
         with self._lock:
-            return dict(self._state)
+            return {
+                "local": dict(self._state.get("local", {})),
+                "cloud": dict(self._state.get("cloud", {})),
+            }
 
     def _get_port_engine(self, port: int) -> str:
         """Return engine type for a given port by checking manager status."""
@@ -294,19 +330,49 @@ class TokenStatsCollector:
     # --- 采集循环 ---
 
     def _collect_once(self):
-        """Single collection cycle."""
-        ports = self._get_active_ports()
-        for port, model_name in ports.items():
-            engine_type = self._get_port_engine(port)
-            current = self._fetch_port_metrics(port, engine_type)
-            if current is None:
-                continue
-            delta = self._compute_deltas(port, current)
-            if delta is not None:
-                self._aggregate(model_name, delta)
+        """Single collection cycle.
+
+        有 self._db → DB 聚合（引擎无关，含 ninfer/ollama，拆 local/cloud）；
+        无 db → 回退旧 Prometheus 计数器路径（仅 vllm/sglang，local only）。
+        """
+        if self._db is not None:
+            self._collect_once_from_db()
+        else:
+            ports = self._get_active_ports()
+            for port, model_name in ports.items():
+                engine_type = self._get_port_engine(port)
+                current = self._fetch_port_metrics(port, engine_type)
+                if current is None:
+                    continue
+                delta = self._compute_deltas(port, current)
+                if delta is not None:
+                    self._aggregate(model_name, delta, scope="local")
 
         self._persist()
         self._cleanup()
+
+    def _collect_once_from_db(self):
+        """从 request_log.db 重新聚合最近 30 天的按日 buckets（引擎无关）。
+
+        相比旧的 Prometheus 计数器增量：
+          * 覆盖所有引擎（ninfer 等不暴露 Prometheus 计数器的引擎也计入）；
+          * 自校正（每周期从 DB 重新推导，无计数器漂移/复位问题）；
+          * 按 cloud_provider 拆 local / cloud。
+        """
+        from datetime import timedelta
+        now = datetime.now(tz=timezone.utc)
+        since = (now - timedelta(days=30)).timestamp()
+        try:
+            rows = self._db.query_request_log(since=since, limit=200000)
+        except Exception as e:
+            log.warning("DB token aggregation failed: %s", e)
+            return
+        agg = self._aggregate_rows(rows)
+        with self._lock:
+            # 用最近 30 天 DB 数据重建两个 scope（比文件更完整、自校正）；
+            # 更旧的历史由随后的 _cleanup 统一按 30 天保留策略丢弃。
+            self._state["local"] = agg["local"]
+            self._state["cloud"] = agg["cloud"]
 
     def _run_loop(self):
         """Main collection loop."""

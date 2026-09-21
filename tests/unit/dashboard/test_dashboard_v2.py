@@ -418,7 +418,8 @@ def test_monitor_structure():
     html = _html()
     for panel_id in (
         'id="monGpuChart"',     # GPU vram+util 时间曲线
-        'id="monTokenChart"',   # Token prompt/completion 堆叠条
+        'id="monTokenLocalChart"',  # Token 用量 · 本地引擎（vllm/sglang/ninfer…）
+        'id="monTokenCloudChart"',  # Token 用量 · 云端透传
         'id="monLatencyChart"', # 延迟 P50/P95 双线
         'id="monKpis"',         # 五联 KPI
         'id="monLogTable"',     # 请求日志表
@@ -426,6 +427,8 @@ def test_monitor_structure():
         'id="monCostCard"',     # 费用概览卡
     ):
         assert panel_id in html, "missing monitor panel id: %s" % panel_id
+    # Token 用量双 scope 拆分容器（本地 / 云端两张独立图）
+    assert 'class="mon-token-split"' in html
     # 窗口/粒度切换按钮 data-win / data-gran 契约（display filter）
     for win in ('1h', '24h', '7d'):
         assert 'data-win="%s"' % win in html, "missing GPU window toggle: %s" % win
@@ -445,9 +448,10 @@ def test_monitor_js_present():
         "monitor.js tab renderer registration not inlined into HTML"
     )
     js = js_path.read_text(encoding="utf-8")
-    # 三图均通过 IFCharts.create 创建（null-check each）
+    # 四图均通过 IFCharts.create 创建（null-check each）；Token 拆本地/云端两张
     assert "IFCharts.create('monGpuChart')" in js
-    assert "IFCharts.create('monTokenChart')" in js
+    assert "IFCharts.create('monTokenLocalChart')" in js
+    assert "IFCharts.create('monTokenCloudChart')" in js
     assert "IFCharts.create('monLatencyChart')" in js
     # 订阅 store sync_meta（snapshot 到达时刷新）
     assert "store.on('sync_meta'" in js

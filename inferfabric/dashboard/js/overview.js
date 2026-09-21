@@ -228,12 +228,30 @@
     var body = card.querySelector('.if-card-body');
     if (!body) return;
 
-    var stats = window.__TOKEN_STATS__;
+    // 双 scope：{local:{date:{model:bucket}}, cloud:{...}}。
+    // 优先 store（/api/snapshot 实时），回退 head 烘焙的 __TOKEN_STATS__。
+    var live = store.get('token_stats');
+    var stats = (live && (live.local || live.cloud)) ? live
+      : (window.__TOKEN_STATS__ && (window.__TOKEN_STATS__.local || window.__TOKEN_STATS__.cloud) ? window.__TOKEN_STATS__ : {});
     if (!stats || typeof stats !== 'object') {
       body.innerHTML = '<div class="spark-empty muted">暂无请求数据 — 经代理发起请求后生成趋势</div>';
       return;
     }
-    var keys = Object.keys(stats);
+    // 合并 local + cloud 两个 scope，按日汇总请求数（本地 + 云端总流量）
+    var byDate = {};
+    for (var scope in stats) {
+      var scopeData = stats[scope];
+      if (!scopeData || typeof scopeData !== 'object') continue;
+      for (var date in scopeData) {
+        var models = scopeData[date] || {};
+        var total = 0;
+        for (var m in models) {
+          if (models[m] && models[m].requests) total += models[m].requests;
+        }
+        byDate[date] = (byDate[date] || 0) + total;
+      }
+    }
+    var keys = Object.keys(byDate);
     if (!keys.length) {
       body.innerHTML = '<div class="spark-empty muted">暂无请求数据 — 经代理发起请求后生成趋势</div>';
       return;
@@ -241,13 +259,7 @@
 
     var days = [];
     for (var i = 0; i < keys.length; i++) {
-      var date = keys[i];
-      var models = stats[date] || {};
-      var total = 0;
-      for (var m in models) {
-        if (models[m] && models[m].requests) total += models[m].requests;
-      }
-      days.push({ date: date, total: total });
+      days.push({ date: keys[i], total: byDate[keys[i]] });
     }
     days.sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
     var recent = days.slice(-7);

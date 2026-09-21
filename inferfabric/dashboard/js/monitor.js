@@ -7,8 +7,9 @@
  *
  * 数据源（全部 GET，只读）：
  *   - store /api/snapshot → metrics_24h request_log history gpu gpu_util active_services
- *   - GET /api/token-curve?granularity=hour → 小时图 60 分钟桶（prompt/completion 拆分）
- *   - window.__TOKEN_STATS__ → 按日聚合 prompt/completion tokens（day/month 图）
+ *     + token_stats（双 scope {local,cloud}，DB 驱动、引擎无关 → 天/月图实时）
+ *   - GET /api/token-curve?granularity=hour → 小时图 60 分钟桶（local/cloud 双 scope）
+ *   - window.__TOKEN_STATS__ → 天/月图兜底（代理启动时烘焙的双 scope 快照）
  *   - GET /api/engine_metrics?model=<active> → 5 KPI 原始指标
  *
  * 窗口/粒度切换 = 客户端 display filter（不触达服务端状态变更）。
@@ -31,7 +32,7 @@
   /* ── 状态 ── */
   var _gpuWin = '24h';           // GPU 图表窗口 display filter
   var _tokenGran = 'hour';       // Token 图表粒度 display filter
-  var _charts = { gpu: null, token: null, latency: null };
+  var _charts = { gpu: null, tokenLocal: null, tokenCloud: null, latency: null };
   var _chartsInit = false;
 
   // GPU 客户端时间序列 ring buffer（snapshot 轮询时积累）
@@ -90,7 +91,8 @@
     _chartsInit = true;
     if (IFCharts && typeof IFCharts.create === 'function') {
       _charts.gpu = IFCharts.create('monGpuChart');
-      _charts.token = IFCharts.create('monTokenChart');
+      _charts.tokenLocal = IFCharts.create('monTokenLocalChart');
+      _charts.tokenCloud = IFCharts.create('monTokenCloudChart');
       _charts.latency = IFCharts.create('monLatencyChart');
     }
     // null → 容器显示 empty state（IFCharts 已 log warning）
@@ -98,9 +100,13 @@
       var g = $('monGpuChart');
       if (g) g.innerHTML = '<div class="if-empty">图表库不可用</div>';
     }
-    if (!_charts.token) {
-      var t = $('monTokenChart');
-      if (t) t.innerHTML = '<div class="if-empty">图表库不可用</div>';
+    if (!_charts.tokenLocal) {
+      var tl = $('monTokenLocalChart');
+      if (tl) tl.innerHTML = '<div class="if-empty">图表库不可用</div>';
+    }
+    if (!_charts.tokenCloud) {
+      var tc = $('monTokenCloudChart');
+      if (tc) tc.innerHTML = '<div class="if-empty">图表库不可用</div>';
     }
     if (!_charts.latency) {
       var l = $('monLatencyChart');
@@ -181,20 +187,20 @@
    *         — 不再用 snapshot request_log（limit=50，重流量下只画 ~4 根柱子）
    *   - day:  __TOKEN_STATS__ 按日（已有 prompt_tokens/generation_tokens 拆分）
    *   - month: __TOKEN_STATS__ 按月聚合 */
-  function buildTokenData(gran) {
-    if (gran === 'day') return buildTokenDay();
-    if (gran === 'month') return buildTokenMonth();
-    return buildTokenHour();
+  function buildTokenData(gran, scope) {
+    if (gran === 'day') return buildTokenDay(scope);
+    if (gran === 'month') return buildTokenMonth(scope);
+    return buildTokenHour(scope);
   }
 
-  function buildTokenHour() {
+  function buildTokenHour(scope) {
     // 数据源：/api/token-curve?granularity=hour（服务端 60 桶 + limit=100000）。
-    // 旧版复用 snapshot request_log（limit=50）→ 重流量下只画 ~4 根柱子（Ruling 根因）。
+    // 响应含 {local:[...], cloud:[...]} 两个 scope 的桶数组，本地/云端两张图各取一份。
     var now = Date.now();
 
     // 同步返回缓存（命中 TTL）；否则启动异步 fetch 并返回上次缓存或全零（不阻塞渲染）。
     if (_tokenHourCache && (now - _lastTokenHourFetch) < TOKEN_HOUR_TTL) {
-      return _tokenHourFromBuckets(_tokenHourCache, now);
+      return _tokenHourFromBuckets((_tokenHourCache[scope]) || [], now);
     }
     if (!_tokenHourFetchInflight) {
       _tokenHourFetchInflight = true;
@@ -204,7 +210,8 @@
           return res.json();
         })
         .then(function (data) {
-          _tokenHourCache = (data && data.local) || [];
+          // 保留 local + cloud 两个 scope（供本地/云端两张图各自取用）
+          _tokenHourCache = data || {};
           _lastTokenHourFetch = Date.now();
         })
         .catch(function (e) {
@@ -217,7 +224,7 @@
           if (isMonitorActive()) renderTokenChart();
         });
     }
-    return _tokenHourFromBuckets(_tokenHourCache, now);
+    return _tokenHourFromBuckets((_tokenHourCache && _tokenHourCache[scope]) || [], now);
   }
 
   // 把 token-curve 的 local 桶数组（idx 0=最旧→59=最新）转成图表数据。
@@ -237,15 +244,28 @@
     return { xs: xs, prompt: prompt, completion: comp };
   }
 
-  function buildTokenDay() {
-    var stats = window.__TOKEN_STATS__ || {};
-    var keys = Object.keys(stats).sort();
+  /* 按天/按月数据源：优先 store 里的 token_stats（/api/snapshot 每 3s 轮询、
+   * 后端 DB 驱动、引擎无关、双 scope local/cloud），回退到 head 注入的
+   * window.__TOKEN_STATS__（同样双 scope，代理启动时烘焙）。两者都返回
+   * {local:{date:{model:bucket}}, cloud:{...}}。 */
+  function _tokenStatsSource() {
+    var live = store.get('token_stats');
+    if (live && (live.local || live.cloud)) return live;
+    var baked = window.__TOKEN_STATS__;
+    if (baked && (baked.local || baked.cloud)) return baked;
+    return {};
+  }
+
+  function buildTokenDay(scope) {
+    var stats = _tokenStatsSource();
+    var s = stats[scope] || {};
+    var keys = Object.keys(s).sort();
     if (!keys.length) return { xs: [], prompt: [], completion: [] };
     var recent = keys.slice(-14);   // 最近 14 天
     var xs = [], prompt = [], comp = [];
     for (var i = 0; i < recent.length; i++) {
       var day = recent[i];
-      var models = stats[day] || {};
+      var models = s[day] || {};
       var p = 0, c = 0;
       for (var m in models) {
         if (!models[m]) continue;
@@ -261,16 +281,17 @@
     return { xs: xs, prompt: prompt, completion: comp };
   }
 
-  function buildTokenMonth() {
-    var stats = window.__TOKEN_STATS__ || {};
-    var keys = Object.keys(stats).sort();
+  function buildTokenMonth(scope) {
+    var stats = _tokenStatsSource();
+    var s = stats[scope] || {};
+    var keys = Object.keys(s).sort();
     if (!keys.length) return { xs: [], prompt: [], completion: [] };
     var months = {};   // YYYY-MM → {p, c}
     for (var i = 0; i < keys.length; i++) {
       var day = keys[i];
       var ym = day.length >= 7 ? day.slice(0, 7) : day;
       if (!months[ym]) months[ym] = { p: 0, c: 0 };
-      var models = stats[day] || {};
+      var models = s[day] || {};
       for (var m in models) {
         if (!models[m]) continue;
         months[ym].p += (models[m].prompt_tokens || 0);
@@ -287,25 +308,32 @@
     return { xs: xs, prompt: prompt, completion: comp };
   }
 
+  /* 本地 / 云端两张图：同一粒度下各渲染一张（prompt/completion 堆叠条）。 */
   function renderTokenChart() {
     ensureCharts();
-    if (!_charts.token) return;
+    if (!_charts.tokenLocal || !_charts.tokenCloud) return;
 
-    var data = buildTokenData(_tokenGran);
-    var hasData = false;
-    for (var i = 0; i < data.prompt.length; i++) {
-      if (data.prompt[i] > 0 || data.completion[i] > 0) { hasData = true; break; }
+    var scopes = [
+      { chart: _charts.tokenLocal, empty: 'monTokenLocalEmpty', scope: 'local' },
+      { chart: _charts.tokenCloud, empty: 'monTokenCloudEmpty', scope: 'cloud' },
+    ];
+    for (var i = 0; i < scopes.length; i++) {
+      var sc = scopes[i];
+      var data = buildTokenData(_tokenGran, sc.scope);
+      var hasData = false;
+      for (var j = 0; j < data.prompt.length; j++) {
+        if (data.prompt[j] > 0 || data.completion[j] > 0) { hasData = true; break; }
+      }
+      showEmpty(sc.empty, !hasData);
+      IFCharts.update(sc.chart, {
+        xAxis: { data: data.xs, boundaryGap: true },
+        yAxis: { axisLabel: { formatter: function (v) { return fmtTok(v); } } },
+        series: [
+          { type: 'bar', name: 'Prompt', stack: 'tok', data: data.prompt },
+          { type: 'bar', name: 'Completion', stack: 'tok', data: data.completion },
+        ],
+      });
     }
-    showEmpty('monTokenEmpty', !hasData);
-
-    IFCharts.update(_charts.token, {
-      xAxis: { data: data.xs, boundaryGap: true },
-      yAxis: { axisLabel: { formatter: function (v) { return fmtTok(v); } } },
-      series: [
-        { type: 'bar', name: 'Prompt', stack: 'tok', data: data.prompt },
-        { type: 'bar', name: 'Completion', stack: 'tok', data: data.completion },
-      ],
-    });
   }
 
   /* ── 3. 延迟 P50 / P95 双线 ──

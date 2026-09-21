@@ -50,7 +50,6 @@ from inferfabric.proxy.handler import (
 )
 from inferfabric.proxy import handler as handler_module
 from inferfabric.proxy_manager import ProxyManager, AUTO_SWITCH
-from inferfabric.token_stats import TokenStatsCollector
 from inferfabric.watchdog import ModelWatchdog
 
 log = logging.getLogger("inferfabric.async_server")
@@ -638,9 +637,10 @@ def start_async():
                 mgr.health_check()
     threading.Thread(target=health_loop, daemon=True, name="health").start()
 
-    # token 统计采集器（5 分钟间隔）
-    token_collector = TokenStatsCollector(manager_ref=lambda: mgr.mgr, interval=300)
-    token_collector.start()
+    # token 统计采集器（5 分钟间隔）。用 TelemetryHub 里带 db 的 collector：
+    # DB 驱动、引擎无关（含 ninfer/ollama），按 cloud_provider 拆 local/cloud；
+    # 后台线程每周期从 request_log.db 重聚合并写回 token-stats.json。
+    mgr.telemetry.start_token_collector(lambda: mgr.mgr)
 
     _notify_socket = os.environ.get('NOTIFY_SOCKET')
 
@@ -662,7 +662,7 @@ def start_async():
     finally:
         shutdown_event.set()
         watchdog.stop()
-        token_collector.stop()
+        mgr.telemetry.token_collector.stop()
         mgr.health_monitor.stop()
         sd_notify("STOPPING=1")
         log.info("InferFabric async server stopped.")

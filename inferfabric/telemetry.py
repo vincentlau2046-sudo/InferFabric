@@ -106,8 +106,13 @@ class TelemetryHub:
         self.token_collector = TokenStatsCollector(manager_ref=None, interval=300, db=self._db)
 
     def start_token_collector(self, manager_ref: Callable[[], Any]):
-        """Inject manager ref and start token collection."""
-        self.token_collector._manager_ref = manager_ref
+        """Inject manager ref and start token collection.
+
+        db-backed（__init__ 时已注入 IFFDB）→ _collect_once 走 DB 重聚合路径，
+        引擎无关（含 ninfer/ollama），按 cloud_provider 拆 local/cloud。
+        manager_ref 仅作无 db 时的 Prometheus 回退路径使用。
+        """
+        self.token_collector.manager_ref = manager_ref
         self.token_collector.start()
 
     def record(self, entry: RequestLog) -> None:

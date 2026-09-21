@@ -43,7 +43,6 @@ from inferfabric import forwarder, __version__
 from inferfabric.proxy.chat_handlers import handle_chat, handle_ollama_native
 from inferfabric.proxy.metrics import handle_vllm_metrics
 from inferfabric.engine_adapter import get_adapter
-from inferfabric.token_stats import TokenStatsCollector
 from inferfabric.watchdog import ModelWatchdog
 
 log = logging.getLogger("inferfabric.proxy")
@@ -140,7 +139,7 @@ def _serve_api_spec(handler, pm):
     handler._send_json(get_openapi_spec())
 
 _GET_ROUTES = {
-    "/":                        lambda h, pm: h._serve_dashboard(),
+    "/":                        lambda h, pm: h._serve_dashboard(pm),
     "/health":                  lambda h, pm: h._send_json({"status": "ok", "gpu_mode": pm.mgr.gpu_mode}),
     "/status":                  lambda h, pm: h._send_json(pm.mgr.status()),
     "/models":                  lambda h, pm: h._send_json(pm.mgr.list_models()),
@@ -158,6 +157,9 @@ _GET_ROUTES = {
     "/history":                 lambda h, pm: h._send_json(pm.mgr.state.get_history(limit=30)),
     "/vllm_metrics":            lambda h, pm: h._handle_vllm_metrics(pm),
     "/engine_metrics":         lambda h, pm: h._handle_engine_metrics(pm),
+    # monitor.js 实际 fetch /api/engine_metrics（与其它 /api/* 路由一致）；
+    # 旧 /engine_metrics 保留做向后兼容。
+    "/api/engine_metrics":     lambda h, pm: h._handle_engine_metrics(pm),
     "/watchdog_status":         lambda h, pm: _handle_watchdog_status(h),
     "/admin/cloud/providers":   _admin(lambda h, pm: h._handle_cloud_providers(pm)),
     "/admin/cloud/presets":     _admin(lambda h, pm: h._handle_cloud_presets(pm)),
@@ -281,15 +283,17 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     # ─── Dashboard ────────────────────────────────────────────────
 
-    def _serve_dashboard(self):
+    def _serve_dashboard(self, pm):
         body = None
         try:
             from inferfabric.dashboard import get_html
             html = get_html()
-            # Inject token stats (full raw state, JS filters by window)
+            # Inject token stats. 用 pm.telemetry 上的 collector（带 db，DB 驱动、
+            # 引擎无关、双 scope local/cloud），而非裸 TokenStatsCollector()（无 db，
+            # 只能读本地 vllm/sglang 文件 → ninfer 数据缺失，按天数据卡住的根因）。
+            # JS 端 filter by window。
             try:
-                collector = TokenStatsCollector()
-                stats_json = json.dumps(collector._load_full_state())
+                stats_json = json.dumps(pm.telemetry.token_collector._load_full_state())
                 # 防御 </script> 注入：json.dumps 已转义 </script>，额外移除
                 stats_json = stats_json.replace('</', '<\\/')
                 html = html.replace(
@@ -1981,9 +1985,9 @@ def main():
 
     threading.Thread(target=health_loop, daemon=True, name="health").start()
 
-    # Start token stats collector (5 min interval)
-    token_collector = TokenStatsCollector(manager_ref=lambda: mgr.mgr, interval=300)
-    token_collector.start()
+    # Start token stats collector (5 min interval). 用 TelemetryHub 里带 db 的
+    # collector（DB 驱动、引擎无关、双 scope），而非裸 db-less collector。
+    mgr.telemetry.start_token_collector(lambda: mgr.mgr)
 
     sd_notify("READY=1")
     log.info("InferFabric Proxy: %s:%d (auto_switch=%s, threaded, v%s)",
@@ -2006,7 +2010,7 @@ def main():
     finally:
         log.info("Closing server...")
         watchdog.stop()
-        token_collector.stop()
+        mgr.telemetry.token_collector.stop()
         try:
             server.server_close()
         except Exception:
