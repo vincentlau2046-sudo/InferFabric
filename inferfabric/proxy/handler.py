@@ -1503,18 +1503,25 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     log.error("Failed to write secrets.env: %s", e)
                     self._send_json({"error": "Failed to save API key", "detail": str(e)}, 500)
                     return
-                api_key_ref = f"${{{env_var}}}"
+                # B1: 明文 key → 内存持有真实值（与 _load_config 解析前展开 ${VAR} 的行为一致）；
+                # 持久化时 _serialize_providers 依 key_env_var 重新导出 ${REF}，YAML 只存引用。
+                api_key_mem = api_key
             else:
-                api_key_ref = api_key
+                # 传入的即 ${REF}（或空）：注入 env 后按引用解析为真实值
+                api_key_mem = api_key
 
-            # Inject secrets.env so newly written keys are available immediately
+            # Inject secrets.env so newly written / referenced keys are available immediately
             pm.cloud._inject_secrets_env()
+
+            # B1: 将 ${REF} 解析为真实值，保证 POST 后立即转发不再发字面量 ${VAR}（否则云端 401）
+            if api_key_mem.startswith("${") and api_key_mem.endswith("}"):
+                api_key_mem = os.environ.get(api_key_mem[2:-1], "")
 
             from inferfabric.cloud_discovery import ProviderConfig
             if preset_id:
                 cfg = ProviderConfig(
                     name=name,
-                    api_key=api_key_ref,
+                    api_key=api_key_mem,
                     openai_base=preset.openai_base,
                     anthropic_base=preset.anthropic_base,
                     timeout=preset.timeout,
@@ -1527,7 +1534,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             else:
                 cfg = ProviderConfig(
                     name=name,
-                    api_key=api_key_ref,
+                    api_key=api_key_mem,
                     openai_base=data.get("openai_base", ""),
                     anthropic_base=data.get("anthropic_base", ""),
                     timeout=data.get("timeout", 60),
