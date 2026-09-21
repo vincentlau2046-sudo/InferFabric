@@ -51,25 +51,35 @@ class ConfigReloader:
             self.reload_models()
 
     def reload_all(self):
-        """Full reload: models + auth + cloud + dashboard cache."""
+        """Full reload: models + auth + cloud + dashboard cache.
+
+        Returns: list of failed domain names (["models"], ["cloud"], ...) —
+        empty list means all domains reloaded successfully. Callers
+        (/reload-config) report the truth instead of an unconditional
+        "reloaded" (B2: cloud reload 曾静默失效但端点仍声称成功).
+        """
         now = time.time()
         if now - self._last_reload < self._cooldown:
-            return
+            return []
         self._last_reload = now
+        failed = []
         try:
             self._mgr.reload_models()
             log.info("ConfigReloader: models reloaded")
         except Exception as e:
+            failed.append("models")
             log.error("ConfigReloader: model reload failed: %s", e)
         if self._auth:
             try:
                 self._auth.reload()
             except Exception as e:
+                failed.append("auth")
                 log.error("ConfigReloader: auth reload failed: %s", e)
         if self._cloud:
             try:
                 self._cloud.reload()
             except Exception as e:
+                failed.append("cloud")
                 log.error("ConfigReloader: cloud reload failed: %s", e)
         # Invalidate dashboard cache
         try:
@@ -77,7 +87,11 @@ class ConfigReloader:
             invalidate_cache()
         except Exception:
             log.warning("Dashboard cache invalidation failed")
-        log.info("ConfigReloader: full reload complete")
+        if failed:
+            log.warning("ConfigReloader: full reload complete with failures: %s", failed)
+        else:
+            log.info("ConfigReloader: full reload complete")
+        return failed
 
     def reload_models(self):
         """Reload models only (SIGUSR1)."""

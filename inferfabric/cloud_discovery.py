@@ -357,14 +357,23 @@ class CloudDiscovery:
     def get_provider_config(self, provider_name: str) -> ProviderConfig | None:
         return self._providers.get(provider_name)
 
-    def reload(self, config_path: Path):
-        """热加载配置。"""
+    def reload(self, config_path: Path | None = None):
+        """热加载配置。
+
+        config_path 缺省时回退到构造时的 self._config_path —— SIGHUP /
+        /reload-config 的无参 reload() 因此能重载实例自身的配置文件，
+        而非抛 TypeError 被吞（B2）。
+        """
+        path = Path(config_path) if config_path else self._config_path
+        if path is None:
+            log.warning("CloudDiscovery.reload: no config path (ctor 未提供且未传参) — skipped")
+            return
         self.stop_polling()
         with self._save_lock:
-            self._config_path = config_path
+            self._config_path = path
         with self._models_lock:
             self._providers = {}
-        self._load_config(config_path)
+        self._load_config(path)
 
     # ── internal ──
 
