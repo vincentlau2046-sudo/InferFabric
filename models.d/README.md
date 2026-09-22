@@ -131,7 +131,7 @@
 | 8004 | `ovis-ocr2.yaml` | `ovis-ocr2` | vllm | shared | OvisOC2 0.8B 端到端文档OCR |
 | 8005 | `gemma4-31b-vl.yaml` | `gemma4-31b-vl` | vllm | exclusive | Gemma4-31B IT NVFP4 Dense VL |
 | 8006 | `muse-glimmer-vl.yaml` | `muse-glimmer` | vllm | exclusive | Meta Muse Glimmer 30B NVFP4 VL （SGLang） |
-| 8007 | `Qwen38-27B-TXT.yaml` | `Qwen38-27B-TXT` | ninfer | exclusive | Qwen3.8-27B NVFP4 NInfer（纯文本，MTP） |
+| 8007 | `Qwen38-27B-TXT.yaml` | `Qwen38-27B-TXT` | ninfer | exclusive | Qwen3.8-27B NVFP4 NInfer（纯文本，MTP，KV 固定 600K） |
 | 8008 | `qwen36-35b-vl.yaml` | `qwen36-35b-vl` | vllm | exclusive | Qwen3.6-35B A3B MoE NVFP4 VL |
 | 8009 | `NI-Qwen38-27B-VL.yaml` | `NI-Qwen38-27B-VL` | ninfer | exclusive | Qwen3.8-27B NVFP4 NInfer 多模态 VL（视觉塔 + NVFP4 KV） |
 | 8188 | `comfyui.yaml` | — | comfyui | shared | ComfyUI 图像生成 |
@@ -167,5 +167,7 @@
 ## 更新时间线
 
 - 2026-09-22: 新增 `NI-Qwen38-27B-VL.yaml`（NInfer 多模态 VL，端口 8009）。补登 8007 `Qwen38-27B-TXT`；修正 8002 行文件/served_name 为 `Qwen38-27B-VL`；模板 type 增补 `sglang`/`ninfer` 并新增 ninfer 字段说明。
-- 2026-09-22: `NI-Qwen38-27B-VL.yaml` 调显存寻更多 KV：压 `media_cache_mib: 0` + `media_live_mib: 1024`（default 是 1024/2048），并将 `kv_capacity` 由 `0`(auto) 改为显式 `420000`（auto 只到 ~378K；显式上限实测 ≈434K/卡上、ToDesk 占用时）。NInferConfig 新增 `media_cache_mib`/`media_live_mib` 字段（config.py 代码改动 → 需重启 proxy）。
+- 2026-09-22: `NI-Qwen38-27B-VL.yaml` 调显存寻更多 KV：压 `media_cache_mib: 0` + `media_live_mib: 1024`（default 是 1024/2048），并将 `kv_capacity` 由 `0`(auto) 改为显式（auto 只到 ~378K；显式上限实测 ≈434K/卡上、ToDesk 占用时）。NInferConfig 新增 `media_cache_mib`/`media_live_mib` 字段（config.py 代码改动 → 需重启 proxy）。
+- 2026-09-22: `NI-Qwen38-27B-VL.yaml` `kv_capacity` 由 420000 降到 `410000`（留 ~0.7 GiB 显存余量防 OOM，比 420K 的 487 MiB free 更稳）。
+- 2026-09-22: `Qwen38-27B-TXT.yaml` `kv_capacity` 由 auto 固定为 `600000`（无视觉塔，auto≈566K；显式 600K 实测）。
 - 2026-08-23: 创建端口登记表。清理旧版中已删除模型的记录（aliases.yaml、phi3-mini.yaml、qwen25-omni-3b.yaml、qwen3-embedding-0.6b.yaml、qwen35-9b.yaml、qwen36-27b-vl.yaml）。迁入全部 12 个活跃模型的端口映射。

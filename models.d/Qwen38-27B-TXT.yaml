@@ -12,7 +12,7 @@ ninfer:
   port: 8007
   container_name: iff-ninfer-qwen38
   max_context: 262144
-  kv_capacity: 0
+  kv_capacity: 600000
   kv_dtype: nvfp4
   weight_precision: NVFP4
   max_concurrency: 4
