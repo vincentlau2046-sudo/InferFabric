@@ -49,7 +49,7 @@ from inferfabric.proxy.handler import (
     HEALTH_CHECK_INTERVAL, WATCHDOG_INTERVAL,
 )
 from inferfabric.proxy import handler as handler_module
-from inferfabric.proxy_manager import ProxyManager, AUTO_SWITCH
+from inferfabric.proxy_manager import ProxyManager
 from inferfabric.watchdog import ModelWatchdog
 
 log = logging.getLogger("inferfabric.async_server")
@@ -544,7 +544,7 @@ async def _run(mgr, watchdog, shutdown_event, sd_notify):
     site = await start_site_with_retry(runner)
 
     log.info("InferFabric async edge: %s:%d (auto_switch=%s, v%s)",
-             PROXY_HOST, PROXY_PORT, AUTO_SWITCH,
+             PROXY_HOST, PROXY_PORT, mgr.auto_switch,
              __import__("inferfabric").__version__)
     log.info("Dashboard: http://%s:%d/", PROXY_HOST, PROXY_PORT)
 

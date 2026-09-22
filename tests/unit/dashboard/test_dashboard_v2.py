@@ -696,13 +696,16 @@ def test_inference_no_new_api():
     """推理 TAB 不得新增任何 API 端点（R10/R11：API 冻结）。
 
     inference.js 的 fetch 调用必须仅指向既有端点：
-    /switch /stop /sleep /wake /admin/cache/toggle。
-    不得出现 /api/cache-hits /api/rate-limit 等新端点。"""
+    /switch /stop /sleep /wake /admin/cache/toggle，
+    以及 R-AS 有意新增的 /admin/auto-switch/toggle（自动切换开关，
+    用户明确要求置于推理 tab，非冻结违规）。
+    不得出现 /api/cache-hits /api/rate-limit 等未授权新端点。"""
     js = (ROOT / "inferfabric" / "dashboard" / "js" / "inference.js").read_text(encoding="utf-8")
     import re
     # 提取所有 fetch 调用的 URL
     urls = re.findall(r"fetch\(\s*['\"]([^'\"]+)['\"]", js)
-    allowed = {'/switch', '/stop', '/sleep', '/wake', '/admin/cache/toggle'}
+    allowed = {'/switch', '/stop', '/sleep', '/wake', '/admin/cache/toggle',
+               '/admin/auto-switch/toggle'}
     for u in urls:
         assert u in allowed, (
             "inference.js fetches non-allowed endpoint %r (API must stay frozen)" % u

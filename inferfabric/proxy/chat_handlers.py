@@ -8,7 +8,6 @@ import json
 import time
 import uuid
 import logging
-from inferfabric.proxy_manager import AUTO_SWITCH
 from inferfabric import forwarder
 from inferfabric.proxy.sse_buffer import SSELineBuffer
 from inferfabric.proxy.request_logger import RequestLog
@@ -257,9 +256,9 @@ def handle_chat(handler, pm, data):
             # 转发后 PUT 侧必须用此快照，保证与 GET 侧键一致。
             cache_body = json.loads(json.dumps(data))
 
-    # Auto-switch
+    # Auto-switch（R-AS: 活读 pm.auto_switch，UI 开关可即时翻转，无需重启）
     service_name = pm.model_to_service(model)
-    if service_name and AUTO_SWITCH:
+    if service_name and pm.auto_switch:
         switched = pm.ensure_service(service_name)
         if switched is None:
             elapsed = (time.monotonic() - handler._req_start) * 1000

@@ -8,9 +8,12 @@
  *       services_info  — { name: { mode, type, port } }（活跃模型端口等）
  *       services_health— { name: health_str }
  *       local_models   — { cache_enabled, cache_stats: {hits,size,max}|null,
- *                          configured, discovered }（缓存开关 + LRU 生效计数）
+ *                          auto_switch: {enabled, source},
+ *                          configured, discovered }（缓存开关 + LRU 生效计数
+ *                          + 自动切换 R-AS）
  *   - POST /switch | /stop | /sleep | /wake  — 模型生命周期操作（admin header）
  *   - POST /admin/cache/toggle               — LRU 缓存开关（admin header）
+ *   - POST /admin/auto-switch/toggle         — 自动切换开关（admin header，立即生效）
  *
  * 设计纪律：
  *   - 事件委托（无 inline onclick）；数字等宽 tabular-nums；零 emoji（SVG 图标）
@@ -21,6 +24,9 @@
  *     （R10 旧契约「后端不暴露命中数」已作废 —— 计数器由后端真实提供，
  *      且缓存命中不再落 RequestLog，命中数成为唯一可见通道）
  *   - rlMeta 静态标签 —— manager.status() 无 rate-limit 字段，配置见 iff.yaml（R11）
+ *   - autoSwitchMeta 展示自动切换来源（R-AS）：env 锁定 / iff.yaml / 默认；
+ *     切换经 POST /admin/auto-switch/toggle 立即生效（无需重启 proxy），
+ *     env 锁定时 toast 附 hint 提示重启后回到 env 值
  *
  * 暴露：
  *   - window.tabRenderers['tab-inference'] = renderInference
@@ -182,7 +188,7 @@
     listEl.innerHTML = html;
   }
 
-  /* ── 网关控制卡：缓存状态 + 速率限制 ── */
+  /* ── 网关控制卡：缓存状态 + 自动切换 + 速率限制 ── */
   function renderGateway() {
     var lm = store.get('local_models') || {};
     var cacheOn = !!lm.cache_enabled;
@@ -208,6 +214,23 @@
       tog.setAttribute('aria-pressed', String(cacheOn));
       tog.classList.toggle('btn-pri', !cacheOn);
       tog.classList.toggle('btn-sec', cacheOn);
+    }
+
+    // #autoSwitchMeta / #autoSwitchToggle — R-AS 自动切换（snapshot local_models.auto_switch）
+    // source: env=环境变量锁定（重启后回到 env 值）/ file=iff.yaml / default=默认开
+    var as = (lm.auto_switch && typeof lm.auto_switch === 'object') ? lm.auto_switch : null;
+    var asOn = !!(as && as.enabled);
+    var asSrcLabel = { env: 'env 锁定', file: 'iff.yaml', default: '默认' }[as ? as.source : ''] || '默认';
+    var asMeta = $('autoSwitchMeta');
+    if (asMeta) {
+      asMeta.textContent = '自动切换 · ' + (asOn ? '开' : '关') + ' · 来源 ' + asSrcLabel;
+    }
+    var asTog = $('autoSwitchToggle');
+    if (asTog) {
+      asTog.textContent = asOn ? '关闭' : '开启';
+      asTog.setAttribute('aria-pressed', String(asOn));
+      asTog.classList.toggle('btn-pri', !asOn);
+      asTog.classList.toggle('btn-sec', asOn);
     }
 
     // #rlMeta — R11：静态标签（manager.status 无 rate-limit 字段）
@@ -357,6 +380,24 @@
     }
   }
 
+  /* ── 自动切换开关（R-AS：立即生效，无需重启 proxy） ── */
+  async function toggleAutoSwitch() {
+    try {
+      var res = await fetch('/admin/auto-switch/toggle', {
+        method: 'POST',
+        headers: UI.adminHeaders(),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var j = await res.json();
+      var msg = j && j.auto_switch ? '自动切换已开启' : '自动切换已关闭';
+      if (j && j.hint) UI.toast(msg + '（' + j.hint + '）', 'info');
+      else UI.toast(msg, 'ok');
+      store.forceRefresh();
+    } catch (e) {
+      UI.toast('自动切换切换失败: ' + (e && e.message ? e.message : e), 'error');
+    }
+  }
+
   /* ── 事件委托（无 inline onclick） ── */
   var root = $('tab-inference');
   if (root) {
@@ -367,6 +408,10 @@
 
       if (act === 'cache-toggle') {
         toggleCache();
+        return;
+      }
+      if (act === 'auto-switch-toggle') {
+        toggleAutoSwitch();
         return;
       }
       if (act === 'goto-deploy') {

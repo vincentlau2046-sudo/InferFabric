@@ -35,7 +35,8 @@ from inferfabric.state import ServiceState
 
 def _make_pm(*, active=None, profile_state="", switching_target="",
              model_type="embedding", port=8199, auth_enabled=False,
-             auth_ok=True, rate_ok=True, rate_reason=None):
+             auth_ok=True, rate_ok=True, rate_reason=None,
+             auto_switch=True):
     """构造 guard 所需的最小 pm 桩。"""
     active = active if active is not None else set()
     model_obj = SimpleNamespace(name="emb", model_type=model_type, port=port)
@@ -43,6 +44,7 @@ def _make_pm(*, active=None, profile_state="", switching_target="",
     logs = []
 
     pm = SimpleNamespace()
+    pm.auto_switch = auto_switch  # R-AS: guard 读实例态（UI 开关即时翻转）
     pm.auth = SimpleNamespace(
         enabled=auth_enabled,
         check=lambda hdr, m: (auth_ok, "ok" if auth_ok else "invalid key"),
@@ -144,19 +146,17 @@ class TestPipelineGuardBlocked:
 
 
 class TestAutoSwitchRespect:
-    def test_autoswitch_off_inactive_503(self, monkeypatch):
+    def test_autoswitch_off_inactive_503(self):
         """模型未激活且 AUTO_SWITCH=off → 503，不 switch（修复 A7）。"""
-        monkeypatch.setattr(handler_module, "AUTO_SWITCH", False)
-        pm = _make_pm(active=set())  # emb 未激活
+        pm = _make_pm(active=set(), auto_switch=False)  # emb 未激活
         h = _make_handler()
         guard = h._pipeline_guard(pm, "emb", {"model": "emb"}, "embedding")
         assert _blocked_status(guard) == 503
         assert guard["body"].get("status") == "not_active"
 
-    def test_autoswitch_on_inactive_proceeds(self, monkeypatch):
+    def test_autoswitch_on_inactive_proceeds(self):
         """模型未激活但 AUTO_SWITCH=on → 放行（调用方负责拉起）。"""
-        monkeypatch.setattr(handler_module, "AUTO_SWITCH", True)
-        pm = _make_pm(active=set())
+        pm = _make_pm(active=set(), auto_switch=True)
         h = _make_handler()
         guard = h._pipeline_guard(pm, "emb", {"model": "emb"}, "embedding")
         assert not guard["blocked"]
@@ -176,9 +176,8 @@ class TestGateAndPass:
         assert _blocked_status(guard) == 429
         assert "concurrency_limit" in guard["body"]["error"]
 
-    def test_pass_returns_ctx_and_gate(self, monkeypatch):
-        monkeypatch.setattr(handler_module, "AUTO_SWITCH", True)
-        pm = _make_pm(active={"emb"})
+    def test_pass_returns_ctx_and_gate(self):
+        pm = _make_pm(active={"emb"}, auto_switch=True)
         h = _make_handler({"Authorization": "Bearer good"})
         guard = h._pipeline_guard(pm, "emb", {"model": "emb"}, "embedding")
         assert not guard["blocked"]
@@ -211,10 +210,9 @@ class TestHandlersUseGuard:
         args = h._send_json.call_args[0]
         assert args[1] == 404  # status 位置参数
 
-    def test_embeddings_autoswitch_off_503(self, monkeypatch):
+    def test_embeddings_autoswitch_off_503(self):
         """AUTO_SWITCH=off 且未激活 → 503，且不再调用 pm.mgr.switch。"""
-        monkeypatch.setattr(handler_module, "AUTO_SWITCH", False)
-        pm = _make_pm(active=set())
+        pm = _make_pm(active=set(), auto_switch=False)
         switch_calls = []
         pm.mgr.switch = lambda svc: switch_calls.append(svc) or {"status": "switched"}
         h = _make_handler()

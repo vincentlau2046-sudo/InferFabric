@@ -20,8 +20,6 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 _ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_ROOT))
 _deps = _ROOT / "_deps"
@@ -29,7 +27,6 @@ if _deps.is_dir():
     sys.path.insert(0, str(_deps))
 
 from inferfabric.proxy.response_cache import ResponseCache
-from inferfabric.proxy import chat_handlers
 from inferfabric.proxy.chat_handlers import handle_chat
 
 
@@ -178,6 +175,8 @@ def _make_pm(calls: list, cache: ResponseCache, port=8001) -> SimpleNamespace:
     )
     pm._runtime_config = {"cache": {"enabled": True}}
     pm.response_cache = cache
+    # R-AS: 锁定 auto_switch=False（本测只覆盖缓存语义，不覆盖切换分支）
+    pm.auto_switch = False
     return pm
 
 
@@ -187,11 +186,6 @@ def _client_body() -> dict:
 
 
 class TestOpenAiCacheWrite:
-    @pytest.fixture(autouse=True)
-    def _no_auto_switch(self, monkeypatch):
-        """锁定 AUTO_SWITCH=False（生产默认）：本测只覆盖缓存语义，不覆盖切换分支。"""
-        monkeypatch.setattr(chat_handlers, "AUTO_SWITCH", False)
-
     def test_nonstreaming_200_cached(self):
         """A3：OpenAI 非流式 temp=0 的 200 响应写入 R5 缓存（修复前永久冷）。"""
         calls: list = []

@@ -114,6 +114,8 @@ class ProxyManager:
             self.response_cache = ResponseCache(maxsize=self._runtime_config.get("cache", {}).get("max_entries", 500))
         else:
             self.response_cache = None
+        # R-AS: Auto Switch 实例态 — 读取优先级: 显式 env > iff.yaml > 默认开
+        self.auto_switch, self._auto_switch_source = self._resolve_auto_switch(self._runtime_config)
         # D-2: Build served_name → friendly_name mapping for dashboard
         self._metrics_name_map = {}
         for m in self.mgr._models.values():
@@ -145,6 +147,70 @@ class ProxyManager:
             self.cloud.start_polling()
             # G-2: Update price config now that cloud models are available
             self.metrics.update_prices(self._load_price_config())
+
+    @staticmethod
+    def _resolve_auto_switch(runtime_config: dict) -> tuple:
+        """R-AS: 解析 auto_switch → (value, source)。
+
+        优先级: 显式 env EDGE_AUTO_SWITCH > iff.yaml auto_switch.enabled > 默认开。
+        source ∈ {"env", "file", "default"} 供 UI snapshot 展示来源。
+        """
+        _as_env = os.environ.get("EDGE_AUTO_SWITCH")
+        if _as_env is not None:
+            return _as_env == "1", "env"
+        _as_cfg = (runtime_config or {}).get("auto_switch", {})
+        if isinstance(_as_cfg, dict) and "enabled" in _as_cfg:
+            return bool(_as_cfg["enabled"]), "file"
+        return True, "default"
+
+    def set_auto_switch(self, enabled: bool) -> dict:
+        """R-AS: 切换自动切换（立即生效，无需重启 proxy）。
+
+        读取优先级: 显式 env > iff.yaml > 默认开。本写入:
+          1. 实例态 auto_switch（handler/chat_handlers 的活读点）
+          2. 模块级 AUTO_SWITCH 镜像（保住函数作用域 import 读点的正确性）
+          3. iff.yaml auto_switch.enabled 持久化（重启后无 env 锁时按此恢复）
+        env 显式设置（env_locked）时本次写入只作用于当前进程生命周期，
+        重启后回到 env 值 —— hint 返回给 UI 提示。env_locked 按调用时实时
+        env 判定（非 import 期冻结值），避免 systemd/环境变化后语义漂移。
+        """
+        enabled = bool(enabled)
+        env_locked = os.environ.get("EDGE_AUTO_SWITCH") is not None
+        self.auto_switch = enabled
+        import inferfabric.proxy_manager as _self_mod
+        _self_mod.AUTO_SWITCH = enabled
+        self._persist_auto_switch(enabled)
+        log.info("Auto switch → %s (source=%s, env_locked=%s)",
+                 enabled, self._auto_switch_source, env_locked)
+        return {
+            "auto_switch": enabled,
+            "source": self._auto_switch_source,
+            "env_locked": env_locked,
+            "hint": ("环境变量 EDGE_AUTO_SWITCH 已显式设置，重启 proxy 后将回到 env 值"
+                     if env_locked else None),
+        }
+
+    def _persist_auto_switch(self, enabled: bool):
+        """把 auto_switch.enabled 写入 iff.yaml（文本级合并，保留注释与其他键；幂等）。"""
+        import re
+        path = IFF_DATA_DIR / "iff.yaml"
+        text = path.read_text() if path.exists() else ""
+        block = "auto_switch:\n  enabled: %s\n" % str(bool(enabled)).lower()
+        if re.search(r"^auto_switch:\s*$", text, re.M):
+            # 替换已有块: 从 'auto_switch:' 行到下一个顶层行（非空白开头）或文件尾
+            pattern = re.compile(r"^auto_switch:.*?(?=^\S|\Z)", re.M | re.S)
+            text = pattern.sub(block, text, count=1)
+        else:
+            text = text.rstrip("\n")
+            if text:
+                text += "\n"
+            text += ("\n# R-AS: 自动切换（推理 tab UI 开关；优先级: 显式 env > 本文件 > 默认开）\n"
+                    + block)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        except Exception:
+            log.error("Failed to persist auto_switch into iff.yaml", exc_info=True)
 
     def _compute_max_concurrent(self) -> int:
         """从 vLLM 模型配置中取 max_num_seqs 最大值作为并发上限。
@@ -232,6 +298,14 @@ class ProxyManager:
                 if isinstance(p, bool) or not isinstance(p, int) or p <= 0:
                     raise ConfigError(f"{svc_name}.port must be int > 0, got {p!r}")
 
+        # R-AS: auto_switch.enabled: bool (optional, 默认开)
+        as_cfg = config.get("auto_switch")
+        if as_cfg is not None:
+            if not isinstance(as_cfg, dict):
+                raise ConfigError(f"auto_switch must be a mapping, got {type(as_cfg).__name__}")
+            if "enabled" in as_cfg and not isinstance(as_cfg["enabled"], bool):
+                raise ConfigError(f"auto_switch.enabled must be bool, got {as_cfg['enabled']!r}")
+
     def _load_runtime_config(self) -> dict:
         """从 iff.yaml 加载运行时配置，不存在时返回空 dict。
 
@@ -243,6 +317,7 @@ class ProxyManager:
           - rate_limit.model_rpm_default: int (默认 0=不限流)
           - rate_limit.max_concurrent: "auto" | int (默认 auto)
           - rate_limit.timeout: int (默认 5)
+          - auto_switch.enabled: bool (默认 True; 优先级低于显式 env EDGE_AUTO_SWITCH)
         """
         config_path = IFF_DATA_DIR / "iff.yaml"
         if not config_path.exists():

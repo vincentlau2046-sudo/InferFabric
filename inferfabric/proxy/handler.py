@@ -36,7 +36,7 @@ from inferfabric.anomaly_collector import AnomalyEvent
 # If not set (default), all control routes are open (localhost-only binding is the security boundary).
 _ADMIN_TOKEN = os.environ.get("IFF_ADMIN_TOKEN", "")
 from inferfabric.proxy_manager import (
-    ProxyManager, AUTO_SWITCH, PROXY_HOST, PROXY_PORT,
+    ProxyManager, PROXY_HOST, PROXY_PORT,
     HEALTH_CHECK_INTERVAL, WATCHDOG_INTERVAL,
 )
 from inferfabric import forwarder, __version__
@@ -182,6 +182,7 @@ _POST_ROUTES = {
     "/pull":                    _admin(lambda h, pm: h._handle_pull(pm)),
     "/reload-config":          _admin(lambda h, pm: h._handle_reload_config(pm)),
     "/admin/cache/toggle":     _admin(lambda h, pm: h._handle_cache_toggle(pm)),
+    "/admin/auto-switch/toggle": _admin(lambda h, pm: h._handle_auto_switch_toggle(pm)),
     "/admin/gpu-clear":        _admin(lambda h, pm: h._handle_gpu_clear(pm)),
 
     # ─── Admin: Cloud Provider Management (PR-D) ─────────────────
@@ -451,8 +452,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         # PR-2b: Auto-switch on demand — if model is known but not active
         if target_model and target_model.port and target_model.name not in pm.mgr.active_services:
-            from inferfabric.proxy_manager import AUTO_SWITCH
-            if AUTO_SWITCH:
+            if pm.auto_switch:
                 log.info("/v1/messages → auto-switch to %s [model=%s not active]",
                          target_model.name, requested_model)
                 switched = pm.ensure_service(target_model.name)
@@ -996,7 +996,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             "local_models": {"discovered": [], "configured": list(pm.mgr._models.keys()),
              "cache_enabled": getattr(pm, 'response_cache', None) is not None,
              "cache_stats": (getattr(pm, 'response_cache', None).stats()
-                             if getattr(pm, 'response_cache', None) is not None else None)},
+                             if getattr(pm, 'response_cache', None) is not None else None),
+             "auto_switch": {"enabled": bool(getattr(pm, 'auto_switch', True)),
+                             "source": getattr(pm, '_auto_switch_source', 'default')}},
         }
         etag_raw = _snapshot_etag(content)
         etag = f'"{etag_raw}"'
@@ -1223,6 +1225,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         new_state = pm.response_cache is not None
         log.info("Cache toggled: %s → %s", enabled, new_state)
         self._send_json({"cache_enabled": new_state})
+
+    def _handle_auto_switch_toggle(self, pm):
+        """POST /admin/auto-switch/toggle — 切换自动切换（立即生效，无需重启 proxy）。
+
+        返回 { auto_switch, source, env_locked, hint }：
+          source: env | file | default — 启动时 auto_switch 的取值来源
+          env_locked: 显式 env EDGE_AUTO_SWITCH 存在时为 True，此时 UI 写入
+            只作用于当前进程，重启后回到 env 值（hint 非 null）。
+        """
+        result = pm.set_auto_switch(not pm.auto_switch)
+        log.info("Auto switch toggled → %s (source=%s)", result["auto_switch"], result["source"])
+        self._send_json(result)
 
     def _handle_gpu_clear(self, pm):
         """POST /admin/gpu-clear — 清理 GPU CUDA 状态（修复显存碎片）。"""
@@ -1669,9 +1683,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if not port:
             return _block(500, {"error": f"No port configured for model '{model_name}'"}, "no_port")
 
-        # 5. AUTO_SWITCH respect (A7): inactive + AUTO_SWITCH=off → 503, do NOT switch
+        # 5. AUTO_SWITCH respect (A7): inactive + auto_switch=off → 503, do NOT switch
         if svc_name not in pm.mgr.active_services:
-            if not AUTO_SWITCH:
+            if not pm.auto_switch:
                 pm.anomalies.record(AnomalyEvent(
                     category="routing", severity="warning", model=model_name,
                     status_code=503,
@@ -2003,7 +2017,7 @@ def main():
 
     sd_notify("READY=1")
     log.info("InferFabric Proxy: %s:%d (auto_switch=%s, threaded, v%s)",
-             PROXY_HOST, PROXY_PORT, AUTO_SWITCH, __version__)
+             PROXY_HOST, PROXY_PORT, mgr.auto_switch, __version__)
     log.info("Dashboard: http://%s:%d/", PROXY_HOST, PROXY_PORT)
     log.info("GPU mode: %s | Services: %s", mgr.mgr.gpu_mode, mgr.mgr.active_services)
 

@@ -195,14 +195,12 @@ def test_send_json_emits_retry_after_header():
 def test_messages_failed_switch_503_retry_after(monkeypatch):
     """Anthropic /v1/messages：auto-switch 失败 → 503 + Retry-After: 10。"""
     import inferfabric.proxy.handler as handler_mod
-    import inferfabric.proxy_manager as pm_mod
-
-    monkeypatch.setattr(pm_mod, "AUTO_SWITCH", True)
 
     pm = make_pm(switch_status="error")
     pm.auth = MagicMock()
     pm.auth.enabled = False
     pm.logger = MagicMock()
+    pm.auto_switch = True  # R-AS: 实例态（UI 开关同源）
     model = MagicMock()
     model.name = "qwen38-27b-abliterated"
     model.port = 8002
@@ -226,14 +224,12 @@ def test_messages_failed_switch_503_retry_after(monkeypatch):
 def test_chat_completions_failed_switch_503_retry_after(monkeypatch):
     """OpenAI /v1/chat/completions：auto-switch 失败 → 503 + Retry-After: 10。"""
     import inferfabric.proxy.chat_handlers as chat_handlers
-    import inferfabric.proxy_manager as pm_mod
-
-    monkeypatch.setattr(chat_handlers, "AUTO_SWITCH", True)
 
     pm = make_pm(switch_status="error")
     pm.auth = MagicMock()
     pm.auth.enabled = False
     pm.logger = MagicMock()
+    pm.auto_switch = True  # R-AS: 实例态（UI 开关同源）
     pm.model_to_service = MagicMock(return_value="qwen38-27b-abliterated")
     pm.ensure_service = MagicMock(return_value=False)
     pm.mgr.state.is_manually_stopped.return_value = False

@@ -39,7 +39,7 @@
       <div class="if-card" id="gwCard">
         <div class="if-card-hdr">
           <span class="if-card-title">网关控制</span>
-          <span class="if-card-sub">响应缓存 · 速率限制</span>
+          <span class="if-card-sub">响应缓存 · 自动切换 · 速率限制</span>
         </div>
         <div class="if-card-body">
           <div class="gw-row">
@@ -48,6 +48,13 @@
               <span class="gw-label-sub mono" id="cacheHits">LRU 缓存 · 上限 500 条</span>
             </div>
             <button type="button" class="btn btn-sec btn-sm" id="cacheToggle" data-action="cache-toggle">—</button>
+          </div>
+          <div class="gw-row">
+            <div class="gw-label">
+              <span class="gw-label-title">自动切换</span>
+              <span class="gw-label-sub mono" id="autoSwitchMeta">自动切换 · —</span>
+            </div>
+            <button type="button" class="btn btn-sec btn-sm" id="autoSwitchToggle" data-action="auto-switch-toggle">—</button>
           </div>
           <div class="gw-row">
             <div class="gw-label">

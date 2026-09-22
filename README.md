@@ -497,7 +497,7 @@ python3 -m inferfabric.proxy.handler --async
 |----------|---------|-------------|
 | `EDGE_PROXY_HOST` | `127.0.0.1` | Proxy bind address |
 | `EDGE_PROXY_PORT` | `8999` | Proxy listen port |
-| `EDGE_AUTO_SWITCH` | `0` | Auto-switch on request (1 = enable) |
+| `EDGE_AUTO_SWITCH` | `1` | Auto-switch on request (v6.0 默认开)。优先级：显式 env > `iff.yaml` 的 `auto_switch.enabled` > 默认开。推理 tab 网关控制卡的"自动切换"开关可即时翻转（`POST /admin/auto-switch/toggle`，免重启）并持久化到 iff.yaml；env 显式设置时 UI 提示重启后回到 env 值 |
 | `EDGE_HEALTH_CHECK` | `60` | Health check interval (seconds) |
 | `EDGE_ASYNC_WORKERS` | `32` | Async mode executor threads (PR-19) |
 | `IFF_ADMIN_TOKEN` | `""` | Admin route auth token (empty = localhost-only) |
