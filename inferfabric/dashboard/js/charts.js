@@ -1,7 +1,10 @@
 /* InferFabric Console — Chart factory (v2, Task 4)
  * window.IFCharts: theme-aware ECharts wrapper.
  *   - create(containerId, theme?) → echarts 实例或 null（echarts 缺失时）
- *   - update(target, optionPatch)  → 合并 option + setOption（target = 实例或 id）
+ *   - update(target, optionPatch[, opts]) → 合并 option + setOption（target = 实例或 id）。
+ *     opts.replaceSeries: series 整数组替换——默认累积合并（_deepMerge）按索引保留旧
+ *     series 尾部（series 数收缩时残留幽灵 series）；series 数动态变化的调用方传
+ *     { replaceSeries: true }（包装层整替 + ECharts ≥5.4 replaceMerge，vendor 已含）
  *   - dispose(target)              → 销毁实例（TAB 卸载用）
  *   - palettes = { dark:[4], light:[4] }  CVD 验证通过，固定顺序 蓝→琥珀→青→紫
  *   - onThemeChange(cb)            → 注册主题变更回调；主题切换时 dispose+重建实例（spec §7）
@@ -220,13 +223,22 @@
     return chart;
   }
 
-  function update(target, optionPatch) {
+  function update(target, optionPatch, opts) {
     var entry = _resolveEntry(target);
     if (!entry || !optionPatch || typeof optionPatch !== 'object') return false;
     entry.userOption = _deepMerge(entry.userOption, optionPatch);
+    /* opts.replaceSeries：series 整数组替换（包装层）。累积 _deepMerge 按索引合并
+     * series，数组变短时旧尾部残留进 opt（幽灵 series，数据还是上一窗口的）。
+     * 此处以 optionPatch.series 整体覆盖 userOption.series，并经 setOption 的
+     * replaceMerge:['series'] 让 ECharts 侧同样整替（vendor 5.5.1 已含该能力）。 */
+    if (opts && opts.replaceSeries && optionPatch.series) {
+      entry.userOption.series = _clone(optionPatch.series);   // 整替但保持 house 克隆惯例
+    }
     var opt = _deepMerge(baseOption(entry.theme), entry.userOption);
     _applyRules(opt, entry.theme);
-    entry.chart.setOption(opt, { notMerge: false, lazyUpdate: false });
+    var sopt = { notMerge: false, lazyUpdate: false };
+    if (opts && opts.replaceSeries) sopt.replaceMerge = ['series'];
+    entry.chart.setOption(opt, sopt);
     return true;
   }
 

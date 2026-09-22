@@ -104,56 +104,57 @@
 
   </div>
 
-  <!-- Row 3: 延迟分布小倍数 — TTFT / TPOT 双卡 (col 6+6)，共用同一模型 x 轴
-       v5.4: 取代原单卡 monLatencyChart 双线。双卡而非双 y 轴：两指标量纲差 ~2 个数量级，
-       双轴比例任意且制造假相关；小倍数 = 同 x 轴 + 各自满刻度 y 轴。
-       x 轴配置驱动（后端 axis_models：local + 云预设），404 观测模型 source=observed 灰显。 -->
+  <!-- Row 3: 模型延迟趋势 — 时间轴 × 逐模型分色折线（v6.0 取代模型条形双卡）。
+       两张小倍数卡（左 TTFT / 右 TPOT）各单 y 轴（量纲差 ~2 数量级，禁双 y 轴）。
+       共享控制条：窗口 1h/24h/7d（latwin）+ 分位 P50/P50+P95（latq）+ 模型 chip 选择器。 -->
   <div class="if-grid">
-    <div class="col-6">
+    <div class="col-12">
       <div class="if-card">
         <div class="if-card-hdr">
-          <span class="if-card-title">TTFT P50 / P95</span>
-          <span class="if-card-sub" id="monTtftSub">ms · 24h 滚动窗口</span>
+          <span class="if-card-title">模型延迟趋势</span>
+          <span class="if-card-sub" id="monLatSub">时间分桶 · 桶内 P50</span>
           <div class="mon-seg" data-seg="latwin">
             <button type="button" class="mon-seg-btn" data-win="1h">1h</button>
             <button type="button" class="mon-seg-btn active" data-win="24h">24h</button>
             <button type="button" class="mon-seg-btn" data-win="7d">7d</button>
           </div>
-          <div class="mon-seg" data-seg="lattf">
-            <button type="button" class="mon-seg-btn active" data-view="chart">图表</button>
-            <button type="button" class="mon-seg-btn" data-view="table">表格</button>
+          <div class="mon-seg" data-seg="latq">
+            <button type="button" class="mon-seg-btn active" data-q="p50">P50</button>
+            <button type="button" class="mon-seg-btn" data-q="p50p95">P50+P95</button>
           </div>
+        </div>
+        <div class="if-card-body">
+          <div class="mon-lat-chips" id="monLatChips"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="if-grid">
+    <div class="col-6">
+      <div class="if-card">
+        <div class="if-card-hdr">
+          <span class="if-card-title">TTFT 趋势</span>
+          <span class="if-card-sub" id="monTtftSub">ms · 24h · 每 1h</span>
         </div>
         <div class="if-card-body">
           <div class="mon-chart-wrap">
             <div id="monTtftChart" class="mon-chart"></div>
             <div id="monTtftEmpty" class="mon-chart-empty" style="display:none">暂无 TTFT 数据（窗口内无成功请求）</div>
           </div>
-          <div id="monTtftTable" class="mon-lat-table" style="display:none"></div>
         </div>
       </div>
     </div>
     <div class="col-6">
       <div class="if-card">
         <div class="if-card-hdr">
-          <span class="if-card-title">TPOT P50 / P95</span>
-          <span class="if-card-sub" id="monTpotSub">ms/token · 24h 滚动窗口</span>
-          <div class="mon-seg" data-seg="latwin">
-            <button type="button" class="mon-seg-btn" data-win="1h">1h</button>
-            <button type="button" class="mon-seg-btn active" data-win="24h">24h</button>
-            <button type="button" class="mon-seg-btn" data-win="7d">7d</button>
-          </div>
-          <div class="mon-seg" data-seg="latpt">
-            <button type="button" class="mon-seg-btn active" data-view="chart">图表</button>
-            <button type="button" class="mon-seg-btn" data-view="table">表格</button>
-          </div>
+          <span class="if-card-title">TPOT 趋势</span>
+          <span class="if-card-sub" id="monTpotSub">ms/token · 24h · 每 1h</span>
         </div>
         <div class="if-card-body">
           <div class="mon-chart-wrap">
             <div id="monTpotChart" class="mon-chart"></div>
             <div id="monTpotEmpty" class="mon-chart-empty" style="display:none">暂无 TPOT 数据（需流式请求）</div>
           </div>
-          <div id="monTpotTable" class="mon-lat-table" style="display:none"></div>
         </div>
       </div>
     </div>

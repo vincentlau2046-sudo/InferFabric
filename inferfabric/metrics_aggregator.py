@@ -9,7 +9,9 @@ v4.6.2: 启动时从 SQLite request_log.db 回填最近 N 小时数据。
 """
 
 import collections
+import datetime
 import logging
+import math
 import queue as _queue
 import threading
 import time
@@ -177,7 +179,7 @@ class MetricsAggregator:
             "cost_yuan": 0.0,
         }
 
-        # v5.4: 配置驱动 x 轴 — axis_models 补零占位 + source 标记 + 稳定排序
+        # v6.0: 配置驱动 x 轴 — axis_models 补零占位 + source 标记 + 稳定排序
         friendly_of = (lambda raw: self._name_map.get(raw, raw))
         by_friendly = defaultdict(list)
         for raw, ss in by_model.items():
@@ -222,7 +224,7 @@ class MetricsAggregator:
                 m["duration_p95"] = round(quantile(durations, 0.95), 1)
                 m["duration_p99"] = round(quantile(durations, 0.99), 1)
 
-            # v5.4: TPOT 逐请求推导 — 仅成功流式样本（tokens_out>=2 且 duration>ttft），
+            # v6.0: TPOT 逐请求推导 — 仅成功流式样本（tokens_out>=2 且 duration>ttft），
             # 零 schema 变更；非流式/短响应/失败样本不进分位
             tpots = [
                 (s["duration_ms"] - s["ttft_ms"]) / ((s.get("tokens_out") or 0) - 1)
@@ -244,6 +246,93 @@ class MetricsAggregator:
         result["cost_yuan"] = round(result["cost_yuan"], 4)
         result["success_rate"] = round(result["success"] / max(result["total_requests"], 1) * 100, 1)
         return result
+
+    def get_latency_series(self, window: str = "24h", bucket_ms: int = 3600000,
+                          top_n: int = 5,
+                          percentiles: tuple[float, ...] = (0.50, 0.95),
+                          source_of: dict | None = None) -> dict:
+        """时间分桶 × 逐模型 TTFT/TPOT 分位序列（模型延迟趋势图数据源）。
+
+        - 桶起点 = 窗口起点向下取整到桶边界（墙钟对齐），保证不同客户端/刷新
+          拿到同一套桶；桶内无样本 → 该位置 None（前端 connectNulls:false 断线）。
+        - 仅保留窗口内请求数前 top_n 个模型（键序 = 请求数降序 → 名称升序）。
+        - 零 schema 变更：TPOT 逐请求推导（同 get_metrics 过滤条件）。
+        - source_of: {模型友好名: "local"/"cloud"}，缺省/未命中 → "observed"。
+        """
+        now = time.time()
+        window_s = {"1h": 3600, "24h": 86400, "7d": 604800, "all": 86400}
+        ws = window_s.get(window, 86400)
+        cutoff = now - ws
+        bucket_s = max(1.0, bucket_ms / 1000.0)
+        start_bucket = math.floor(cutoff / bucket_s) * bucket_s
+        n_buckets = int((now - start_bucket) / bucket_s) + 1
+
+        with self._lock:
+            samples = [s for s in self._samples if s.get("timestamp", 0) >= cutoff]
+
+        friendly_of = (lambda raw: self._name_map.get(raw, raw))
+        req_count: "defaultdict" = defaultdict(int)
+        for s in samples:
+            req_count[friendly_of(s["model"])] += 1
+        top_models = [m for m, _ in sorted(req_count.items(),
+                                           key=lambda kv: (-kv[1], kv[0]))[:top_n]]
+        top_set = set(top_models)
+
+        cells: "defaultdict" = defaultdict(lambda: {"ttft": [], "tpot": []})
+
+        def _tpot_of(s):
+            if (s["status"] < 400 and s.get("ttft_ms") and s["ttft_ms"] > 0
+                    and s.get("duration_ms") and s["duration_ms"] > s["ttft_ms"]
+                    and (s.get("tokens_out") or 0) >= 2):
+                return (s["duration_ms"] - s["ttft_ms"]) / ((s.get("tokens_out") or 0) - 1)
+            return None
+
+        for s in samples:
+            m = friendly_of(s["model"])
+            if m not in top_set:
+                continue
+            ts = s.get("timestamp", 0)
+            bi = int((ts - start_bucket) / bucket_s)
+            if bi < 0 or bi >= n_buckets:
+                continue
+            cell = cells[(m, bi)]
+            if s["status"] < 400 and s.get("ttft_ms") and s["ttft_ms"] > 0:
+                cell["ttft"].append(s["ttft_ms"])
+            tp = _tpot_of(s)
+            if tp is not None:
+                cell["tpot"].append(tp)
+
+        q_labels = ["p%.0f" % int(q * 100) for q in percentiles]
+        series = {}
+        for m in top_models:
+            entry: dict = {"source": (source_of or {}).get(m, "observed"),
+                           "requests": req_count[m]}
+            for kind in ("ttft", "tpot"):
+                for q, ql in zip(percentiles, q_labels):
+                    rnd = 2 if kind == "tpot" else 1
+                    arr = []
+                    for bi in range(n_buckets):
+                        vals = cells.get((m, bi), {}).get(kind, [])
+                        arr.append(round(quantile(vals, q), rnd) if vals else None)
+                    entry["%s_%s" % (kind, ql)] = arr
+                entry["%s_n" % kind] = [
+                    len(cells.get((m, bi), {}).get(kind, [])) for bi in range(n_buckets)]
+            series[m] = entry
+
+        labels = []
+        for bi in range(n_buckets):
+            t = start_bucket + bi * bucket_s
+            fmt = "%m-%d %H:%M" if ws >= 86400 else "%H:%M"
+            labels.append(datetime.datetime.fromtimestamp(t).strftime(fmt))
+
+        return {
+            "window": window,
+            "bucket_ms": bucket_ms,
+            "buckets": labels,
+            "percentiles": q_labels,
+            "series": series,
+            "total_models": len(top_models),
+        }
 
 
 class AggregatorThread(threading.Thread):

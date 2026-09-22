@@ -420,8 +420,8 @@ def test_monitor_structure():
         'id="monGpuChart"',     # GPU vram+util 时间曲线
         'id="monTokenLocalChart"',  # Token 用量 · 本地引擎（vllm/sglang/ninfer…）
         'id="monTokenCloudChart"',  # Token 用量 · 云端透传
-        'id="monTtftChart"',    # 延迟小倍数 · TTFT P50/P95（v5.4 双卡）
-        'id="monTpotChart"',    # 延迟小倍数 · TPOT P50/P95（v5.4 双卡）
+        'id="monTtftChart"',    # 延迟小倍数 · TTFT P50/P95（v6.0 双卡）
+        'id="monTpotChart"',    # 延迟小倍数 · TPOT P50/P95（v6.0 双卡）
         'id="monKpis"',         # 五联 KPI
         'id="monLogTable"',     # 请求日志表
         'id="monHistTable"',    # 切换历史表
@@ -435,12 +435,12 @@ def test_monitor_structure():
         assert 'data-win="%s"' % win in html, "missing GPU window toggle: %s" % win
     for gran in ('hour', 'day', 'month'):
         assert 'data-gran="%s"' % gran in html, "missing token granularity toggle: %s" % gran
-    # v5.4: 延迟双卡 — 窗口切换（latwin ×2 镜像）+ 图表/表格视图切换
+    # v6.0: 延迟趋势双卡 — 共享控制条（窗口 latwin 单条不再镜像 + 分位 latq）+ 模型 chip 选择器
     assert 'data-seg="latwin"' in html
-    assert 'data-seg="lattf"' in html
-    assert 'data-seg="latpt"' in html
+    assert 'data-seg="latq"' in html
+    assert 'id="monLatChips"' in html
+    assert 'id="monLatSub"' in html
     assert 'id="monTtftEmpty"' in html and 'id="monTpotEmpty"' in html
-    assert 'id="monTtftTable"' in html and 'id="monTpotTable"' in html
 
 
 def test_monitor_js_present():
@@ -468,14 +468,13 @@ def test_monitor_js_present():
 
 
 def test_monitor_latency_cards():
-    """v5.4 延迟双卡小倍数契约：TTFT/TPOT 共用模型 x 轴；窗口数据走 GET /api/metrics。
-
-    双卡而非双 y 轴：两指标量纲差 ~2 个数量级，单卡双轴比例任意、制造假相关
-    （spec 反模式 #1）；小倍数 = 同 x 轴 + 各自满刻度 y 轴。"""
+    """v6.0 延迟双卡趋势契约：TTFT/TPOT 各单 y 轴（两指标量纲差 ~2 个数量级，禁双 y 轴，
+    spec 反模式 #1）；窗口数据走 GET /api/latency（Task 2 端点，只读 display filter）；
+    图表/表格视图切换（data-view）已移除。"""
     js = (ROOT / "inferfabric" / "dashboard" / "js" / "monitor.js").read_text(encoding="utf-8")
     assert "monTtftChart" in js and "monTpotChart" in js
-    assert "/api/metrics?window=" in js      # 1h/7d 窗口取数（GET-only）
-    assert "data-view" in js                 # 图表/表格视图切换
+    assert "/api/latency?window=" in js      # 1h/24h/7d 窗口取数（GET-only）
+    assert "data-view" not in js             # 图表/表格视图切换已移除
     html = _html()
     assert 'id="monTtftChart"' in html and 'id="monTpotChart"' in html
 
@@ -496,6 +495,207 @@ def test_monitor_readonly():
     frag = (_DASHBOARD_DIR / "fragments" / "monitor.html").read_text(encoding="utf-8")
     assert "method=" not in frag, "monitor.html contains method= — read-only violation"
     assert "<form" not in frag, "monitor.html contains <form> — read-only violation"
+
+
+def test_monitor_latency_trend():
+    """v6.0 延迟趋势 DOM/JS 契约：共享控制条（窗口 latwin + 分位 latq）+ 模型 chip
+    选择器（#monLatChips）+ TTFT/TPOT 双趋势卡（#monTtftChart/#monTpotChart 保留）；
+    只读——fragment 无 <form。"""
+    frag = (_DASHBOARD_DIR / "fragments" / "monitor.html").read_text(encoding="utf-8")
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "monitor.js").read_text(encoding="utf-8")
+    # 控制条契约
+    assert 'id="monLatChips"' in frag
+    assert 'data-seg="latq"' in frag
+    assert 'id="monLatSub"' in frag
+    # 趋势双卡容器仍在
+    assert 'id="monTtftChart"' in frag and 'id="monTpotChart"' in frag
+    assert 'id="monTtftSub"' in frag and 'id="monTpotSub"' in frag
+    # 视图切换/表格已移除
+    assert 'data-seg="lattf"' not in frag and 'data-seg="latpt"' not in frag
+    assert 'monTtftTable' not in frag and 'monTpotTable' not in frag
+    # JS 侧：/api/latency 取数（GET-only）+ chip / 分位切换接线
+    assert "/api/latency?window=" in js
+    assert "monLatChips" in js and "data-model" in js
+    assert "'latq'" in js
+    # 只读：无 <form
+    assert "<form" not in frag
+
+
+def test_monitor_latency_series_colors_survive_apply_rules():
+    """逐模型折线色（series[].lineStyle.color / itemStyle.color）与低置信 data item
+    （symbol:'circle' + itemStyle.opacity）必须存活于 IFCharts._applyRules 之后。
+
+    _applyRules 将顶层 `color` 强制为固定 4 色调色板，但该调色板仅对「无显式
+    颜色」的系列做自动分色；per-series 显式 lineStyle.color/itemStyle.color 优先
+    （ECharts 语义），故模型趋势线不会被固定调色板覆盖或循环。同理 _applyRules
+    只填 series 级 null（symbol='none' 等）、不触碰 data 数组，per-data-item 显式
+    symbol（低置信半透明圆点，fix round 1）原样存活。行为级验证：node + echarts
+    stub 跑真实 charts.js，断言 setOption 收到的各系列颜色与低置信点样式原样保留。"""
+    import shutil
+    import subprocess
+    import pytest
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available")
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "charts.js").read_text(encoding="utf-8")
+    script = (
+        r"""
+        var window = {};
+        var _lastOpt = null;
+        window.echarts = {
+          init: function () {
+            return {
+              setOption: function (opt) { _lastOpt = opt; },
+              dispose: function () {},
+              resize: function () {},
+            };
+          },
+        };
+        var document = {
+          getElementById: function () { return { id: 'c1' }; },
+          documentElement: { getAttribute: function () { return 'dark'; } },
+        };
+        window.getComputedStyle = function () { return { getPropertyValue: function () { return ''; } }; };
+        window.addEventListener = function () {};
+        var MutationObserver = undefined;
+        """
+        + "\n"
+        + js
+        + "\n"
+        + r"""
+        var c = window.IFCharts.create('c1');
+        // 模型趋势卡形态：3 模型 × (P50 实线 + P95 虚线)，逐模型显式颜色（5 色模型调色板前 3 色）；
+        // m1 首点 = 低置信点（0<n<30）：_lowPt 产物 { value, symbol:'circle', symbolSize:6, itemStyle:{color,opacity:.45} }
+        window.IFCharts.update(c, {
+          xAxis: { type: 'category', data: ['00:00', '01:00'], boundaryGap: false },
+          yAxis: { type: 'value' },
+          series: [
+            { name: 'm1', type: 'line', data: [{ value: 1, symbol: 'circle', symbolSize: 6, itemStyle: { color: '#3a86e0', opacity: 0.45 } }, 2], lineStyle: { color: '#3a86e0', width: 2 }, itemStyle: { color: '#3a86e0' } },
+            { name: 'm2', type: 'line', data: [3, 4], lineStyle: { color: '#b57a14', width: 2 }, itemStyle: { color: '#b57a14' } },
+            { name: 'm3', type: 'line', data: [5, 6], lineStyle: { color: '#12a594', width: 2 }, itemStyle: { color: '#12a594' } },
+            { name: 'm1 P95', type: 'line', data: [10, 12], lineStyle: { color: '#3a86e0', width: 1, type: 'dashed' }, itemStyle: { color: '#3a86e0' } },
+          ],
+        });
+        var expected = ['#3a86e0', '#b57a14', '#12a594', '#3a86e0'];
+        var ok = _lastOpt.series.length === 4;
+        for (var i = 0; ok && i < _lastOpt.series.length; i++) {
+          var s = _lastOpt.series[i];
+          if (!s.lineStyle || s.lineStyle.color !== expected[i]) { ok = false; break; }
+          if (!s.itemStyle || s.itemStyle.color !== expected[i]) { ok = false; break; }
+          if (i === 3 && s.lineStyle.type !== 'dashed') { ok = false; }
+        }
+        // 低置信 data item：_applyRules 只填 series 级 null（symbol='none'），
+        // 不触碰 data 数组 → 逐点显式 symbol 必须原样存活（否则低置信点不可见）
+        var low = _lastOpt.series[0] && _lastOpt.series[0].data && _lastOpt.series[0].data[0];
+        if (!low || low.symbol !== 'circle' || low.symbolSize !== 6 ||
+            !low.itemStyle || low.itemStyle.color !== '#3a86e0' || low.itemStyle.opacity !== 0.45) {
+          ok = false;
+        }
+        console.log(ok ? 'PASS' : 'FAIL: ' + JSON.stringify({
+          series: _lastOpt.series.map(function (s) {
+            return { line: s.lineStyle && s.lineStyle.color, item: s.itemStyle && s.itemStyle.color };
+          }),
+          low: low
+        }));
+        process.exit(ok ? 0 : 1);
+        """
+    )
+    proc = subprocess.run([node, "-e", script],
+                          capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, (
+        "per-model series colors clobbered by _applyRules/merge:\n"
+        "stdout:%s\nstderr:%s" % (proc.stdout, proc.stderr)
+    )
+
+
+def test_monitor_latency_replace_series_no_ghosts():
+    """IFCharts.update(..., { replaceSeries: true }) 必须整替 series（fix round 1）。
+
+    回归：延迟趋势卡 series 数随 chip 选择 / P95 开关 / 窗口收缩动态变化（4→2）。
+    旧行为：IFCharts 累积 userOption（_deepMerge 按索引保留旧 series 尾部）+ ECharts
+    setOption(notMerge:false) 按索引合并 → 收缩后残留幽灵 series（旧窗口数据，错位
+    贴到新 x 轴）。修复：包装层 userOption.series 整数组替换 + setOption 经
+    replaceMerge:['series']（ECharts ≥5.4，vendor bundle 已含）让 ECharts 侧同样整替。
+
+    行为级验证（node + echarts stub 跑真实 charts.js，捕获 setOption 收到的
+    option 与第二参数）：
+      1. 4 series（replaceSeries）→ 再 2 series（replaceSeries）：setOption 收到
+         恰好 2 series（无幽灵尾部），且 sopt.replaceMerge === ['series']。
+      2. 不传 opts 的既有调用方保持字节级兼容：累积合并（3→1 series 后 opt 仍 3，
+         sopt 无 replaceMerge）。"""
+    import shutil
+    import subprocess
+    import pytest
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available")
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "charts.js").read_text(encoding="utf-8")
+    script = (
+        r"""
+        var window = {};
+        var _log = [];
+        window.echarts = {
+          init: function () {
+            return {
+              setOption: function (opt, sopt) { _log.push({ opt: opt, sopt: sopt || null }); },
+              dispose: function () {},
+              resize: function () {},
+            };
+          },
+        };
+        var document = {
+          getElementById: function (id) { return { id: id }; },
+          documentElement: { getAttribute: function () { return 'dark'; } },
+        };
+        window.getComputedStyle = function () { return { getPropertyValue: function () { return ''; } }; };
+        window.addEventListener = function () {};
+        var MutationObserver = undefined;
+        """
+        + "\n"
+        + js
+        + "\n"
+        + r"""
+        function mk(name, data, color) {
+          return { name: name, type: 'line', data: data, connectNulls: false,
+                   lineStyle: { color: color, width: 2 }, itemStyle: { color: color } };
+        }
+        var ok = true;
+        // 1) replaceSeries：4 series → 2 series，setOption 必须收到恰好 2 条（无幽灵尾部）
+        var c = window.IFCharts.create('c1');
+        window.IFCharts.update(c, {
+          xAxis: { type: 'category', data: ['00:00', '01:00'], boundaryGap: false },
+          series: [mk('m1', [1, 2], '#3a86e0'), mk('m2', [3, 4], '#b57a14'),
+                   mk('m3', [5, 6], '#12a594'), mk('m4', [7, 8], '#8b5cf6')],
+        }, { replaceSeries: true });
+        var last = _log[_log.length - 1];
+        if (last.opt.series.length !== 4) ok = false;
+        window.IFCharts.update(c, {
+          xAxis: { type: 'category', data: ['09:00', '10:00'], boundaryGap: false },
+          series: [mk('m1', [10, 11], '#3a86e0'), mk('m2', [12, 13], '#b57a14')],
+        }, { replaceSeries: true });
+        last = _log[_log.length - 1];
+        var names = last.opt.series.map(function (s) { return s.name; });
+        if (last.opt.series.length !== 2 || names.join(',') !== 'm1,m2') ok = false;
+        if (JSON.stringify(last.sopt && last.sopt.replaceMerge) !== JSON.stringify(['series'])) ok = false;
+        // 2) 不传 opts 的既有调用方：累积合并语义字节级不变（尾部保留、无 replaceMerge）
+        var d = window.IFCharts.create('c2');
+        window.IFCharts.update(d, { series: [mk('a', [1], '#3a86e0'), mk('b', [2], '#b57a14'), mk('c', [3], '#12a594')] });
+        window.IFCharts.update(d, { series: [mk('a', [4], '#3a86e0')] });
+        var dlast = _log[_log.length - 1];
+        if (dlast.opt.series.length !== 3) ok = false;
+        if (dlast.sopt && 'replaceMerge' in dlast.sopt) ok = false;
+        console.log(ok ? 'PASS' : 'FAIL: ' + JSON.stringify(_log.map(function (l) {
+          return { n: l.opt.series.length, names: l.opt.series.map(function (s) { return s.name; }), sopt: l.sopt };
+        })));
+        process.exit(ok ? 0 : 1);
+        """
+    )
+    proc = subprocess.run([node, "-e", script],
+                          capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, (
+        "replaceSeries whole-array replacement FAILED (ghost series or default path changed):\n"
+        "stdout:%s\nstderr:%s" % (proc.stdout, proc.stderr)
+    )
 
 
 def test_monitor_js_node_syntax():

@@ -1200,6 +1200,15 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
   .cp-grid { grid-template-columns: 1fr; }
 }
 
-/* v5.4: 延迟双卡 — 卡头双段控件间距 + 表格视图容器 */
+/* v6.0: 延迟趋势双卡 — 卡头双段控件间距（latwin + latq 同处控制条卡头） */
 .if-card-hdr .mon-seg + .mon-seg { margin-left: 8px; }
-.mon-lat-table { margin-top: 8px; }
+
+/* v6.0 模型延迟趋势：模型 chip 选择器 */
+.mon-lat-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.mon-lat-chip{--mc:#888;display:inline-flex;align-items:center;gap:6px;cursor:pointer;
+  border:1px solid var(--border);background:var(--surface);color:var(--ink);
+  border-radius:999px;padding:3px 10px;font-size:12px;line-height:1}
+.mon-lat-chip .dot{width:8px;height:8px;border-radius:50%;background:var(--mc);
+  opacity:.35;transition:opacity .15s}
+.mon-lat-chip.on{border-color:var(--mc)}
+.mon-lat-chip.on .dot{opacity:1}

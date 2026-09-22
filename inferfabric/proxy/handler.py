@@ -108,7 +108,7 @@ class _ExpensiveCache:
 
 
 def _metrics_axis(pm) -> list[tuple[str, str]]:
-    """v5.4: 指标图 x 轴（配置驱动）— (model_name, source) 列表。
+    """v6.0: 指标图 x 轴（配置驱动）— (model_name, source) 列表。
 
     local = models.d 友好名（ModelConfig.name）；cloud = 启用云预设的模型短名
     （CloudDiscovery.cloud_models 键）。同名 local 优先、去重保序。
@@ -131,6 +131,12 @@ def _metrics_axis(pm) -> list[tuple[str, str]]:
             seen.add(name)
             out.append((name, src))
     return out
+
+
+_LAT_BUCKET_MS = {"1h": 5 * 60 * 1000, "24h": 3600 * 1000, "7d": 6 * 3600 * 1000}
+_LAT_CACHE_TTL = {"1h": 30.0, "24h": 60.0, "7d": 60.0}
+# 单飞 TTL 缓存：重扫描（deque + 分位）不随 3s 轮询重算；按 window 各一个实例。
+_lat_series_cache = {w: _ExpensiveCache(ttl=_LAT_CACHE_TTL[w]) for w in _LAT_CACHE_TTL}
 
 
 def _compute_expensive(pm) -> dict:
@@ -175,6 +181,7 @@ _GET_ROUTES = {
     "/v1/models":               lambda h, pm: h._handle_v1_models(pm),
     "/system":                  lambda h, pm: h._send_json(h._system_info()),
     "/api/metrics":             lambda h, pm: h._handle_api_metrics(pm),
+    "/api/latency":           lambda h, pm: h._handle_api_latency(pm),
     "/api/request_log":         lambda h, pm: h._handle_request_log(pm),
     "/api/token-stats":         lambda h, pm: h._handle_token_stats(pm),
     "/api/token-curve":         lambda h, pm: h._handle_token_curve(pm),
@@ -733,6 +740,24 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             log.error("/api/metrics failed: %s", e)
             self._send_json({"error": "metrics unavailable"}, 500)
+
+    def _handle_api_latency(self, pm):
+        """GET /api/latency?window=1h|24h|7d — 模型延迟趋势（时间分桶 × 逐模型分位）。"""
+        from urllib.parse import urlparse, parse_qs
+        try:
+            qs = parse_qs(urlparse(self.path).query)
+            window = qs.get("window", ["24h"])[0]
+            if window not in ("1h", "24h", "7d"):
+                window = "24h"
+            source_of = {name: src for name, src in _metrics_axis(pm)}
+            data = _lat_series_cache[window].get_or_refresh(
+                lambda: pm.metrics.get_latency_series(
+                    window, bucket_ms=_LAT_BUCKET_MS[window], top_n=5,
+                    percentiles=(0.50, 0.95), source_of=source_of))
+            self._send_json(data, 200)
+        except Exception as e:
+            log.error("/api/latency failed: %s", e)
+            self._send_json({"error": "latency series unavailable"}, 500)
 
     def _handle_vllm_metrics(self, pm):
         from urllib.parse import urlparse, parse_qs

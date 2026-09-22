@@ -122,6 +122,14 @@ class TelemetryHub:
                     axis_models: list[tuple[str, str]] | None = None) -> dict:
         return self.metrics.get_metrics(window, axis_models=axis_models)
 
+    def get_latency_series(self, window: str = "24h", bucket_ms: int = 3600000,
+                           top_n: int = 5,
+                           percentiles: tuple = (0.50, 0.95),
+                           source_of: dict | None = None):
+        return self.metrics.get_latency_series(
+            window, bucket_ms=bucket_ms, top_n=top_n,
+            percentiles=percentiles, source_of=source_of)
+
     def query_request_log(self, since: float, until: float | None = None,
                            model: str | None = None, limit: int = 10000) -> list[dict]:
         """Query request logs via the unified adapter. Thread-safe."""

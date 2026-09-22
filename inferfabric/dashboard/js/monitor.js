@@ -1,7 +1,7 @@
 /* InferFabric Console — Monitor tab (v2, Task 5)
  * 纯遥测、只读、零操作（spec §4.3）。
  *   - 4 ECharts: GPU vram+util 时间曲线 / Token prompt+completion 堆叠条 /
- *     TTFT P50+P95 条 / TPOT P50+P95 条（v5.4 双卡小倍数，共用模型 x 轴）
+ *     TTFT/TPOT 双卡趋势折线（v6.0 时间轴 × 逐模型分色，取代模型条形小倍数）
  *   - 6 KPI（2 行 × 3 列）: KV Cache / Batch Size / Seq Length / TPOT(ms) / TTFT(s) / Throughput
  *     （GET /api/engine_metrics）
  *   - 2 表: 请求日志 + 切换历史（13px 紧凑）
@@ -388,175 +388,177 @@
     }
   }
 
-  /* ── 3. 延迟分布小倍数：TTFT / TPOT 双卡（v5.4 取代原单卡双线）──
-   * 两卡共用同一模型 x 轴（后端键序 = requests 降序 → 名称升序，天然对齐）。
-   * 每卡：P50/P95 成对条形（IFCharts 固定调色板 蓝→琥珀，CVD 已验证），
-   *   x 标签 = 模型名 + 换行 (n=请求数)；ttft/tpot 样本数 <30 → 条形 opacity 0.45（低置信）。
-   * 视图：图表 / 表格（data-view）；窗口 1h/24h/7d（data-seg=latwin，两卡镜像同步；
-   *   24h 取 snapshot metrics_24h，1h/7d 走 GET /api/metrics?window=（只读 display filter））。
-   * 数据源：metrics_24h.models[model] → ttft_p50/p95/p99 + ttft_samples / tpot_* + source。 */
-  var _latWin = '24h';
-  var _latView = { ttft: 'chart', tpot: 'chart' };
-  var _latCache = {};               // window → { data, at }（1h/7d 取数缓存）
-  var _latFetchInflight = {};
-  var _LAT_TTL = 15000;
-  var _latCtx = { axis: [], models: {}, window: '24h' };
+  /* ── 3. 模型延迟趋势：时间轴 × 逐模型分色折线（v6.0 取代模型条形双卡）──
+   * 共享控制条：窗口 1h/24h/7d（latwin，单条不再镜像）+ 分位 P50/P50+P95（latq）
+   * + 模型 chip 选择器（请求数前 5，默认选中前 4；颜色按 rank 定，chip 与图同色）。
+   * 数据源：GET /api/latency?window=（时间分桶 × 逐模型 TTFT/TPOT 分位，只读 display filter）。 */
 
-  function getLatData(win) {
-    if (win === '24h') return store.get('metrics_24h') || {};
+  /* v6.0: 模型折线 5 色分类调色板（CVD 安全，固定顺序、绝不循环；主题各自校验通过）。
+   * 同屏上限 = 本数组长度（5，CVD 驱动）；改动须重跑 dataviz validate_palette.js 保持 ALL PASS。
+   * 模型 1..5 按请求数降序分色，与 chip 同序 → 同色；dark/light 各自一组（house 惯例）。 */
+  var _MODEL_COLORS = {
+    dark:  ['#3a86e0', '#b57a14', '#12a594', '#8b5cf6', '#e0574a'],
+    light: ['#1f6fd6', '#b45309', '#0e8f7f', '#7c3aed', '#cf4636'],
+  };
+
+  var _latWin = '24h';
+  var _latQ = 'p50';               // 'p50' | 'p50p95'
+  var _latSel = null;              // 选中模型名数组（null=默认取前 4）
+  var _latCache = {};              // window -> { data, at }
+  var _latFetchInflight = {};
+  var _LAT_TTL = { '1h': 30000, '24h': 60000, '7d': 60000 };   // 与后端 _LAT_CACHE_TTL 逐档对齐
+
+  function _modelColors() {
+    /* currentTheme 在 IFCharts 命名空间（charts.js 导出）；monitor.js 是 strict IIFE，
+       裸调用会 ReferenceError。守卫模式同 L875 onThemeChange 用法。 */
+    var th = (IFCharts && typeof IFCharts.currentTheme === 'function')
+      ? IFCharts.currentTheme() : 'dark';
+    return _MODEL_COLORS[th] || _MODEL_COLORS.dark;
+  }
+
+  function getLatSeries(win) {
     var c = _latCache[win];
     var now = Date.now();
-    // 缓存新鲜（< TTL）直接返回；否则（缺失或已过期）触发重取。
-    // 注：fetch 分支不再要求 !c —— 过期缓存也要重取（修复 stale 永不刷新）。
-    // 重取期间最终 `return c ? c.data : {}` 返回旧值（避免空态闪烁）；
-    // 无重复取数由 _latFetchInflight[win] 前置守卫保证（in-flight 中不再发第二次）。
-    if (c && now - c.at < _LAT_TTL) return c.data;
+    if (c && now - c.at < (_LAT_TTL[win] || 60000)) return c.data;
     if (!_latFetchInflight[win]) {
       _latFetchInflight[win] = true;
-      fetch('/api/metrics?window=' + win, { cache: 'no-store' })
+      fetch('/api/latency?window=' + win, { cache: 'no-store' })
         .then(function (res) {
           if (!res.ok) throw new Error('HTTP ' + res.status);
           return res.json();
         })
         .then(function (data) {
           _latCache[win] = { data: data || {}, at: Date.now() };
-        })
-        .catch(function (e) {
-          console.warn('[monitor] /api/metrics?window=' + win + ' fetch failed:', e);
-        })
-        .then(function () {
-          _latFetchInflight[win] = false;
           if (isMonitorActive()) renderLatencyCards();
-        });
+        })
+        .catch(function (e) { console.warn('[monitor] /api/latency fetch failed:', e); })
+        .then(function () { _latFetchInflight[win] = false; });
     }
     return c ? c.data : {};
   }
 
-  function buildLatAxis(data) {
-    var models = (data && data.models) || {};
-    var names = Object.keys(models);
-    var axis = [];
-    for (var i = 0; i < names.length; i++) {
-      var vm = models[names[i]] || {};
-      axis.push({
-        name: names[i],
-        label: shortName(names[i]) + '\n(n=' + (vm.requests != null ? vm.requests : 0) + ')',
-        source: vm.source || 'observed',
-      });
-    }
-    return { axis: axis, models: models };
+  function _latAvailable(seriesObj) { return Object.keys(seriesObj || {}); }  // 请求数降序
+
+  // chip 列表 = 请求数前 5（上限 = 调色板长度，CVD 驱动）；默认选中前 4
+  function _latChipModels(seriesObj) {
+    return _latAvailable(seriesObj).slice(0, _modelColors().length);
   }
 
-  function srcBadge(src) {
-    if (src === 'local') return '本地';
-    if (src === 'cloud') return '云端';
-    return '未配置';
+  function _latSelected(seriesObj) {
+    var chips = _latChipModels(seriesObj);
+    // 仅在有模型数据时才固化默认选中：冷启动首渲染（数据未到）不得把 _latSel
+    // 从 null 固化为 []（[] 为 truthy → 数据到达后默认前 4 不再触发）。
+    // 用户主动全取消（_latSel=[]）不受影响：有 chips 且 _latSel 非 null 时不重设。
+    if (!_latSel && chips.length) _latSel = chips.slice(0, Math.min(4, chips.length));
+    var sel = chips.filter(function (n) { return _latSel.indexOf(n) >= 0; });
+    return sel.slice(0, _modelColors().length);   // 安全网：不会超调色板长度
   }
 
-  function _latTooltip(prefix) {
+  function _latColorOf(name, seriesObj) {
+    var i = _latAvailable(seriesObj).indexOf(name);
+    return i >= 0 ? _modelColors()[i] : '#888';   // 按 rank 定色：chip 与图同色，绝不循环
+  }
+
+  function _latBucketLabel(win) { return win === '1h' ? '5min' : (win === '7d' ? '6h' : '1h'); }
+
+  function _lowPt(v, n, color) {
+    // 低置信（0<n<30）→ 半透明小圆点；n=0/无值 → null（断线）。
+    // house 规则 series 级 symbol:'none'（无逐点标记）下，仅 itemStyle.opacity
+    // 的 data item 不渲染任何东西——必须显式 symbol:'circle' 才可见（fix round 1）。
+    if (v == null) return null;
+    var low = n > 0 && n < 30;
+    return low
+      ? { value: v, symbol: 'circle', symbolSize: 6,
+          itemStyle: { color: color, opacity: 0.45 } }
+      : v;
+  }
+
+  function renderLatChips(seriesObj) {
+    var el = $('monLatChips'); if (!el) return;
+    var chips = _latChipModels(seriesObj);
+    if (!chips.length) { el.innerHTML = '<span class="muted" style="font-size:11px">暂无模型</span>'; return; }
+    var sel = _latSelected(seriesObj);
+    var html = '';
+    chips.forEach(function (name) {
+      var on = sel.indexOf(name) >= 0;
+      html += '<button type="button" class="mon-lat-chip' + (on ? ' on' : '') +
+        '" data-model="' + escHtml(name) + '" style="--mc:' + _latColorOf(name, seriesObj) + '">' +
+        '<span class="dot"></span>' + escHtml(shortName(name)) + '</button>';
+    });
+    el.innerHTML = html;
+  }
+
+  function _latTrendTooltip(prefix) {
     return function (params) {
       if (!params || !params.length) return '';
-      var a = _latCtx.axis[params[0].dataIndex] || {};
-      var vm = (_latCtx.models[a.name]) || {};
-      var n = vm[prefix + '_samples'] || 0;
+      var bucket = params[0].axisValue;
       var rows = '';
-      ['p50', 'p95', 'p99'].forEach(function (q) {
-        var v = vm[prefix + '_' + q];
-        rows += '<div>' + q.toUpperCase() + '：' + (v != null ? v : '—') +
+      params.forEach(function (p) {
+        if (p.value == null || (typeof p.value === 'object' && p.value == null)) return;
+        var v = (p.value && typeof p.value === 'object') ? p.value.value : p.value;
+        rows += '<div>' + escHtml(p.seriesName) + '：' + v +
           (prefix === 'ttft' ? ' ms' : ' ms/token') + '</div>';
       });
-      return '<div><b>' + escHtml(a.name) + '</b> ' +
-        '<span class="badge info">' + srcBadge(a.source) + '</span></div>' +
-        '<div>' + (vm.requests || 0) + ' 请求 · ' + n + ' 样本' +
-        (n > 0 && n < 30 ? '（低置信）' : '') + ' · ' + _latCtx.window + ' 窗口</div>' + rows;
+      var unit = prefix === 'ttft' ? ' ms' : ' ms/token';
+      return '<div><b>' + bucket + '</b></div>' + rows;
     };
-  }
-
-  function renderLatTable(isTtft) {
-    var prefix = isTtft ? 'ttft' : 'tpot';
-    var el = $(isTtft ? 'monTtftTable' : 'monTpotTable');
-    if (!el) return;
-    var ctx = _latCtx;
-    var rows = '';
-    for (var i = 0; i < ctx.axis.length; i++) {
-      var a = ctx.axis[i], vm = ctx.models[a.name] || {};
-      var n = vm[prefix + '_samples'] || 0;
-      var v50 = vm[prefix + '_p50'], v95 = vm[prefix + '_p95'], v99 = vm[prefix + '_p99'];
-      var low = n > 0 && n < 30;
-      var cls = (vm.requests || 0) === 0 ? ' class="muted"' : '';
-      rows += '<tr' + cls + '>' +
-        '<td>' + escHtml(a.name) + '</td>' +
-        '<td><span class="badge info">' + srcBadge(a.source) + '</span></td>' +
-        '<td class="mono num">' + (vm.requests || 0) + '</td>' +
-        '<td class="mono num">' + (v50 != null ? v50 + (low ? ' †' : '') : '—') + '</td>' +
-        '<td class="mono num">' + (v95 != null ? v95 : '—') + '</td>' +
-        '<td class="mono num">' + (v99 != null ? v99 : '—') + '</td>' +
-      '</tr>';
-    }
-    el.innerHTML =
-      '<div class="cp-table-wrap">' +
-      '<table class="if-table mon-tbl">' +
-      '<thead><tr><th>模型</th><th>来源</th><th>请求</th>' +
-      '<th>P50</th><th>P95</th><th>P99</th></tr></thead>' +
-      '<tbody>' + rows + '</tbody>' +
-      '</table></div>' +
-      '<div class="muted" style="font-size:11px;margin-top:4px">' +
-      '† 低置信（样本 &lt; 30）；单位 ms' + (isTtft ? '' : '/token') + '；n=0 行无窗口内请求</div>';
   }
 
   function renderLatCard(metric) {
     var isTtft = metric === 'ttft';
     var prefix = isTtft ? 'ttft' : 'tpot';
-    var unit = isTtft ? 'ms' : 'ms/token';   // y 轴单位随指标（TPOT 是 ms/token）
-    var tableEl = $(isTtft ? 'monTtftTable' : 'monTpotTable');
-    var chartEl = $(isTtft ? 'monTtftChart' : 'monTpotChart');
-    var wrapEl = chartEl ? chartEl.parentNode : null;   // .mon-chart-wrap
-
-    if (_latView[metric] === 'table') {
-      if (wrapEl) wrapEl.style.display = 'none';
-      renderLatTable(isTtft);
-      if (tableEl) tableEl.style.display = '';
-      return;
-    }
-    if (tableEl) tableEl.style.display = 'none';
-    if (wrapEl) wrapEl.style.display = '';
+    var unit = isTtft ? 'ms' : 'ms/token';
     if (!_charts[metric]) return;
+    var data = getLatSeries(_latWin);
+    var seriesObj = (data && data.series) || {};
+    var buckets = (data && data.buckets) || [];
+    var sel = _latSelected(seriesObj);
 
-    var ctx = _latCtx;
-    var p50 = [], p95 = [];
-    for (var i = 0; i < ctx.axis.length; i++) {
-      var vm = ctx.models[ctx.axis[i].name] || {};
-      var n = vm[prefix + '_samples'] || 0;
-      var v50 = vm[prefix + '_p50'], v95 = vm[prefix + '_p95'];
-      // 低置信（0 < n < 30）：半透明条；无样本（n=0）：不画
-      p50.push(v50 != null ? (n < 30 ? { value: v50, itemStyle: { opacity: 0.45 } } : v50) : null);
-      p95.push(v95 != null ? (n < 30 ? { value: v95, itemStyle: { opacity: 0.45 } } : v95) : null);
-    }
-    var hasData = p50.some(function (v) { return v != null; });
+    var series = [];
+    var legendData = [];
+    sel.forEach(function (name) {
+      var s = seriesObj[name] || {};
+      var color = _latColorOf(name, seriesObj);   // rank→色，与 chip 一致
+      var n = s[prefix + '_n'] || [];
+      var p50 = (s[prefix + '_p50'] || []).map(function (v, bi) { return _lowPt(v, n[bi], color); });
+      series.push({
+        name: name, type: 'line', data: p50, connectNulls: false,
+        lineStyle: { color: color, width: 2 },
+        itemStyle: { color: color },
+      });
+      legendData.push(name);
+      if (_latQ === 'p50p95') {
+        var p95 = (s[prefix + '_p95'] || []).map(function (v, bi) { return _lowPt(v, n[bi], color); });
+        series.push({
+          name: name + ' P95', type: 'line', data: p95, connectNulls: false,
+          lineStyle: { color: color, width: 1, type: 'dashed' },
+          itemStyle: { color: color },
+        });
+      }
+    });
+
+    var hasData = sel.length > 0 && buckets.length > 0;
     showEmpty(isTtft ? 'monTtftEmpty' : 'monTpotEmpty', !hasData);
     IFCharts.update(_charts[metric], {
-      xAxis: {
-        data: ctx.axis.map(function (a) { return a.label; }),
-        boundaryGap: true,
-        axisLabel: { interval: 0, fontSize: 11 },
-      },
-      yAxis: { axisLabel: { formatter: '{value} ' + unit } },
-      tooltip: { trigger: 'axis', formatter: _latTooltip(prefix) },
-      series: [
-        { type: 'bar', name: 'P50', data: p50, barMaxWidth: 24 },
-        { type: 'bar', name: 'P95', data: p95, barMaxWidth: 24 },
-      ],
-    });
+      xAxis: { type: 'category', data: buckets, boundaryGap: false,
+               axisLabel: { fontSize: 11, interval: 'auto' } },
+      yAxis: { type: 'value', axisLabel: { formatter: '{value} ' + unit } },
+      legend: { show: series.length >= 1, data: legendData, textStyle: { fontSize: 11 } },
+      tooltip: { trigger: 'axis', formatter: _latTrendTooltip(prefix) },
+      series: series,
+    }, { replaceSeries: true });   // series 数随 chip/P95 收缩 → 整替，防幽灵 series 残留
   }
 
   function renderLatencyCards() {
     ensureCharts();
-    var data = getLatData(_latWin);
-    var built = buildLatAxis(data);
-    _latCtx = { axis: built.axis, models: built.models, window: _latWin };
-    var sub1 = $('monTtftSub'), sub2 = $('monTpotSub');
-    if (sub1) sub1.textContent = 'ms · ' + _latWin + ' 滚动窗口';
-    if (sub2) sub2.textContent = 'ms/token · ' + _latWin + ' 滚动窗口';
+    var data = getLatSeries(_latWin);
+    var seriesObj = (data && data.series) || {};
+    renderLatChips(seriesObj);
+    var bl = _latBucketLabel(_latWin);
+    var sub1 = $('monTtftSub'), sub2 = $('monTpotSub'), sub0 = $('monLatSub');
+    if (sub1) sub1.textContent = 'ms · ' + _latWin + ' · 每 ' + bl;
+    if (sub2) sub2.textContent = 'ms/token · ' + _latWin + ' · 每 ' + bl;
+    if (sub0) sub0.textContent = '时间分桶 · 桶内 ' + (_latQ === 'p50p95' ? 'P50/P95' : 'P50');
     renderLatCard('ttft');
     renderLatCard('tpot');
   }
@@ -825,48 +827,57 @@
   if (tabEl) {
     tabEl.addEventListener('click', function (ev) {
       var btn = ev.target.closest('.mon-seg-btn');
-      if (!btn || !tabEl.contains(btn)) return;
-      var seg = btn.closest('.mon-seg');
-      if (!seg) return;
-      var segType = seg.getAttribute('data-seg');
+      if (btn && tabEl.contains(btn)) {
+        var seg = btn.closest('.mon-seg');
+        if (seg) {
+          var segType = seg.getAttribute('data-seg');
 
-      // 更新 active 态
-      seg.querySelectorAll('.mon-seg-btn').forEach(function (b) {
-        b.classList.remove('active');
-      });
-      btn.classList.add('active');
-
-      if (segType === 'win') {
-        var win = btn.getAttribute('data-win');
-        if (win && win !== _gpuWin) {
-          _gpuWin = win;
-          renderGpuChart();
-        }
-      } else if (segType === 'gran') {
-        var gran = btn.getAttribute('data-gran');
-        if (gran && gran !== _tokenGran) {
-          _tokenGran = gran;
-          renderTokenChart();
-        }
-      } else if (segType === 'latwin') {
-        var latWin = btn.getAttribute('data-win');
-        if (latWin && latWin !== _latWin) {
-          _latWin = latWin;
-          // 两卡 latwin 段镜像同步 active 态
-          tabEl.querySelectorAll('.mon-seg[data-seg="latwin"]').forEach(function (seg) {
-            seg.querySelectorAll('.mon-seg-btn').forEach(function (b) {
-              b.classList.toggle('active', b.getAttribute('data-win') === _latWin);
-            });
+          // 更新 active 态
+          seg.querySelectorAll('.mon-seg-btn').forEach(function (b) {
+            b.classList.remove('active');
           });
-          renderLatencyCards();
+          btn.classList.add('active');
+
+          if (segType === 'win') {
+            var win = btn.getAttribute('data-win');
+            if (win && win !== _gpuWin) {
+              _gpuWin = win;
+              renderGpuChart();
+            }
+          } else if (segType === 'gran') {
+            var gran = btn.getAttribute('data-gran');
+            if (gran && gran !== _tokenGran) {
+              _tokenGran = gran;
+              renderTokenChart();
+            }
+          } else if (segType === 'latwin') {
+            var latWin = btn.getAttribute('data-win');
+            if (latWin && latWin !== _latWin) {
+              _latWin = latWin;
+              _latSel = null;   // 切窗口后重置默认（按新窗口请求数序取前 4）
+              renderLatencyCards();
+            }
+          } else if (segType === 'latq') {
+            var q = btn.getAttribute('data-q');
+            if (q && q !== _latQ) {
+              _latQ = q;
+              renderLatencyCards();
+            }
+          }
         }
-      } else if (segType === 'lattf' || segType === 'latpt') {
-        var which = (segType === 'lattf') ? 'ttft' : 'tpot';
-        var view = btn.getAttribute('data-view') === 'table' ? 'table' : 'chart';
-        if (view !== _latView[which]) {
-          _latView[which] = view;
-          renderLatCard(which);
-        }
+        return;
+      }
+      // chip（不在 .mon-seg 内）
+      var chip = ev.target.closest('.mon-lat-chip');
+      if (chip && tabEl.contains(chip)) {
+        var m = chip.getAttribute('data-model');
+        var latData = getLatSeries(_latWin) || {};
+        if (!_latSel) _latSel = _latSelected((latData.series || {}));
+        var i = _latSel.indexOf(m);
+        if (i >= 0) _latSel.splice(i, 1); else _latSel.push(m);
+        // 无超限分支：chip 已封顶 top 5，选中 ≤ chip 数 = 调色板长度
+        renderLatencyCards();
+        return;
       }
     });
   }

@@ -1,4 +1,4 @@
-"""unit/infra/test_metrics_aggregator.py — MetricsAggregator v5.4
+"""unit/infra/test_metrics_aggregator.py — MetricsAggregator v6.0
 
 覆盖：TPOT 推导（零 schema 变更，从 ttft_ms/duration_ms/tokens_out 计算）、
 配置驱动 x 轴（axis_models 零请求占位 + source 标记 + 稳定排序）。
