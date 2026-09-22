@@ -739,9 +739,12 @@
     var rows = '';
     for (var i = 0; i < hist.length; i++) {
       var h = hist[i] || {};
+      // history.timestamp 来自 SQLite CURRENT_TIMESTAMP 字符串（'YYYY-MM-DD HH:MM:SS'），
+      // 非 epoch 数字 → 不能 *1000（NaN→Invalid Date）。兼容两种格式。
       var ts = h.timestamp
-        ? new Date(h.timestamp * 1000).toLocaleString('zh-CN',
-            { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+        ? new Date(typeof h.timestamp === 'number' ? h.timestamp * 1000 : h.timestamp)
+            .toLocaleString('zh-CN',
+              { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
         : '—';
       var from = shortName(h.from);
       var to = shortName(h.to);
