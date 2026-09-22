@@ -147,6 +147,10 @@ The state machine is computed from actual service processes rather than a persis
 
 添加模型 = 在 `models.d/` 放一个 YAML 文件。零代码。零配置键。
 
+> 📖 **权威模型配置文档 → `[docs 指针] [models.d/README.md](models.d/README.md)`**
+> 这里维护：字段/YAML 模板规范、**端口登记表（唯一权威）**、ninfer/vllm 等各类型字段说明、**「新增/删除/修改 YAML 必须同步更新 README」的强制规则**。配置 `models.d/*.yaml` 前请先查阅。
+> ⚠️ 模型配置或其文档一旦更改，必须同步 `models.d/README.md`，否则视为配置漂移。
+
 ### 通用字段
 
 ```yaml
@@ -506,15 +510,19 @@ python3 -m inferfabric.proxy.handler --async
 
 ## Port Map（当前部署）
 
+> 📖 **端口唯一权威登记 → `[models.d/README.md](models.d/README.md)`（端口登记表）**
+> 下表仅为概览，可能滞后；**端口分配/冲突排查一律以 `models.d/README.md` 端口登记表为准**。新增/删除/改端口时必须同步更新 models.d 文档（强制规则）。
+
 | Port | Service | Engine | GPU Role |
 |------|---------|--------|----------|
-| 8001 | qwen38-27b-vl | vLLM | exclusive |
-| 8002 | qwen3-vl-4b | vLLM | shared |
+| 8002 | Qwen38-27B-VL | vLLM | exclusive |
+| 8003 | qwen3-vl-4b | vLLM | shared |
 | 8004 | ovis-ocr2 | vLLM | shared |
 | 8005 | gemma4-31b-vl | vLLM | exclusive |
 | 8006 | muse-glimmer-vl | SGLang | exclusive |
 | 8007 | Qwen38-27B-TXT | NInfer | exclusive |
 | 8008 | qwen36-35b-vl | vLLM | exclusive |
+| 8009 | NI-Qwen38-27B-VL | NInfer | exclusive |
 | 8188 | comfyui | ComfyUI | shared |
 | 8880 | tts-qwen3 | TTS | shared |
 | 8881 | asr-sensevoice | ASR | shared |

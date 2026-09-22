@@ -87,6 +87,15 @@ class NInferProcessManager(BaseProcessManager):
             cmd.extend(["--spec", "mtp", "--draft-tokens", str(cfg.draft_tokens)])
         if cfg.enable_lm_head_draft:
             cmd.append("--lm-head-draft")
+        if getattr(cfg, "vision", False):
+            cmd.append("--vision")
+        # media 显存是可压缩空间: 压 media-cache/live 可把剩余显存让给 KV auto 编排
+        mem = getattr(cfg, "media_cache_mib", 1024)
+        if mem >= 0:
+            cmd.extend(["--media-cache-mib", str(mem)])
+        mem = getattr(cfg, "media_live_mib", 2048)
+        if mem > 0:
+            cmd.extend(["--media-live-mib", str(mem)])
 
         log.info("Starting NInfer: %s", " ".join(cmd))
         log_file = Path(cfg.log_file or f"/tmp/ninfer-{cfg.port}.log")

@@ -358,6 +358,9 @@ class NInferConfig:
     enable_mtp: bool = True
     draft_tokens: int = 4
     enable_lm_head_draft: bool = False
+    vision: bool = False   # VL/多模态: 为 true 时追加 --vision (启用视觉塔+media)
+    media_cache_mib: int = 1024    # media 预处理复用缓存 (MiB); 0 关闭跨请求复用
+    media_live_mib: int = 2048     # media 在线 BF16 patch 上限 (MiB); 视觉下 minimum ~384MiB, 不可为 0
     extra_flags: str = ""
     log_file: str = ""
 
