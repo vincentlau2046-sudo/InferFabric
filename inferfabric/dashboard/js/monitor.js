@@ -406,7 +406,7 @@
   var _latSel = null;              // 选中模型名数组（null=默认全部在用模型）
   var _latCache = {};              // window -> { data, at }
   var _latFetchInflight = {};
-  var _LAT_TTL = { '1h': 30000, '24h': 60000, '7d': 60000 };   // 与后端 _LAT_CACHE_TTL 逐档对齐
+  var _LAT_TTL = { '1h': 300000, '24h': 300000, '7d': 300000 };   // 5min，与后端 _LAT_CACHE_TTL 逐档对齐
 
   function _modelColors() {
     /* currentTheme 在 IFCharts 命名空间（charts.js 导出）；monitor.js 是 strict IIFE，
@@ -798,7 +798,10 @@
   function renderMonitor() {
     renderGpuChart();
     renderTokenChart();
-    renderLatencyCards();
+    // 延迟趋势卡不随 3s snapshot 重渲染（数据源 /api/latency 有独立 5min TTL 缓存，
+    // 数据不变时重画纯属浪费且让图闪）。延迟卡由 getLatSeries 的 TTL 节流：
+    // TTL 过期才 fetch → 落地 renderLatencyCards()；命中缓存则不 fetch 不重绘。
+    // 交互回调（窗口/chip/分位切换）+ 切回 tab（renderLatencyCards 强制一次）仍即时渲染。
     renderKpis();
     renderLogTable();
     renderHistTable();
@@ -819,6 +822,9 @@
     if (tab === 'tab-monitor') {
       // 切到 monitor tab：立即渲染（charts 可能需要 init）
       renderMonitor();
+      // 延迟卡从 renderMonitor() 的 3s 路径摘出后，切回 tab 时强制渲染一次
+      // （首渲染走 getLatSeries → 缓存命中即时画 / 未命中触发 fetch 落地后画）
+      renderLatencyCards();
     }
   });
 

@@ -134,7 +134,7 @@ def _metrics_axis(pm) -> list[tuple[str, str]]:
 
 
 _LAT_BUCKET_MS = {"1h": 5 * 60 * 1000, "24h": 3600 * 1000, "7d": 6 * 3600 * 1000}
-_LAT_CACHE_TTL = {"1h": 30.0, "24h": 60.0, "7d": 60.0}
+_LAT_CACHE_TTL = {"1h": 300.0, "24h": 300.0, "7d": 300.0}   # 5min——延迟趋势历史值无需秒级刷新
 # 单飞 TTL 缓存：重扫描（deque + 分位）不随 3s 轮询重算；按 window 各一个实例。
 _lat_series_cache = {w: _ExpensiveCache(ttl=_LAT_CACHE_TTL[w]) for w in _LAT_CACHE_TTL}
 
