@@ -80,6 +80,39 @@ def test_series_empty_window():
     assert len(r["buckets"]) >= 1
 
 
+def test_series_excludes_zero_ttft_models():
+    """v6.0: 404/unknown_model 刷量（0 条 ttft）不占位，零数据模型不进 series。"""
+    agg = _mk()
+    t0 = time.time() - 3000
+    for _ in range(50):                                   # 404 刷量：请求多、零 ttft
+        agg._samples.append(_sample("claude-404", t0, None, 2.0, 0, status=404))
+    agg._samples.append(_sample("m1", t0, 100.0, 400.0, 10))
+    agg._samples.append(_sample("m2", t0, 200.0, 500.0, 10))
+    r = agg.get_latency_series("1h", bucket_ms=3600000, top_n=5)
+    assert "claude-404" not in r["series"]
+    assert list(r["series"].keys()) == ["m1", "m2"]   # 平局按名称升序
+    assert r["total_models"] == 2
+
+
+def test_series_all_active_models_under_cap():
+    """v6.0: 在用模型 ≤5 个 → 全量返回（不强行取 4）；>5 个 → 按请求数取前 5。"""
+    agg = _mk()
+    t0 = time.time() - 3000
+    for i, name in enumerate(["a", "b", "c"]):
+        for _ in range(3 - i):
+            agg._samples.append(_sample(name, t0, 100.0, 400.0, 10))
+    r = agg.get_latency_series("1h", bucket_ms=3600000, top_n=5)
+    assert list(r["series"].keys()) == ["a", "b", "c"]   # 3 个在用全返回
+
+    agg2 = _mk()
+    for i, name in enumerate(["h1", "h2", "h3", "h4", "h5", "h6", "h7"]):
+        for _ in range(7 - i):
+            agg2._samples.append(_sample(name, t0, 100.0, 400.0, 10))
+    r2 = agg2.get_latency_series("1h", bucket_ms=3600000, top_n=5)
+    assert list(r2["series"].keys()) == ["h1", "h2", "h3", "h4", "h5"]
+    assert r2["total_models"] == 5
+
+
 def test_series_source_of():
     agg = _mk()
     t0 = time.time() - 3000  # 窗口内（-3600 会恰在边界外被排除）

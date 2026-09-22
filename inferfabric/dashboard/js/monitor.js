@@ -390,7 +390,7 @@
 
   /* ── 3. 模型延迟趋势：时间轴 × 逐模型分色折线（v6.0 取代模型条形双卡）──
    * 共享控制条：窗口 1h/24h/7d（latwin，单条不再镜像）+ 分位 P50/P50+P95（latq）
-   * + 模型 chip 选择器（请求数前 5，默认选中前 4；颜色按 rank 定，chip 与图同色）。
+   * + 模型 chip 选择器（≤5 个在用模型，默认全选中；颜色按 rank 定，chip 与图同色）。
    * 数据源：GET /api/latency?window=（时间分桶 × 逐模型 TTFT/TPOT 分位，只读 display filter）。 */
 
   /* v6.0: 模型折线 5 色分类调色板（CVD 安全，固定顺序、绝不循环；主题各自校验通过）。
@@ -403,7 +403,7 @@
 
   var _latWin = '24h';
   var _latQ = 'p50';               // 'p50' | 'p50p95'
-  var _latSel = null;              // 选中模型名数组（null=默认取前 4）
+  var _latSel = null;              // 选中模型名数组（null=默认全部在用模型）
   var _latCache = {};              // window -> { data, at }
   var _latFetchInflight = {};
   var _LAT_TTL = { '1h': 30000, '24h': 60000, '7d': 60000 };   // 与后端 _LAT_CACHE_TTL 逐档对齐
@@ -439,7 +439,7 @@
 
   function _latAvailable(seriesObj) { return Object.keys(seriesObj || {}); }  // 请求数降序
 
-  // chip 列表 = 请求数前 5（上限 = 调色板长度，CVD 驱动）；默认选中前 4
+  // chip 列表 = 全部在用模型（后端已按请求数截断 ≤5 = 调色板长度，CVD 驱动）；默认全选中
   function _latChipModels(seriesObj) {
     return _latAvailable(seriesObj).slice(0, _modelColors().length);
   }
@@ -447,9 +447,9 @@
   function _latSelected(seriesObj) {
     var chips = _latChipModels(seriesObj);
     // 仅在有模型数据时才固化默认选中：冷启动首渲染（数据未到）不得把 _latSel
-    // 从 null 固化为 []（[] 为 truthy → 数据到达后默认前 4 不再触发）。
+    // 从 null 固化为 []（[] 为 truthy → 数据到达后默认全选中不再触发）。
     // 用户主动全取消（_latSel=[]）不受影响：有 chips 且 _latSel 非 null 时不重设。
-    if (!_latSel && chips.length) _latSel = chips.slice(0, Math.min(4, chips.length));
+    if (!_latSel && chips.length) _latSel = chips.slice();
     var sel = chips.filter(function (n) { return _latSel.indexOf(n) >= 0; });
     return sel.slice(0, _modelColors().length);   // 安全网：不会超调色板长度
   }
@@ -522,7 +522,7 @@
       var n = s[prefix + '_n'] || [];
       var p50 = (s[prefix + '_p50'] || []).map(function (v, bi) { return _lowPt(v, n[bi], color); });
       series.push({
-        name: name, type: 'line', data: p50, connectNulls: false,
+        name: name, type: 'line', data: p50, connectNulls: true,   // 中间空桶桥接（视觉平滑，不造数据点）；首尾空不延伸
         lineStyle: { color: color, width: 2 },
         itemStyle: { color: color },
       });
@@ -530,7 +530,7 @@
       if (_latQ === 'p50p95') {
         var p95 = (s[prefix + '_p95'] || []).map(function (v, bi) { return _lowPt(v, n[bi], color); });
         series.push({
-          name: name + ' P95', type: 'line', data: p95, connectNulls: false,
+          name: name + ' P95', type: 'line', data: p95, connectNulls: true,
           lineStyle: { color: color, width: 1, type: 'dashed' },
           itemStyle: { color: color },
         });
@@ -854,7 +854,7 @@
             var latWin = btn.getAttribute('data-win');
             if (latWin && latWin !== _latWin) {
               _latWin = latWin;
-              _latSel = null;   // 切窗口后重置默认（按新窗口请求数序取前 4）
+              _latSel = null;   // 切窗口后重置默认（新窗口全部在用模型）
               renderLatencyCards();
             }
           } else if (segType === 'latq') {

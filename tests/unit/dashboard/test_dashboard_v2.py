@@ -517,6 +517,10 @@ def test_monitor_latency_trend():
     assert "/api/latency?window=" in js
     assert "monLatChips" in js and "data-model" in js
     assert "'latq'" in js
+    # v6.0：中间空桶桥接（视觉平滑、不造数据点；首尾空不延伸）
+    assert "connectNulls: true" in js
+    # 默认选中全部在用模型（后端已按请求数截断 ≤5），不再固定前 4
+    assert "_latSel = chips.slice()" in js
     # 只读：无 <form
     assert "<form" not in frag
 

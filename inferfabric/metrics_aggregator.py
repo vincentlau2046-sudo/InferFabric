@@ -254,8 +254,9 @@ class MetricsAggregator:
         """时间分桶 × 逐模型 TTFT/TPOT 分位序列（模型延迟趋势图数据源）。
 
         - 桶起点 = 窗口起点向下取整到桶边界（墙钟对齐），保证不同客户端/刷新
-          拿到同一套桶；桶内无样本 → 该位置 None（前端 connectNulls:false 断线）。
-        - 仅保留窗口内请求数前 top_n 个模型（键序 = 请求数降序 → 名称升序）。
+          拿到同一套桶；桶内无样本 → 该位置 None（前端只桥接中间空桶，首尾空不延伸）。
+        - 仅保留窗口内**有 TTFT 样本的模型**中请求数前 top_n 个（404 unknown_model
+          等零数据模型不占位；键序 = 请求数降序 → 名称升序）。
         - 零 schema 变更：TPOT 逐请求推导（同 get_metrics 过滤条件）。
         - source_of: {模型友好名: "local"/"cloud"}，缺省/未命中 → "observed"。
         """
@@ -272,10 +273,16 @@ class MetricsAggregator:
 
         friendly_of = (lambda raw: self._name_map.get(raw, raw))
         req_count: "defaultdict" = defaultdict(int)
+        ttft_count: "defaultdict" = defaultdict(int)
         for s in samples:
-            req_count[friendly_of(s["model"])] += 1
-        top_models = [m for m, _ in sorted(req_count.items(),
-                                           key=lambda kv: (-kv[1], kv[0]))[:top_n]]
+            m = friendly_of(s["model"])
+            req_count[m] += 1
+            if s["status"] < 400 and s.get("ttft_ms") and s["ttft_ms"] > 0:
+                ttft_count[m] += 1
+        # v6.0: 排名只统计有 TTFT 样本的模型（404/unknown_model 的请求量不占位）；
+        # top_n 截断，第 N+1 名起不统计
+        eligible = [m for m in req_count if ttft_count[m] > 0]
+        top_models = sorted(eligible, key=lambda m: (-req_count[m], m))[:top_n]
         top_set = set(top_models)
 
         cells: "defaultdict" = defaultdict(lambda: {"ttft": [], "tpot": []})
