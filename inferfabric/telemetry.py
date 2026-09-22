@@ -118,8 +118,9 @@ class TelemetryHub:
     def record(self, entry: RequestLog) -> None:
         self.logger.log(entry)
 
-    def get_metrics(self, window: str = "24h") -> dict:
-        return self.metrics.get_metrics(window)
+    def get_metrics(self, window: str = "24h",
+                    axis_models: list[tuple[str, str]] | None = None) -> dict:
+        return self.metrics.get_metrics(window, axis_models=axis_models)
 
     def query_request_log(self, since: float, until: float | None = None,
                            model: str | None = None, limit: int = 10000) -> list[dict]:

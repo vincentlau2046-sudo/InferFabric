@@ -1199,3 +1199,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
   .if-grid { grid-template-columns: 1fr; }
   .cp-grid { grid-template-columns: 1fr; }
 }
+
+/* v5.4: 延迟双卡 — 卡头双段控件间距 + 表格视图容器 */
+.if-card-hdr .mon-seg + .mon-seg { margin-left: 8px; }
+.mon-lat-table { margin-top: 8px; }

@@ -143,10 +143,12 @@ class MetricsAggregator:
         with self._lock:
             self._price_config = price_config
 
-    def get_metrics(self, window: str = "24h") -> dict:
+    def get_metrics(self, window: str = "24h",
+                    axis_models: list[tuple[str, str]] | None = None) -> dict:
         """返回聚合指标
 
         window: "1h" | "24h" | "7d" | "all"
+        axis_models: [(model_name, source)] 配置驱动 x 轴 — 无请求模型补零占位
         """
         now = time.time()
         window_s = {"1h": 3600, "24h": 86400, "7d": 604800, "all": float("inf")}
@@ -175,7 +177,19 @@ class MetricsAggregator:
             "cost_yuan": 0.0,
         }
 
-        for model, msamples in by_model.items():
+        # v5.4: 配置驱动 x 轴 — axis_models 补零占位 + source 标记 + 稳定排序
+        friendly_of = (lambda raw: self._name_map.get(raw, raw))
+        by_friendly = defaultdict(list)
+        for raw, ss in by_model.items():
+            by_friendly[friendly_of(raw)].extend(ss)
+        source_of = {name: src for name, src in (axis_models or [])}
+        for name in source_of:
+            by_friendly.setdefault(name, [])
+        all_names = sorted(by_friendly.keys(),
+                           key=lambda n: (-len(by_friendly[n]), n))
+
+        for model in all_names:
+            msamples = by_friendly[model]
             ttfts = [s["ttft_ms"] for s in msamples if s["status"] < 400 and s.get("ttft_ms") and s["ttft_ms"] > 0]
             durations = [s["duration_ms"] for s in msamples if s["status"] < 400 and s.get("duration_ms") and s["duration_ms"] > 0]
             tokens_in = sum(s.get("tokens_in", 0) for s in msamples)
@@ -195,6 +209,8 @@ class MetricsAggregator:
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
                 "cost_yuan": round(cost, 4),
+                "source": source_of.get(model, "observed"),
+                "ttft_samples": len(ttfts),
             }
 
             if ttfts:
@@ -206,8 +222,23 @@ class MetricsAggregator:
                 m["duration_p95"] = round(quantile(durations, 0.95), 1)
                 m["duration_p99"] = round(quantile(durations, 0.99), 1)
 
-            friendly = self._name_map.get(model, model)
-            result["models"][friendly] = m
+            # v5.4: TPOT 逐请求推导 — 仅成功流式样本（tokens_out>=2 且 duration>ttft），
+            # 零 schema 变更；非流式/短响应/失败样本不进分位
+            tpots = [
+                (s["duration_ms"] - s["ttft_ms"]) / ((s.get("tokens_out") or 0) - 1)
+                for s in msamples
+                if s["status"] < 400
+                and s.get("ttft_ms") and s["ttft_ms"] > 0
+                and s.get("duration_ms") and s["duration_ms"] > s["ttft_ms"]
+                and (s.get("tokens_out") or 0) >= 2
+            ]
+            m["tpot_samples"] = len(tpots)
+            if tpots:
+                m["tpot_p50"] = round(median(tpots), 2)
+                m["tpot_p95"] = round(quantile(tpots, 0.95), 2)
+                m["tpot_p99"] = round(quantile(tpots, 0.99), 2)
+
+            result["models"][model] = m
             result["cost_yuan"] += cost
 
         result["cost_yuan"] = round(result["cost_yuan"], 4)

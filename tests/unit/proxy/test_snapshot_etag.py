@@ -66,7 +66,10 @@ def _make_pm(*, request_log=None, status_calls=None, metrics_calls=None,
         status_calls.append(1)
         return {"gpu_mode": "shared", "active_services": ["qwen"]}
 
-    def get_metrics(window):
+    def get_metrics(window, axis_models=None):
+        # v5.4: get_metrics 契约新增 axis_models（配置驱动 x 轴），与
+        # MetricsAggregator.get_metrics(window, axis_models) 一致；_compute_expensive
+        # 传 axis_models= 时不触发 TypeError。
         metrics_calls.append(1)
         return {"total_requests": 10, "window": window}
 

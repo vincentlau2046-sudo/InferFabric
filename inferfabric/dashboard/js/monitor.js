@@ -1,6 +1,7 @@
 /* InferFabric Console — Monitor tab (v2, Task 5)
  * 纯遥测、只读、零操作（spec §4.3）。
- *   - 3 ECharts: GPU vram+util 时间曲线 / Token prompt+completion 堆叠条 / 延迟 P50+P95 双线
+ *   - 4 ECharts: GPU vram+util 时间曲线 / Token prompt+completion 堆叠条 /
+ *     TTFT P50+P95 条 / TPOT P50+P95 条（v5.4 双卡小倍数，共用模型 x 轴）
  *   - 6 KPI（2 行 × 3 列）: KV Cache / Batch Size / Seq Length / TPOT(ms) / TTFT(s) / Throughput
  *     （GET /api/engine_metrics）
  *   - 2 表: 请求日志 + 切换历史（13px 紧凑）
@@ -33,7 +34,7 @@
   /* ── 状态 ── */
   var _gpuWin = '24h';           // GPU 图表窗口 display filter
   var _tokenGran = 'hour';       // Token 图表粒度 display filter
-  var _charts = { gpu: null, tokenLocal: null, tokenCloud: null, latency: null };
+  var _charts = { gpu: null, tokenLocal: null, tokenCloud: null, ttft: null, tpot: null };
   var _chartsInit = false;
 
   // GPU 客户端时间序列 ring buffer（snapshot 轮询时积累）
@@ -94,7 +95,8 @@
       _charts.gpu = IFCharts.create('monGpuChart');
       _charts.tokenLocal = IFCharts.create('monTokenLocalChart');
       _charts.tokenCloud = IFCharts.create('monTokenCloudChart');
-      _charts.latency = IFCharts.create('monLatencyChart');
+      _charts.ttft = IFCharts.create('monTtftChart');
+      _charts.tpot = IFCharts.create('monTpotChart');
     }
     // null → 容器显示 empty state（IFCharts 已 log warning）
     if (!_charts.gpu) {
@@ -109,9 +111,13 @@
       var tc = $('monTokenCloudChart');
       if (tc) tc.innerHTML = '<div class="if-empty">图表库不可用</div>';
     }
-    if (!_charts.latency) {
-      var l = $('monLatencyChart');
-      if (l) l.innerHTML = '<div class="if-empty">图表库不可用</div>';
+    if (!_charts.ttft) {
+      var tt = $('monTtftChart');
+      if (tt) tt.innerHTML = '<div class="if-empty">图表库不可用</div>';
+    }
+    if (!_charts.tpot) {
+      var tp = $('monTpotChart');
+      if (tp) tp.innerHTML = '<div class="if-empty">图表库不可用</div>';
     }
   }
 
@@ -382,50 +388,177 @@
     }
   }
 
-  /* ── 3. 延迟 P50 / P95 双线 ──
-   * 2 系列（TTFT P50 + TTFT P95），单 y 轴（ms）。
-   * 数据源：metrics_24h.models[model].ttft_p50 / ttft_p95（按模型 x 轴）。
-   * 注：后端仅计算 p50/p95/p99，无 p90；用 p95 代替 spec 所述 p90（最近可用分位）。 */
-  function renderLatencyChart() {
-    ensureCharts();
-    if (!_charts.latency) return;
+  /* ── 3. 延迟分布小倍数：TTFT / TPOT 双卡（v5.4 取代原单卡双线）──
+   * 两卡共用同一模型 x 轴（后端键序 = requests 降序 → 名称升序，天然对齐）。
+   * 每卡：P50/P95 成对条形（IFCharts 固定调色板 蓝→琥珀，CVD 已验证），
+   *   x 标签 = 模型名 + 换行 (n=请求数)；ttft/tpot 样本数 <30 → 条形 opacity 0.45（低置信）。
+   * 视图：图表 / 表格（data-view）；窗口 1h/24h/7d（data-seg=latwin，两卡镜像同步；
+   *   24h 取 snapshot metrics_24h，1h/7d 走 GET /api/metrics?window=（只读 display filter））。
+   * 数据源：metrics_24h.models[model] → ttft_p50/p95/p99 + ttft_samples / tpot_* + source。 */
+  var _latWin = '24h';
+  var _latView = { ttft: 'chart', tpot: 'chart' };
+  var _latCache = {};               // window → { data, at }（1h/7d 取数缓存）
+  var _latFetchInflight = {};
+  var _LAT_TTL = 15000;
+  var _latCtx = { axis: [], models: {}, window: '24h' };
 
-    var m = store.get('metrics_24h') || {};
-    var models = m.models || {};
-    var names = Object.keys(models);
-
-    if (!names.length) {
-      showEmpty('monLatencyEmpty', true);
-      IFCharts.update(_charts.latency, {
-        xAxis: { data: [] },
-        yAxis: { axisLabel: { formatter: '{value} ms' } },
-        series: [
-          { type: 'line', name: 'P50', data: [] },
-          { type: 'line', name: 'P95', data: [] },
-        ],
-      });
-      return;
+  function getLatData(win) {
+    if (win === '24h') return store.get('metrics_24h') || {};
+    var c = _latCache[win];
+    var now = Date.now();
+    // 缓存新鲜（< TTL）直接返回；否则（缺失或已过期）触发重取。
+    // 注：fetch 分支不再要求 !c —— 过期缓存也要重取（修复 stale 永不刷新）。
+    // 重取期间最终 `return c ? c.data : {}` 返回旧值（避免空态闪烁）；
+    // 无重复取数由 _latFetchInflight[win] 前置守卫保证（in-flight 中不再发第二次）。
+    if (c && now - c.at < _LAT_TTL) return c.data;
+    if (!_latFetchInflight[win]) {
+      _latFetchInflight[win] = true;
+      fetch('/api/metrics?window=' + win, { cache: 'no-store' })
+        .then(function (res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function (data) {
+          _latCache[win] = { data: data || {}, at: Date.now() };
+        })
+        .catch(function (e) {
+          console.warn('[monitor] /api/metrics?window=' + win + ' fetch failed:', e);
+        })
+        .then(function () {
+          _latFetchInflight[win] = false;
+          if (isMonitorActive()) renderLatencyCards();
+        });
     }
-    showEmpty('monLatencyEmpty', false);
+    return c ? c.data : {};
+  }
 
-    var xs = [];
-    var p50 = [];
-    var p95 = [];
+  function buildLatAxis(data) {
+    var models = (data && data.models) || {};
+    var names = Object.keys(models);
+    var axis = [];
     for (var i = 0; i < names.length; i++) {
       var vm = models[names[i]] || {};
-      xs.push(shortName(names[i]));
-      p50.push(vm.ttft_p50 != null ? vm.ttft_p50 : null);
-      p95.push(vm.ttft_p95 != null ? vm.ttft_p95 : null);
+      axis.push({
+        name: names[i],
+        label: shortName(names[i]) + '\n(n=' + (vm.requests != null ? vm.requests : 0) + ')',
+        source: vm.source || 'observed',
+      });
     }
+    return { axis: axis, models: models };
+  }
 
-    IFCharts.update(_charts.latency, {
-      xAxis: { data: xs, boundaryGap: true },
-      yAxis: { axisLabel: { formatter: '{value} ms' } },
+  function srcBadge(src) {
+    if (src === 'local') return '本地';
+    if (src === 'cloud') return '云端';
+    return '未配置';
+  }
+
+  function _latTooltip(prefix) {
+    return function (params) {
+      if (!params || !params.length) return '';
+      var a = _latCtx.axis[params[0].dataIndex] || {};
+      var vm = (_latCtx.models[a.name]) || {};
+      var n = vm[prefix + '_samples'] || 0;
+      var rows = '';
+      ['p50', 'p95', 'p99'].forEach(function (q) {
+        var v = vm[prefix + '_' + q];
+        rows += '<div>' + q.toUpperCase() + '：' + (v != null ? v : '—') +
+          (prefix === 'ttft' ? ' ms' : ' ms/token') + '</div>';
+      });
+      return '<div><b>' + escHtml(a.name) + '</b> ' +
+        '<span class="badge info">' + srcBadge(a.source) + '</span></div>' +
+        '<div>' + (vm.requests || 0) + ' 请求 · ' + n + ' 样本' +
+        (n > 0 && n < 30 ? '（低置信）' : '') + ' · ' + _latCtx.window + ' 窗口</div>' + rows;
+    };
+  }
+
+  function renderLatTable(isTtft) {
+    var prefix = isTtft ? 'ttft' : 'tpot';
+    var el = $(isTtft ? 'monTtftTable' : 'monTpotTable');
+    if (!el) return;
+    var ctx = _latCtx;
+    var rows = '';
+    for (var i = 0; i < ctx.axis.length; i++) {
+      var a = ctx.axis[i], vm = ctx.models[a.name] || {};
+      var n = vm[prefix + '_samples'] || 0;
+      var v50 = vm[prefix + '_p50'], v95 = vm[prefix + '_p95'], v99 = vm[prefix + '_p99'];
+      var low = n > 0 && n < 30;
+      var cls = (vm.requests || 0) === 0 ? ' class="muted"' : '';
+      rows += '<tr' + cls + '>' +
+        '<td>' + escHtml(a.name) + '</td>' +
+        '<td><span class="badge info">' + srcBadge(a.source) + '</span></td>' +
+        '<td class="mono num">' + (vm.requests || 0) + '</td>' +
+        '<td class="mono num">' + (v50 != null ? v50 + (low ? ' †' : '') : '—') + '</td>' +
+        '<td class="mono num">' + (v95 != null ? v95 : '—') + '</td>' +
+        '<td class="mono num">' + (v99 != null ? v99 : '—') + '</td>' +
+      '</tr>';
+    }
+    el.innerHTML =
+      '<div class="cp-table-wrap">' +
+      '<table class="if-table mon-tbl">' +
+      '<thead><tr><th>模型</th><th>来源</th><th>请求</th>' +
+      '<th>P50</th><th>P95</th><th>P99</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody>' +
+      '</table></div>' +
+      '<div class="muted" style="font-size:11px;margin-top:4px">' +
+      '† 低置信（样本 &lt; 30）；单位 ms' + (isTtft ? '' : '/token') + '；n=0 行无窗口内请求</div>';
+  }
+
+  function renderLatCard(metric) {
+    var isTtft = metric === 'ttft';
+    var prefix = isTtft ? 'ttft' : 'tpot';
+    var unit = isTtft ? 'ms' : 'ms/token';   // y 轴单位随指标（TPOT 是 ms/token）
+    var tableEl = $(isTtft ? 'monTtftTable' : 'monTpotTable');
+    var chartEl = $(isTtft ? 'monTtftChart' : 'monTpotChart');
+    var wrapEl = chartEl ? chartEl.parentNode : null;   // .mon-chart-wrap
+
+    if (_latView[metric] === 'table') {
+      if (wrapEl) wrapEl.style.display = 'none';
+      renderLatTable(isTtft);
+      if (tableEl) tableEl.style.display = '';
+      return;
+    }
+    if (tableEl) tableEl.style.display = 'none';
+    if (wrapEl) wrapEl.style.display = '';
+    if (!_charts[metric]) return;
+
+    var ctx = _latCtx;
+    var p50 = [], p95 = [];
+    for (var i = 0; i < ctx.axis.length; i++) {
+      var vm = ctx.models[ctx.axis[i].name] || {};
+      var n = vm[prefix + '_samples'] || 0;
+      var v50 = vm[prefix + '_p50'], v95 = vm[prefix + '_p95'];
+      // 低置信（0 < n < 30）：半透明条；无样本（n=0）：不画
+      p50.push(v50 != null ? (n < 30 ? { value: v50, itemStyle: { opacity: 0.45 } } : v50) : null);
+      p95.push(v95 != null ? (n < 30 ? { value: v95, itemStyle: { opacity: 0.45 } } : v95) : null);
+    }
+    var hasData = p50.some(function (v) { return v != null; });
+    showEmpty(isTtft ? 'monTtftEmpty' : 'monTpotEmpty', !hasData);
+    IFCharts.update(_charts[metric], {
+      xAxis: {
+        data: ctx.axis.map(function (a) { return a.label; }),
+        boundaryGap: true,
+        axisLabel: { interval: 0, fontSize: 11 },
+      },
+      yAxis: { axisLabel: { formatter: '{value} ' + unit } },
+      tooltip: { trigger: 'axis', formatter: _latTooltip(prefix) },
       series: [
-        { type: 'line', name: 'P50', data: p50 },
-        { type: 'line', name: 'P95', data: p95 },
+        { type: 'bar', name: 'P50', data: p50, barMaxWidth: 24 },
+        { type: 'bar', name: 'P95', data: p95, barMaxWidth: 24 },
       ],
     });
+  }
+
+  function renderLatencyCards() {
+    ensureCharts();
+    var data = getLatData(_latWin);
+    var built = buildLatAxis(data);
+    _latCtx = { axis: built.axis, models: built.models, window: _latWin };
+    var sub1 = $('monTtftSub'), sub2 = $('monTpotSub');
+    if (sub1) sub1.textContent = 'ms · ' + _latWin + ' 滚动窗口';
+    if (sub2) sub2.textContent = 'ms/token · ' + _latWin + ' 滚动窗口';
+    renderLatCard('ttft');
+    renderLatCard('tpot');
   }
 
   /* ── 4. 六联 KPI（2 行 × 3 列）──
@@ -663,7 +796,7 @@
   function renderMonitor() {
     renderGpuChart();
     renderTokenChart();
-    renderLatencyChart();
+    renderLatencyCards();
     renderKpis();
     renderLogTable();
     renderHistTable();
@@ -715,6 +848,25 @@
           _tokenGran = gran;
           renderTokenChart();
         }
+      } else if (segType === 'latwin') {
+        var latWin = btn.getAttribute('data-win');
+        if (latWin && latWin !== _latWin) {
+          _latWin = latWin;
+          // 两卡 latwin 段镜像同步 active 态
+          tabEl.querySelectorAll('.mon-seg[data-seg="latwin"]').forEach(function (seg) {
+            seg.querySelectorAll('.mon-seg-btn').forEach(function (b) {
+              b.classList.toggle('active', b.getAttribute('data-win') === _latWin);
+            });
+          });
+          renderLatencyCards();
+        }
+      } else if (segType === 'lattf' || segType === 'latpt') {
+        var which = (segType === 'lattf') ? 'ttft' : 'tpot';
+        var view = btn.getAttribute('data-view') === 'table' ? 'table' : 'chart';
+        if (view !== _latView[which]) {
+          _latView[which] = view;
+          renderLatCard(which);
+        }
       }
     });
   }
@@ -726,7 +878,7 @@
       if (isMonitorActive()) {
         renderGpuChart();
         renderTokenChart();
-        renderLatencyChart();
+        renderLatencyCards();
       }
     });
   }

@@ -420,7 +420,8 @@ def test_monitor_structure():
         'id="monGpuChart"',     # GPU vram+util 时间曲线
         'id="monTokenLocalChart"',  # Token 用量 · 本地引擎（vllm/sglang/ninfer…）
         'id="monTokenCloudChart"',  # Token 用量 · 云端透传
-        'id="monLatencyChart"', # 延迟 P50/P95 双线
+        'id="monTtftChart"',    # 延迟小倍数 · TTFT P50/P95（v5.4 双卡）
+        'id="monTpotChart"',    # 延迟小倍数 · TPOT P50/P95（v5.4 双卡）
         'id="monKpis"',         # 五联 KPI
         'id="monLogTable"',     # 请求日志表
         'id="monHistTable"',    # 切换历史表
@@ -434,6 +435,12 @@ def test_monitor_structure():
         assert 'data-win="%s"' % win in html, "missing GPU window toggle: %s" % win
     for gran in ('hour', 'day', 'month'):
         assert 'data-gran="%s"' % gran in html, "missing token granularity toggle: %s" % gran
+    # v5.4: 延迟双卡 — 窗口切换（latwin ×2 镜像）+ 图表/表格视图切换
+    assert 'data-seg="latwin"' in html
+    assert 'data-seg="lattf"' in html
+    assert 'data-seg="latpt"' in html
+    assert 'id="monTtftEmpty"' in html and 'id="monTpotEmpty"' in html
+    assert 'id="monTtftTable"' in html and 'id="monTpotTable"' in html
 
 
 def test_monitor_js_present():
@@ -452,11 +459,25 @@ def test_monitor_js_present():
     assert "IFCharts.create('monGpuChart')" in js
     assert "IFCharts.create('monTokenLocalChart')" in js
     assert "IFCharts.create('monTokenCloudChart')" in js
-    assert "IFCharts.create('monLatencyChart')" in js
+    assert "IFCharts.create('monTtftChart')" in js
+    assert "IFCharts.create('monTpotChart')" in js
     # 订阅 store sync_meta（snapshot 到达时刷新）
     assert "store.on('sync_meta'" in js
     # 事件委托：窗口/粒度切换
     assert "data-win" in js and "data-gran" in js
+
+
+def test_monitor_latency_cards():
+    """v5.4 延迟双卡小倍数契约：TTFT/TPOT 共用模型 x 轴；窗口数据走 GET /api/metrics。
+
+    双卡而非双 y 轴：两指标量纲差 ~2 个数量级，单卡双轴比例任意、制造假相关
+    （spec 反模式 #1）；小倍数 = 同 x 轴 + 各自满刻度 y 轴。"""
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "monitor.js").read_text(encoding="utf-8")
+    assert "monTtftChart" in js and "monTpotChart" in js
+    assert "/api/metrics?window=" in js      # 1h/7d 窗口取数（GET-only）
+    assert "data-view" in js                 # 图表/表格视图切换
+    html = _html()
+    assert 'id="monTtftChart"' in html and 'id="monTpotChart"' in html
 
 
 def test_monitor_readonly():

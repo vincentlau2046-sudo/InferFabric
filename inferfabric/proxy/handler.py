@@ -107,6 +107,32 @@ class _ExpensiveCache:
         return compute()
 
 
+def _metrics_axis(pm) -> list[tuple[str, str]]:
+    """v5.4: 指标图 x 轴（配置驱动）— (model_name, source) 列表。
+
+    local = models.d 友好名（ModelConfig.name）；cloud = 启用云预设的模型短名
+    （CloudDiscovery.cloud_models 键）。同名 local 优先、去重保序。
+    构建失败返回 []（降级为数据驱动轴，不拖垮指标采集）。"""
+    axis: list[tuple[str, str]] = []
+    try:
+        for m in pm.mgr._models.values():
+            axis.append((m.name, "local"))
+    except Exception:
+        pass
+    try:
+        for model_id in pm.cloud.cloud_models:
+            axis.append((model_id, "cloud"))
+    except Exception:
+        pass
+    seen = set()
+    out: list[tuple[str, str]] = []
+    for name, src in axis:
+        if name and name not in seen:
+            seen.add(name)
+            out.append((name, src))
+    return out
+
+
 def _compute_expensive(pm) -> dict:
     """C2: 采集昂贵字段组（mgr.status 健康探测 + metrics 24h 扫描）。
     各组独立兜底（单组失败不拖垮另一组）。"""
@@ -116,7 +142,8 @@ def _compute_expensive(pm) -> dict:
     except Exception:
         exp["status"] = {}
     try:
-        exp["metrics_24h"] = pm.metrics.get_metrics("24h")
+        exp["metrics_24h"] = pm.metrics.get_metrics(
+            "24h", axis_models=_metrics_axis(pm))
     except Exception:
         exp["metrics_24h"] = {}
     return exp
@@ -701,7 +728,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             window = qs.get("window", ["24h"])[0]
             if window not in ("1h", "24h", "7d", "all"):
                 window = "24h"
-            data = pm.metrics.get_metrics(window)
+            data = pm.metrics.get_metrics(window, axis_models=_metrics_axis(pm))
             self._send_json(data, 200)
         except Exception as e:
             log.error("/api/metrics failed: %s", e)
