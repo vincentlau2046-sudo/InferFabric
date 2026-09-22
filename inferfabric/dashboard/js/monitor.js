@@ -496,10 +496,12 @@
       params.forEach(function (p) {
         if (p.value == null || (typeof p.value === 'object' && p.value == null)) return;
         var v = (p.value && typeof p.value === 'object') ? p.value.value : p.value;
-        rows += '<div>' + escHtml(p.seriesName) + '：' + v +
-          (prefix === 'ttft' ? ' ms' : ' ms/token') + '</div>';
+        // tooltip 值归一：TTFT 秒（2 位小数）、TPOT ms/token（2 位小数）
+        var txt = prefix === 'ttft'
+          ? (v / 1000).toFixed(2) + ' s'
+          : Number(v).toFixed(2) + ' ms/tok';
+        rows += '<div>' + escHtml(p.seriesName) + '：' + txt + '</div>';
       });
-      var unit = prefix === 'ttft' ? ' ms' : ' ms/token';
       return '<div><b>' + bucket + '</b></div>' + rows;
     };
   }
@@ -507,7 +509,6 @@
   function renderLatCard(metric) {
     var isTtft = metric === 'ttft';
     var prefix = isTtft ? 'ttft' : 'tpot';
-    var unit = isTtft ? 'ms' : 'ms/token';
     if (!_charts[metric]) return;
     var data = getLatSeries(_latWin);
     var seriesObj = (data && data.series) || {};
@@ -539,10 +540,15 @@
 
     var hasData = sel.length > 0 && buckets.length > 0;
     showEmpty(isTtft ? 'monTtftEmpty' : 'monTpotEmpty', !hasData);
+    // y 轴刻度简化：TTFT 量级 ~1k-16k ms → 归一秒（/1000，1 位小数，如 3.0 s）；
+    // TPOT 量级 0-18 ms/token、间隔整数 → 整数刻度（0/3/6/9…，不留小数）。
+    var yFormatter = isTtft
+      ? (function (v) { return (v / 1000).toFixed(1) + ' s'; })
+      : (function (v) { return Math.round(v) + ' ms/tok'; });
     IFCharts.update(_charts[metric], {
       xAxis: { type: 'category', data: buckets, boundaryGap: false,
                axisLabel: { fontSize: 11, interval: 'auto' } },
-      yAxis: { type: 'value', axisLabel: { formatter: '{value} ' + unit } },
+      yAxis: { type: 'value', axisLabel: { formatter: yFormatter, fontSize: 11 } },
       legend: { show: series.length >= 1, data: legendData, textStyle: { fontSize: 11 } },
       tooltip: { trigger: 'axis', formatter: _latTrendTooltip(prefix) },
       series: series,
