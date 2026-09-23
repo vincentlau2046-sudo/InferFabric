@@ -779,13 +779,22 @@ def test_monitor_power_card_contract():
         "snapshot polls don't redraw the power chart"
     )
 
-    # 4. 双轴显式受权：dualAxis:true（charts.js 唯一放行点）+ 右轴累计电量
-    assert 'dualAxis: true' in js, (
-        "power card must opt into dual-axis via {dualAxis:true} — the sole "
-        "sanctioned exception in charts.js _applyRules"
+    # 4. 双轴显式受权：dualAxis:true（charts.js 唯一放行点）+ 右轴累计电量。
+    #    空态分支（!available || !buckets.length）也必须给出双轴骨架 + 授权——
+    #    缺失时首渲染 yAxisIndex:1 引用不存在轴，echarts cartesian2d 抛异常
+    #    （线上首例回归：tab_active 时报 Cannot read properties of undefined 'get'）。
+    #    故断言 power 卡两个 update 分支均出现 'dualAxis: true'。
+    assert js.count("dualAxis: true") >= 2, (
+        "every _charts.power update branch (real + empty-state) must sanction "
+        "dual-axis via {dualAxis:true}; a yAxisIndex:1 series without both axes "
+        "crashes echarts on first render"
     )
     assert "position: 'right'" in js and "'度'" in js, (
         "cumulative kWh must render on the right axis (position:'right')"
+    )
+    assert js.count('{ dualAxis: true }') >= 2, (
+        "both power update calls must pass { dualAxis: true } opts (regression: "
+        "empty-state branch omitted it, crashing on first render)"
     )
 
 

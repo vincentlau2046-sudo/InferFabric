@@ -211,13 +211,24 @@
     if (!_charts.power) return;
     showEmpty('monPowerEmpty', !available || !buckets.length);
     if (!available || !buckets.length) {
+      // 空态也须给出完整双轴骨架（charts.js 双轴为显式受权例外，见 _applyRules
+      // opts.dualAxis；缺 axis 数组 + dualAxis 时 yAxisIndex:1 引用不存在轴，
+      // echarts 首渲染即抛 cartesian2d getInitialData 异常）
       IFCharts.update(_charts.power, {
-        xAxis: { data: [] },
+        xAxis: { data: [], boundaryGap: true },
+        yAxis: [
+          { name: 'W', min: 0, max: 'dataMax', position: 'left',
+            axisLabel: { formatter: function (v) { return v + ' W'; } } },
+          { name: '度', min: 0, max: 1, position: 'right', splitNumber: 1,
+            axisLabel: { formatter: function (v) { return Number(v).toFixed(1) + ' 度'; } } },
+        ],
+        tooltip: { trigger: 'axis', formatter: _pgranTooltip },
+        legend: { data: ['平均功耗', '累计电量'] },
         series: [
           { type: 'bar', name: '平均功耗', yAxisIndex: 0, data: [] },
           { type: 'line', name: '累计电量', yAxisIndex: 1, data: [] },
         ],
-      });
+      }, { dualAxis: true });
       return;
     }
 

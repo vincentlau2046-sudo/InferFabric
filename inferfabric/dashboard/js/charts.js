@@ -287,7 +287,12 @@
       chart._ifcId = id;
       _instances[id] = { id: id, chart: chart, containerId: cid, theme: th, userOption: userOpt };
       var opt = _deepMerge(baseOption(th), userOpt);
-      _applyRules(opt, th);
+      /* 重建沿用原 option 的双轴授权：调用方 update 时已显式 {dualAxis:true}
+       * 声明过，重建时不重传 opts 会把 yAxis 截成单轴而 series 的 yAxisIndex:1
+       * 残存——echarts 首渲染抛 cartesian2d 异常（功耗/电费卡首例）。 */
+      var rebuildOpts = Array.isArray(userOpt.yAxis) && userOpt.yAxis.length > 1
+        ? { dualAxis: true } : {};
+      _applyRules(opt, th, rebuildOpts);
       chart.setOption(opt);
     }
   }
