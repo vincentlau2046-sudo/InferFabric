@@ -773,7 +773,7 @@ class TestCloudDiscoveryWithServer:
     def test_discover_provider(self, tmp_path, mock_server):
         from inferfabric.cloud_discovery import CloudDiscovery
         p = tmp_path / "cloud_provider.yaml"
-        p.write_text(yaml.dump({"providers": {"test": {"api_key": "sk-test", "openai_base": f"http://127.0.0.1:{mock_server}"}}}))
+        p.write_text(yaml.dump({"providers": {"test": {"api_key": "sk-test", "openai_base": f"http://127.0.0.1:{mock_server}", "enabled_models": ["deepseek-v4-flash", "glm-5"]}}}))
         cd = CloudDiscovery(p)
         models = cd.discover_all()
         assert len(models) >= 2
@@ -784,12 +784,15 @@ class TestCloudDiscoveryWithServer:
     def test_discover_with_filter(self, tmp_path, mock_server):
         from inferfabric.cloud_discovery import CloudDiscovery
         p = tmp_path / "cloud_provider.yaml"
-        p.write_text(yaml.dump({"providers": {"test": {"api_key": "sk-test", "openai_base": f"http://127.0.0.1:{mock_server}", "discovery": {"filter": {"include_pattern": "^deepseek-.*"}}}}}))
+        p.write_text(yaml.dump({"providers": {"test": {"api_key": "sk-test", "openai_base": f"http://127.0.0.1:{mock_server}", "enabled_models": ["deepseek-v4-flash"], "discovery": {"filter": {"include_pattern": "^deepseek-.*"}}}}}))
         cd = CloudDiscovery(p)
         models = cd.discover_all()
         model_ids = [m.model_id for m in models.values()]
         assert "deepseek-v4-flash" in model_ids
         assert "glm-5" not in model_ids
+        # 候选同样被 include_pattern 预筛
+        cands = {c.model_id for c in cd.get_candidates("test")}
+        assert cands == {"deepseek-v4-flash"}
 
     def test_discover_http_error(self, tmp_path):
         from inferfabric.cloud_discovery import CloudDiscovery

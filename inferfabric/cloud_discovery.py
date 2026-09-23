@@ -106,6 +106,8 @@ class ProviderConfig:
     include_pattern: str = ""
     # Routing
     routing_default: str = "cloud_only"
+    # v6.1 Phase 1: 发现模型白名单（勾选才可路由；未列出的发现候选仅作候选，不路由）
+    enabled_models: list[str] = field(default_factory=list)
     # v4.7.0: ENV-based key management
     key_env_var: str = ""           # API Key 对应的 ENV 变量名
     preset_id: str = ""            # 来源预设 ID（可选）
@@ -197,6 +199,9 @@ class CloudDiscovery:
     def __init__(self, config_path: Path | None = None):
         self._providers: dict[str, ProviderConfig] = {}
         self._cloud_models: dict[str, CloudModel] = {}
+        # v6.1 Phase 1: 发现候选快照（白名单过滤前的上游 /models 结果，供面板勾选；
+        # 不持久化 —— 重启后「刷新发现」/轮询自动补回）
+        self._candidates: dict[str, list[CloudModel]] = {}
         self._models_lock = threading.RLock()  # protects _cloud_models + _providers reads/writes
         # 锁序约定: _save_lock → _models_lock (reload 嵌套时)。handler add/delete: _models_lock → save_config(_save_lock)，不嵌套。
         # G-2: price config cached for metrics_aggregator
@@ -291,14 +296,27 @@ class CloudDiscovery:
         return self._secrets_mgr
 
     def discover_all(self) -> dict[str, CloudModel]:
-        """对所有 enabled provider 执行模型发现。返回合并后的模型注册表。"""
+        """对所有 enabled provider 执行模型发现。返回合并后的模型注册表（= 可路由集）。
+
+        v6.1 Phase 1 白名单制：上游 /models 结果先进 candidates 快照（面板勾选用），
+        只有 model_id 在 cfg.enabled_models 里的**才进注册表**（可路由）。specs
+        恒进（含手填）。未勾选的发现模型 → None（404），不静默兜底。
+        """
         merged: dict[str, CloudModel] = {}
         for name, cfg in self._providers.items():
             if not cfg.enabled or not cfg.discovery_enabled:
                 continue
             try:
                 models = self._discover_provider(cfg)
+                # 候选快照（网络抖动时保留旧候选，不覆盖为空）
+                if models:
+                    self._candidates[name] = list(models)
+                enabled_set = set(cfg.enabled_models)
+                routed = 0
                 for m in models:
+                    if m.model_id not in enabled_set:
+                        continue  # 非白名单：只作候选，不进可路由注册表
+                    routed += 1
                     # 合并手动 model_specs
                     m = self._merge_model_spec(m, cfg)
                     # 同一 model_id 多 provider 时：短名 key 指向首个，
@@ -306,7 +324,7 @@ class CloudDiscovery:
                     if m.model_id not in merged:
                         merged[m.model_id] = m
                     merged[f"{m.provider}/{m.model_id}"] = m
-                log.info("Provider %s: discovered %d models", name, len(models))
+                log.info("Provider %s: discovered %d models (%d routed)", name, len(models), routed)
             except Exception as e:
                 log.warning("Provider %s discovery failed: %s", name, e)
         # 也注册仅有 model_specs 但未被发现的模型
@@ -342,6 +360,92 @@ class CloudDiscovery:
             self._poll_thread.join(timeout=10)
             self._poll_thread = None
         log.info("Cloud discovery polling stopped")
+
+    # ── v6.1 Phase 1: 模型策展（勾选=可路由，取消=隐藏，手填=新增） ─────
+    # 调用方（handler）负责 save_config() 持久化。
+
+    def get_candidates(self, provider: str) -> list[CloudModel]:
+        """发现候选快照（白名单过滤前的上游 /models 结果）。"""
+        with self._models_lock:
+            return list(self._candidates.get(provider, []))
+
+    def enable_model(self, provider: str, model_id: str) -> int:
+        """勾选发现候选 → 进白名单 + 注册表（可路由）。"""
+        with self._models_lock:
+            cfg = self._providers.get(provider)
+            if cfg is None:
+                raise KeyError(provider)
+            if model_id not in cfg.enabled_models:
+                cfg.enabled_models.append(model_id)
+            self._rebuild_provider_registry(provider, cfg)
+        return self._routable_count(provider)
+
+    def disable_model(self, provider: str, model_id: str) -> int:
+        """取消勾选 → 移出白名单 + 注册表（spec/manual 同名仍在 spec 侧）。"""
+        with self._models_lock:
+            cfg = self._providers.get(provider)
+            if cfg is None:
+                raise KeyError(provider)
+            if model_id in cfg.enabled_models:
+                cfg.enabled_models.remove(model_id)
+            self._rebuild_provider_registry(provider, cfg)
+        return self._routable_count(provider)
+
+    def add_manual_model(self, provider: str, model_id: str) -> int:
+        """手填模型 → 空 spec 进 model_specs（复用现有管道，spec 恒可路由）。"""
+        with self._models_lock:
+            cfg = self._providers.get(provider)
+            if cfg is None:
+                raise KeyError(provider)
+            cfg.model_specs.setdefault(model_id, {})
+            self._rebuild_provider_registry(provider, cfg)
+        return self._routable_count(provider)
+
+    def remove_manual_model(self, provider: str, model_id: str) -> int:
+        """移除手填模型（不存在 → KeyError，handler 映射 404）。"""
+        with self._models_lock:
+            cfg = self._providers.get(provider)
+            if cfg is None:
+                raise KeyError(provider)
+            if cfg.model_specs.pop(model_id, None) is None:
+                raise KeyError(model_id)
+            self._rebuild_provider_registry(provider, cfg)
+        return self._routable_count(provider)
+
+    def drop_provider(self, provider: str):
+        """删除 provider：移除配置 + 注册表模型 + 候选快照。"""
+        with self._models_lock:
+            if provider not in self._providers:
+                raise KeyError(provider)
+            del self._providers[provider]
+            self._cloud_models = {
+                k: v for k, v in self._cloud_models.items()
+                if v.provider != provider
+            }
+            self._candidates.pop(provider, None)
+
+    def _rebuild_provider_registry(self, provider: str, cfg: ProviderConfig):
+        """按 (候选∩白名单) ∪ model_specs 重建单个 provider 的可路由注册表条目。"""
+        # 1. 清掉本 provider 的旧条目（短名 + provider/ 前缀双键）
+        self._cloud_models = {
+            k: v for k, v in self._cloud_models.items()
+            if v.provider != provider
+        }
+        # 2. 勾选的发现候选（合并 spec 属性）
+        enabled_set = set(cfg.enabled_models)
+        for cand in self._candidates.get(provider, []):
+            if cand.model_id in enabled_set:
+                m = self._merge_model_spec(cand, cfg)
+                self._cloud_models.setdefault(m.model_id, m)
+                self._cloud_models[f"{provider}/{m.model_id}"] = m
+        # 3. model_specs（含手填空 spec）恒注册 —— _register_spec_only_models 对
+        #    已注册短名幂等跳过，直接重跑全量即可
+        self._register_spec_only_models(self._cloud_models)
+
+    def _routable_count(self, provider: str) -> int:
+        """该 provider 可路由模型数（短名 key 计数，避免双键重复）。"""
+        return sum(1 for k, v in self._cloud_models.items()
+                   if "/" not in k and v.provider == provider)
 
     def resolve_route(self, model_name: str, local_models: set[str]) -> Optional[str]:
         """路由决策：给定模型名，返回 "local" / "cloud:<provider>" / None。"""
@@ -446,6 +550,9 @@ class CloudDiscovery:
                 pd["discovery_interval"] = p.discovery_interval
             if p.include_pattern:
                 pd["include_pattern"] = p.include_pattern
+            # v6.1 Phase 1: 白名单（勾选的发现候选；非空才写）
+            if p.enabled_models:
+                pd["enabled_models"] = list(p.enabled_models)
             if p.routing_default:
                 pd["routing_default"] = p.routing_default
             # 序列化 models
@@ -599,6 +706,8 @@ class CloudDiscovery:
                 discovery_interval=discovery.get("interval", 3600),
                 include_pattern=discovery.get("filter", {}).get("include_pattern", ""),
                 routing_default=routing.get("default", "cloud_only"),
+                # v6.1 Phase 1: 白名单
+                enabled_models=list(pcfg.get("enabled_models") or []),
                 model_specs=model_specs,
                 key_env_var=key_env_var,
                 preset_id=pcfg.get("preset_id", ""),

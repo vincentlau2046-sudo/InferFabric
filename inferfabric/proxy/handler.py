@@ -224,6 +224,7 @@ _POST_ROUTES = {
     "/admin/cloud/discover":    _admin(lambda h, pm: h._handle_cloud_discover(pm)),
     "/admin/cloud/test":        _admin(lambda h, pm: h._handle_cloud_test(pm)),
     "/admin/cloud/providers":   _admin(lambda h, pm: h._handle_cloud_providers(pm)),
+    "/admin/cloud/provider-models": _admin(lambda h, pm: h._handle_cloud_provider_models(pm)),
     "/v1/embeddings":           lambda h, pm: h._handle_embeddings(pm),
     "/v1/rerank":               lambda h, pm: h._handle_rerank(pm),
 }
@@ -1483,8 +1484,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         """GET/POST/DELETE /admin/cloud/providers — 列出、添加或删除 provider。"""
         if self.command == "GET":
             providers = []
+            all_models = pm.cloud.cloud_models  # 快照一次（含短名 + provider/ 前缀双键）
             for name, cfg in pm.cloud.providers.items():
                 env_set = bool(os.environ.get(cfg.key_env_var, "")) if cfg.key_env_var else False
+                # v6.1 Phase 1: 可路由数 = 短名键计数（避免双键重复统计）
+                routable = sum(1 for k, m in all_models.items()
+                               if "/" not in k and m.provider == name)
                 providers.append({
                     "name": name,
                     "enabled": cfg.enabled,
@@ -1493,10 +1498,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     "discovery_enabled": cfg.discovery_enabled,
                     "discovery_interval": cfg.discovery_interval,
                     "include_pattern": cfg.include_pattern,
-                    "model_count": sum(
-                        1 for m in pm.cloud.cloud_models.values()
-                        if m.provider == name
-                    ),
+                    "enabled_models": list(cfg.enabled_models),
+                    "model_specs": list(cfg.model_specs.keys()),
+                    "candidates": [c.model_id for c in pm.cloud.get_candidates(name)],
+                    "routable_count": routable,
+                    "model_count": routable,  # 兼容旧字段：语义对齐可路由数
                     "key_env_var": cfg.key_env_var,
                     "key_env_set": env_set,
                     "preset_id": cfg.preset_id,
@@ -1527,22 +1533,22 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         elif self.command == "DELETE":
             data = self._read_body()
             name = (data or {}).get("name", "")
-            if name and name in pm.cloud._providers:
-                with pm.cloud._models_lock:
-                    del pm.cloud._providers[name]
-                    pm.cloud._cloud_models = {
-                        k: v for k, v in pm.cloud._cloud_models.items()
-                        if v.provider != name
-                    }
-                try:
-                    pm.cloud.save_config()
-                except Exception as e:
-                    log.error("Failed to persist provider deletion: %s", e)
-                    self._send_json({"error": "Failed to save config", "detail": str(e)}, 500)
-                    return
-                self._send_json({"status": "deleted", "provider": name})
-            else:
+            try:
+                pm.cloud.drop_provider(name)
+            except KeyError:
                 self._send_json({"error": f"Provider '{name}' not found"}, 404)
+                return
+            except Exception as e:
+                log.error("Failed to drop provider '%s': %s", name, e)
+                self._send_json({"error": f"Failed to delete provider: {e}"}, 500)
+                return
+            try:
+                pm.cloud.save_config()
+            except Exception as e:
+                log.error("Failed to persist provider deletion: %s", e)
+                self._send_json({"error": "Failed to save config", "detail": str(e)}, 500)
+                return
+            self._send_json({"status": "deleted", "provider": name})
         elif self.command == "POST":
             data = self._read_body()
             if data is None:
@@ -1639,6 +1645,62 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"error": "Failed to save config", "detail": str(e)}, 500)
                 return
             self._send_json({"status": "added", "provider": name})
+
+    def _handle_cloud_provider_models(self, pm):
+        """POST /admin/cloud/provider-models — 模型策展（v6.1 Phase 1）。
+
+        body: {provider, action: enable|disable|add|remove, model}
+        - enable:  勾选发现候选 → 白名单 + 可路由
+        - disable: 取消勾选 → 隐藏（spec/manual 同名仍在 spec 侧）
+        - add:     手填模型名 → 空 spec 复用 model_specs 管道（恒可路由）
+        - remove:  移除手填模型（不存在 → 404）
+        每次操作后 save_config() 持久化 + 刷新内存注册表。
+        """
+        data = self._read_body()
+        if data is None:
+            return
+        provider = (data.get("provider") or "").strip()
+        action = (data.get("action") or "").strip()
+        model = (data.get("model") or "").strip()
+        valid_actions = {"enable", "disable", "add", "remove"}
+        if not provider or not action or not model:
+            self._send_json({"error": "Missing provider/action/model"}, 400)
+            return
+        if action not in valid_actions:
+            self._send_json({"error": f"Invalid action '{action}' — expected "
+                                      f"{'/'.join(sorted(valid_actions))}"}, 400)
+            return
+        try:
+            if action == "enable":
+                count = pm.cloud.enable_model(provider, model)
+            elif action == "disable":
+                count = pm.cloud.disable_model(provider, model)
+            elif action == "add":
+                count = pm.cloud.add_manual_model(provider, model)
+            else:  # remove
+                count = pm.cloud.remove_manual_model(provider, model)
+        except KeyError as e:
+            # 策展方法抛 KeyError：参数是 provider 名 → 404 provider；否则 → 404 model
+            what = e.args[0] if e.args else provider
+            if what == provider:
+                self._send_json({"error": f"Provider '{provider}' not found"}, 404)
+            else:
+                self._send_json({"error": f"Model '{what}' not found for provider "
+                                          f"'{provider}'"}, 404)
+            return
+        except Exception as e:
+            log.error("provider-models %s %s/%s failed: %s", action, provider, model, e)
+            self._send_json({"error": f"Failed to {action}: {e}"}, 500)
+            return
+        try:
+            pm.cloud.save_config()
+        except Exception as e:
+            log.error("Failed to persist provider-models %s %s/%s: %s",
+                      action, provider, model, e)
+            self._send_json({"error": "Failed to save config", "detail": str(e)}, 500)
+            return
+        self._send_json({"status": "ok", "provider": provider, "model": model,
+                         "action": action, "routable_count": count})
 
     def _handle_cloud_presets(self, pm):
         """GET /admin/cloud/presets — 返回预设厂商列表。"""

@@ -151,6 +151,7 @@ class TestCloudDiscoveryDiscover:
                     "api_key": "sk-test",
                     "openai_base": f"http://127.0.0.1:{mock_server}",
                     "anthropic_base": f"http://127.0.0.1:{mock_server}/anthropic",
+                    "enabled_models": ["deepseek-v4-flash", "glm-5"],
                     "discovery": {
                         "filter": {"include_pattern": "^(deepseek|glm).*"},
                     },
@@ -164,6 +165,9 @@ class TestCloudDiscoveryDiscover:
         assert "glm-5" in models
         assert "qwen3.5-72b" not in models
         assert "internal-test-model" not in models
+        # include_pattern 仍在发现侧预筛候选（白名单正交）
+        cands = {c.model_id for c in cd.get_candidates("test-provider")}
+        assert cands == {"deepseek-v4-flash", "glm-5"}
 
     def test_discover_no_filter(self, tmp_path, mock_server):
         p = tmp_path / "cloud_provider.yaml"
@@ -172,6 +176,7 @@ class TestCloudDiscoveryDiscover:
                 "test-provider": {
                     "api_key": "sk-test",
                     "openai_base": f"http://127.0.0.1:{mock_server}",
+                    "enabled_models": ["deepseek-v4-flash", "glm-5", "qwen3.5-72b", "internal-test-model"],
                 }
             }
         })
@@ -179,6 +184,9 @@ class TestCloudDiscoveryDiscover:
         models = cd.discover_all()
         # 4 short-name keys + 4 provider-prefixed keys = 8
         assert len(models) == 8
+        # 全部模型同时进入候选快照（发现无过滤）
+        cands = {c.model_id for c in cd.get_candidates("test-provider")}
+        assert cands == {"deepseek-v4-flash", "glm-5", "qwen3.5-72b", "internal-test-model"}
         # All 4 unique model IDs exist
         model_ids = {m.model_id for m in models.values()}
         assert model_ids == {"deepseek-v4-flash", "glm-5", "qwen3.5-72b", "internal-test-model"}
@@ -191,6 +199,7 @@ class TestCloudDiscoveryDiscover:
                     "api_key": "sk-test",
                     "openai_base": f"http://127.0.0.1:{mock_server}",
                     "anthropic_base": f"http://127.0.0.1:{mock_server}/anthropic",
+                    "enabled_models": ["deepseek-v4-flash", "glm-5", "qwen3.5-72b", "internal-test-model"],
                 }
             }
         })
@@ -211,9 +220,16 @@ class TestCloudDiscoveryDiscover:
             }
         })
         cd = CloudDiscovery(p)
-        models = cd.discover_all()
-        for m in models.values():
+        cd.discover_all()
+        # v6.1 白名单制：无 enabled_models → 注册表为空；候选快照保留并标记协议
+        assert len(cd.cloud_models) == 0
+        cands = cd.get_candidates("test-provider")
+        assert len(cands) == 4
+        for m in cands:
             assert m.anthropic_available is False
+        # 勾选后注册表出现，且 anthropic_available 仍为 False
+        cd.enable_model("test-provider", "deepseek-v4-flash")
+        assert cd.cloud_models["deepseek-v4-flash"].anthropic_available is False
 
     def test_discover_provider_down(self, tmp_path):
         """Provider 不可达时返回空列表，不抛异常。"""

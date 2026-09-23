@@ -1,0 +1,199 @@
+"""
+unit/proxy/test_provider_models.py — v6.1 Phase 1: POST /admin/cloud/provider-models
+
+模型策展 API：enable/disable/add/remove 四动作 + 错误路径（404/400）+ 持久化。
+参照 test_post_provider_key_expand.py 的 handler 测试范式（__new__ + _send_json stub）。
+"""
+
+import sys
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+import yaml
+
+_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(_ROOT))
+_deps = _ROOT / "_deps"
+if _deps.is_dir():
+    sys.path.insert(0, str(_deps))
+
+from inferfabric.cloud_discovery import CloudDiscovery, CloudModel, SecretsManager
+from inferfabric.proxy.handler import ProxyHandler
+
+
+def _make_handler(command: str, body: dict):
+    h = ProxyHandler.__new__(ProxyHandler)
+    h.command = command
+    h.path = "/admin/cloud/provider-models"
+    h.headers = {}
+    h._read_body = lambda: body
+    h._sent = []
+
+    def _send_json(data, status=200, extra_headers=None):
+        h._sent.append((data, status))
+
+    h._send_json = _send_json
+    return h
+
+
+def _make_pm(tmp_path):
+    """真实 CloudDiscovery（tmp 路径）+ 预置 provider + 候选快照。"""
+    cfg_path = tmp_path / "cloud_provider.yaml"
+    secrets_path = tmp_path / "secrets.env"
+
+    cd = CloudDiscovery(config_path=None)
+    cd._config_path = cfg_path
+    cd._secrets_mgr = SecretsManager(path=secrets_path)
+    cd._inject_secrets_env = lambda: None
+
+    from inferfabric.cloud_discovery import ProviderConfig
+    cd._providers["openai-x"] = ProviderConfig(
+        name="openai-x",
+        api_key="sk-real-123",
+        openai_base="https://api.x.com/v1",
+        enabled=True,
+        discovery_enabled=True,
+        key_env_var="IFF_OPENAI_X_KEY",
+    )
+    # 候选快照（仿一次已发生的发现）
+    cd._candidates["openai-x"] = [
+        CloudModel(model_id="glm-5", provider="openai-x", discovered_at=time.time()),
+        CloudModel(model_id="deepseek-v4-flash", provider="openai-x", discovered_at=time.time()),
+    ]
+
+    pm = SimpleNamespace(cloud=cd)
+    return pm, cd, cfg_path
+
+
+def _last_sent(h):
+    assert h._sent, "handler did not send a response"
+    return h._sent[-1]
+
+
+class TestProviderModels:
+    """四动作核心路径。"""
+
+    def test_enable_routes_candidate(self, tmp_path):
+        pm, cd, cfg = _make_pm(tmp_path)
+        h = _make_handler("POST", {"provider": "openai-x", "action": "enable", "model": "glm-5"})
+        h._handle_cloud_provider_models(pm)
+        data, status = _last_sent(h)
+        assert status == 200, data
+        assert data["status"] == "ok"
+        assert data["routable_count"] == 1
+        # 白名单 + 注册表 + 路由
+        assert cd.providers["openai-x"].enabled_models == ["glm-5"]
+        assert "glm-5" in cd.cloud_models
+        assert cd.resolve_route("glm-5", local_models=set()) == "cloud:openai-x"
+        # 持久化
+        assert cfg.exists()
+        saved = yaml.safe_load(cfg.read_text())
+        assert saved["providers"]["openai-x"]["enabled_models"] == ["glm-5"]
+
+    def test_disable_unroutes(self, tmp_path):
+        pm, cd, cfg = _make_pm(tmp_path)
+        cd.providers["openai-x"].enabled_models.append("glm-5")
+        cd._rebuild_provider_registry("openai-x", cd.providers["openai-x"])
+        h = _make_handler("POST", {"provider": "openai-x", "action": "disable", "model": "glm-5"})
+        h._handle_cloud_provider_models(pm)
+        data, status = _last_sent(h)
+        assert status == 200, data
+        assert data["routable_count"] == 0
+        assert "glm-5" not in cd.cloud_models
+        assert cd.resolve_route("glm-5", local_models=set()) is None  # → 404 unknown_model
+
+    def test_add_manual_model(self, tmp_path):
+        pm, cd, cfg = _make_pm(tmp_path)
+        h = _make_handler("POST", {"provider": "openai-x", "action": "add", "model": "my-custom-glm"})
+        h._handle_cloud_provider_models(pm)
+        data, status = _last_sent(h)
+        assert status == 200, data
+        assert data["routable_count"] == 1
+        assert "my-custom-glm" in cd.providers["openai-x"].model_specs
+        assert cd.resolve_route("my-custom-glm", local_models=set()) == "cloud:openai-x"
+        saved = yaml.safe_load(cfg.read_text())
+        assert "my-custom-glm" in saved["providers"]["openai-x"]["models"]
+
+    def test_remove_manual_model(self, tmp_path):
+        pm, cd, cfg = _make_pm(tmp_path)
+        cd.add_manual_model("openai-x", "my-custom-glm")
+        h = _make_handler("POST", {"provider": "openai-x", "action": "remove", "model": "my-custom-glm"})
+        h._handle_cloud_provider_models(pm)
+        data, status = _last_sent(h)
+        assert status == 200, data
+        assert "my-custom-glm" not in cd.cloud_models
+        assert cd.resolve_route("my-custom-glm", local_models=set()) is None
+
+
+class TestProviderModelsGET:
+    """GET /admin/cloud/providers 契约：策展字段暴露给前端。"""
+
+    def test_get_exposes_curation_fields(self, tmp_path):
+        pm, cd, cfg = _make_pm(tmp_path)
+        cd.enable_model("openai-x", "glm-5")
+        cd.add_manual_model("openai-x", "my-custom-glm")
+        h = _make_handler("GET", {})
+        h.path = "/admin/cloud/providers"
+        h._handle_cloud_providers(pm)
+        data, status = _last_sent(h)
+        assert status == 200
+        p = next(x for x in data["providers"] if x["name"] == "openai-x")
+        assert p["enabled_models"] == ["glm-5"]
+        assert p["model_specs"] == ["my-custom-glm"]
+        assert set(p["candidates"]) == {"glm-5", "deepseek-v4-flash"}
+        assert p["routable_count"] == 2
+        # 顶层 models 列表 = 可路由集（短名去重）
+        ids = {m["id"] for m in data["models"]}
+        assert ids == {"glm-5", "my-custom-glm"}
+
+
+class TestProviderModelsErrors:
+    """错误路径：404 / 400。"""
+
+    def test_unknown_provider_404(self, tmp_path):
+        pm, cd, cfg = _make_pm(tmp_path)
+        h = _make_handler("POST", {"provider": "ghost", "action": "enable", "model": "glm-5"})
+        h._handle_cloud_provider_models(pm)
+        data, status = _last_sent(h)
+        assert status == 404
+        assert "ghost" in data["error"]
+
+    def test_missing_model_400(self, tmp_path):
+        pm, cd, cfg = _make_pm(tmp_path)
+        h = _make_handler("POST", {"provider": "openai-x", "action": "enable"})
+        h._handle_cloud_provider_models(pm)
+        data, status = _last_sent(h)
+        assert status == 400
+
+    def test_invalid_action_400(self, tmp_path):
+        pm, cd, cfg = _make_pm(tmp_path)
+        h = _make_handler("POST", {"provider": "openai-x", "action": "explode", "model": "x"})
+        h._handle_cloud_provider_models(pm)
+        data, status = _last_sent(h)
+        assert status == 400
+
+    def test_remove_unknown_manual_404(self, tmp_path):
+        pm, cd, cfg = _make_pm(tmp_path)
+        h = _make_handler("POST", {"provider": "openai-x", "action": "remove", "model": "never-added"})
+        h._handle_cloud_provider_models(pm)
+        data, status = _last_sent(h)
+        assert status == 404
+        assert "never-added" in data["error"]
+
+
+class TestProviderModelsPersistenceFailure:
+    """save_config 失败 → 500，不静默。"""
+
+    def test_save_failure_500(self, tmp_path, monkeypatch):
+        pm, cd, cfg = _make_pm(tmp_path)
+
+        import inferfabric.cloud_discovery as cdm
+        def _boom(self):
+            raise OSError("disk full")
+        monkeypatch.setattr(cdm.CloudDiscovery, "save_config", _boom)
+
+        h = _make_handler("POST", {"provider": "openai-x", "action": "enable", "model": "glm-5"})
+        h._handle_cloud_provider_models(pm)
+        data, status = _last_sent(h)
+        assert status == 500
