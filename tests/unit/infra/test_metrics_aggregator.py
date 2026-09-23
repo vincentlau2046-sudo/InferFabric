@@ -60,6 +60,31 @@ def test_tpot_excludes_nonstream_short_and_failed():
     assert m["tpot_samples"] == 0
 
 
+def test_tpot_floor_excludes_near_zero():
+    """近零 TPOT（非流式 ttft≈duration → gap 极小）是无意义值：不统计、当空值处理。"""
+    agg = _agg_with([
+        _Entry("m", ttft=5000.0, dur=5000.5, tout=300),   # 0.5/299 ≈ 0.0017 < 0.005 → 排除
+        _Entry("m", ttft=1000.0, dur=1030.0, tout=3),     # 30/2 = 15.0 → 保留
+    ])
+    m = agg.get_metrics("24h")["models"]["m"]
+    assert m["tpot_samples"] == 1
+    assert m["tpot_p50"] == 15.0
+
+
+def test_latency_series_near_zero_tpot_bucket_is_none():
+    """桶内 TPOT 全是近零值 → 该桶 None（前端 connectNulls 亮点直连），不产出 0.0 点。"""
+    now = time.time()
+    agg = _agg_with([
+        _Entry("m", ttft=5000.0, dur=5000.35, tout=300, ts=now - 60),  # ≈0.0012 → 排除
+        _Entry("m", ttft=6000.0, dur=6000.5, tout=400, ts=now - 30),   # ≈0.0013 → 排除
+    ])
+    s = agg.get_latency_series("24h", bucket_ms=3600000)["series"]["m"]
+    assert all(v is None for v in s["tpot_p50"])
+    assert all(v == 0 for v in s["tpot_n"])
+    # TTFT 序列不受影响（样本有 ttft>0）
+    assert any(v is not None for v in s["ttft_p50"])
+
+
 def test_ttft_samples_counted():
     """ttft_samples = 有 ttft 的成功请求数；ttft 为 None/0 的不计。"""
     agg = _agg_with([

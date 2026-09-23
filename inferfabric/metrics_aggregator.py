@@ -38,6 +38,29 @@ def quantile(data: list[float], q: float) -> float:
     return sorted_data[lo] + frac * (sorted_data[hi] - sorted_data[lo])
 
 
+# 低于此值（ms/token）的 TPOT 四舍五入为 0.00，属无意义值：不统计、当空值处理
+# （桶 → None，前端 connectNulls 亮点直连）。典型来源：非流式 ttft≈duration
+# （header 到达 ≈ 总耗时）时 (duration-ttft) 只剩 body 传输开销（亚 ms 级）。
+TPOT_FLOOR_MS = 0.005
+
+
+def _tpot_of(sample: dict) -> float | None:
+    """逐请求派生 TPOT（ms/token）；无意义样本返回 None（零 schema 变更，不落库）。
+
+    合格：status<400、ttft_ms>0、duration_ms>ttft_ms、tokens_out>=2；
+    且派生值 >= TPOT_FLOOR_MS（<0.005 舍入为 0.00，排除）。
+    """
+    if (sample["status"] < 400
+            and sample.get("ttft_ms") and sample["ttft_ms"] > 0
+            and sample.get("duration_ms") and sample["duration_ms"] > sample["ttft_ms"]
+            and (sample.get("tokens_out") or 0) >= 2):
+        tp = ((sample["duration_ms"] - sample["ttft_ms"])
+              / ((sample.get("tokens_out") or 0) - 1))
+        if tp >= TPOT_FLOOR_MS:
+            return tp
+    return None
+
+
 @dataclass
 class CloudModelPrice:
     """云端模型价格配置 — ¥/1M tokens"""
@@ -225,15 +248,9 @@ class MetricsAggregator:
                 m["duration_p99"] = round(quantile(durations, 0.99), 1)
 
             # v6.0: TPOT 逐请求推导 — 仅成功流式样本（tokens_out>=2 且 duration>ttft），
-            # 零 schema 变更；非流式/短响应/失败样本不进分位
-            tpots = [
-                (s["duration_ms"] - s["ttft_ms"]) / ((s.get("tokens_out") or 0) - 1)
-                for s in msamples
-                if s["status"] < 400
-                and s.get("ttft_ms") and s["ttft_ms"] > 0
-                and s.get("duration_ms") and s["duration_ms"] > s["ttft_ms"]
-                and (s.get("tokens_out") or 0) >= 2
-            ]
+            # 零 schema 变更；非流式/短响应/失败样本不进分位；
+            # 近零值（<TPOT_FLOOR_MS，如非流式 ttft≈duration）视为无意义，排除
+            tpots = [tp for s in msamples if (tp := _tpot_of(s)) is not None]
             m["tpot_samples"] = len(tpots)
             if tpots:
                 m["tpot_p50"] = round(median(tpots), 2)
@@ -286,13 +303,6 @@ class MetricsAggregator:
         top_set = set(top_models)
 
         cells: "defaultdict" = defaultdict(lambda: {"ttft": [], "tpot": []})
-
-        def _tpot_of(s):
-            if (s["status"] < 400 and s.get("ttft_ms") and s["ttft_ms"] > 0
-                    and s.get("duration_ms") and s["duration_ms"] > s["ttft_ms"]
-                    and (s.get("tokens_out") or 0) >= 2):
-                return (s["duration_ms"] - s["ttft_ms"]) / ((s.get("tokens_out") or 0) - 1)
-            return None
 
         for s in samples:
             m = friendly_of(s["model"])

@@ -475,9 +475,10 @@ def _forward_request(handler, pm, target_port, body, stream, model_name="", upst
                 handler._usage = dict(sse_buf.usage)
                 resp.close()
         else:
-            # PR-B: TTFT for non-streaming
-            if hasattr(handler, '_req_start'):
-                handler._ttft_ms = (time.monotonic() - handler._req_start) * 1000
+            # 非流式不记 TTFT：引擎算完整响应才回 header，"收到 header"≈总耗时，
+            # 无"首 token"语义。若记为 ttft，聚合器派生 TPOT
+            # (duration-ttft)/(tokens_out-1) ≈ 0.001 → 舍入 0.0 污染延迟趋势。
+            # 保持 _ttft_ms=None（→ 请求日志 ttft_ms NULL，与 Anthropic 非流式路径一致）。
             body_obj = None
             try:
                 resp_body = resp.read()
