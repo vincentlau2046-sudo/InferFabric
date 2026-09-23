@@ -641,6 +641,9 @@ def start_async():
     # DB 驱动、引擎无关（含 ninfer/ollama），按 cloud_provider 拆 local/cloud；
     # 后台线程每周期从 request_log.db 重聚合并写回 token-stats.json。
     mgr.telemetry.start_token_collector(lambda: mgr.mgr)
+    # GPU 板卡功耗采样器（60s，独立于前端轮询——页面关着历史也连续）。
+    # 数据源：监控 TAB「功耗 / 电费」卡（/api/power，5min TTL）。
+    mgr.telemetry.start_power_sampler()
 
     _notify_socket = os.environ.get('NOTIFY_SOCKET')
 
@@ -663,6 +666,7 @@ def start_async():
         shutdown_event.set()
         watchdog.stop()
         mgr.telemetry.token_collector.stop()
+        mgr.telemetry.power_sampler.stop()
         mgr.health_monitor.stop()
         sd_notify("STOPPING=1")
         log.info("InferFabric async server stopped.")

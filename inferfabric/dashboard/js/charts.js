@@ -10,8 +10,10 @@
  *   - onThemeChange(cb)            → 注册主题变更回调；主题切换时 dispose+重建实例（spec §7）
  *
  * 图表规则（spec §7 / dataviz，不可协商）：
- *   单 y 轴（禁 dual-axis）、线宽 2px、网格/坐标轴退隐、crosshair tooltip、
- *   ≥2 系列必有 legend、系列色固定顺序不循环、状态色绝不充当系列色、颜色跟随实体不跟随排序。
+ *   单 y 轴（禁 dual-axis；唯一受权例外 update(..., {dualAxis:true})——
+ *   功耗/电费卡 功耗W↔累计kWh 流速↔存量因果对，见 _applyRules）、线宽 2px、
+ *   网格/坐标轴退隐、crosshair tooltip、≥2 系列必有 legend、系列色固定顺序
+ *   不循环、状态色绝不充当系列色、颜色跟随实体不跟随排序。
  *
  * 依赖：echarts（由 __init__.py 在本模块之前内联为 window.echarts）、window.store（theme 事件）。
  * 两者缺失均 graceful 降级：create 返回 null，调用方显示 empty state。
@@ -166,9 +168,12 @@
   /* 强制 spec §7 规则（opinionated，调用方无法绕过系列色顺序/dual-axis）：
    *   - 系列色固定为调色板顺序，不循环；状态色绝不混入（color 被覆盖为 palette）
    *   - line 系列：线宽 2px、symbol 'none'（选择性直接标注由调用方按需加 label/markPoint，不逐点标）
-   *   - 单 y 轴：yAxis 数组 >1 时截断为首个并告警（禁 dual-axis）
+   *   - 单 y 轴：yAxis 数组 >1 时截断为首个并告警（禁 dual-axis）。
+   *     唯一受权例外：opts.dualAxis === true 时放行双 y 轴——仅限
+   *     「功耗/电费」卡（功耗 W 与累计电量 kWh 是流速↔存量因果对，积分关系，
+   *     双轴同图不误导；monitor.js 封装处注明）。其他图表保持铁律。
    *   - ≥2 系列必有 legend；未显式指定 show 时按系列数自动 */
-  function _applyRules(option, theme) {
+  function _applyRules(option, theme, opts) {
     var th = theme === 'light' ? 'light' : 'dark';
     option.color = paletteFor(th);
     var series = option.series || [];
@@ -184,8 +189,19 @@
       }
     }
     if (Array.isArray(option.yAxis) && option.yAxis.length > 1) {
-      console.warn('[IFCharts] dual y-axis rejected (spec §7); keeping first axis only');
-      option.yAxis = option.yAxis.slice(0, 1);
+      if (opts && opts.dualAxis) {
+        // 显式放行的双轴：以 baseOption 的单轴样式为模板补齐每个轴（主题一致），
+        // 调用方只需给数值/名称/刻度差异。
+        var tmpl = baseOption(th).yAxis;
+        option.yAxis = option.yAxis.map(function (ax) {
+          return (ax && typeof ax === 'object')
+            ? _deepMerge(_clone(tmpl), ax)
+            : _clone(tmpl);
+        });
+      } else {
+        console.warn('[IFCharts] dual y-axis rejected (spec §7); keeping first axis only');
+        option.yAxis = option.yAxis.slice(0, 1);
+      }
     }
     option.legend = option.legend || {};
     if (option.legend.show === 'auto' || option.legend.show == null) {
@@ -235,7 +251,7 @@
       entry.userOption.series = _clone(optionPatch.series);   // 整替但保持 house 克隆惯例
     }
     var opt = _deepMerge(baseOption(entry.theme), entry.userOption);
-    _applyRules(opt, entry.theme);
+    _applyRules(opt, entry.theme, opts || {});
     var sopt = { notMerge: false, lazyUpdate: false };
     if (opts && opts.replaceSeries) sopt.replaceMerge = ['series'];
     entry.chart.setOption(opt, sopt);

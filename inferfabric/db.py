@@ -386,6 +386,43 @@ class IFFDB:
                         log.warning("DB query failed: %s", e)
                 return deleted
 
+    # ── GPU 功耗时间序列（v6.2，监控 TAB 功耗/电费卡）──
+
+    def insert_gpu_power_samples(self, samples: list[dict]):
+        """落盘 60s 功耗采样。ts 主键 → 同一秒 INSERT OR IGNORE 幂等去重。"""
+        if not samples:
+            return
+        with self._write_lock:
+            with self.connect(REQUEST_LOG_DB) as conn:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO gpu_power_samples (ts, watts) "
+                    "VALUES (:ts, :watts)",
+                    [{"ts": int(s["ts"]), "watts": float(s["watts"])} for s in samples],
+                )
+                conn.commit()
+
+    def query_gpu_power_samples(self, since: float, until: float | None = None,
+                                limit: int = 300000) -> list[dict]:
+        """按 ts 升序返回 [{ts, watts}]；分桶聚合（查询侧）依赖升序。"""
+        with self.connect(REQUEST_LOG_DB) as conn:
+            cols = [d[0] for d in conn.execute("SELECT * FROM gpu_power_samples LIMIT 0").description]
+            sql = "SELECT ts, watts FROM gpu_power_samples WHERE ts >= ?"
+            params: list[Any] = [since]
+            if until is not None:
+                sql += " AND ts < ?"
+                params.append(until)
+            sql += " ORDER BY ts ASC LIMIT ?"
+            params.append(limit)
+            rows = conn.execute(sql, params).fetchall()
+            return [dict(zip(cols, r)) for r in rows]
+
+    def prune_gpu_power_samples(self, before: float) -> int:
+        with self._write_lock:
+            with self.connect(REQUEST_LOG_DB) as conn:
+                cur = conn.execute("DELETE FROM gpu_power_samples WHERE ts < ?", (before,))
+                conn.commit()
+                return cur.rowcount
+
     def wal_checkpoint(self):
         with self.connect(REQUEST_LOG_DB) as conn:
             try:

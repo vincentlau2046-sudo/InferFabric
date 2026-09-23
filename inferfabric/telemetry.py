@@ -24,6 +24,7 @@ from inferfabric.db import IFFDB
 from inferfabric.proxy.request_logger import RequestLogger, RequestLog
 from inferfabric.metrics_aggregator import MetricsAggregator, AggregatorThread
 from inferfabric.token_stats import TokenStatsCollector
+from inferfabric.power_stats import PowerSampler, query_power_series
 
 log = logging.getLogger("inferfabric.telemetry")
 
@@ -105,6 +106,9 @@ class TelemetryHub:
         # Token collector (manager_ref injected later)
         self.token_collector = TokenStatsCollector(manager_ref=None, interval=300, db=self._db)
 
+        # GPU 功耗采样器（60s，handler 启动后 start_power_sampler() 开启线程）
+        self.power_sampler = PowerSampler(db=self._db)
+
     def start_token_collector(self, manager_ref: Callable[[], Any]):
         """Inject manager ref and start token collection.
 
@@ -114,6 +118,14 @@ class TelemetryHub:
         """
         self.token_collector.manager_ref = manager_ref
         self.token_collector.start()
+
+    def start_power_sampler(self):
+        """启动 GPU 功耗采样线程（60s）。幂等（start 内已判活）。"""
+        self.power_sampler.start()
+
+    def get_power_series(self, gran: str = "hour") -> dict:
+        """GET /api/power 的分桶序列（v6.2 功耗/电费卡）。"""
+        return query_power_series(self._db, gran)
 
     def record(self, entry: RequestLog) -> None:
         self.logger.log(entry)
@@ -151,6 +163,10 @@ class TelemetryHub:
                 log.debug("Telemetry error: %s", e)
         try:
             self.token_collector.stop()
+        except Exception as e:
+            log.debug("Telemetry error: %s", e)
+        try:
+            self.power_sampler.stop()
         except Exception as e:
             log.debug("Telemetry error: %s", e)
         try:

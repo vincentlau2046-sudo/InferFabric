@@ -417,7 +417,7 @@ def test_monitor_structure():
     """监控页 DOM 契约：7 个面板 id 必须在 get_html() 中出现（spec §4.3）。"""
     html = _html()
     for panel_id in (
-        'id="monGpuChart"',     # GPU vram+util 时间曲线
+        'id="monPowerChart"',   # 功耗 / 电费：单图双轴（柱=平均功耗 W，阶梯线=累计电量/电费 度=元）
         'id="monTokenLocalChart"',  # Token 用量 · 本地引擎（vllm/sglang/ninfer…）
         'id="monTokenCloudChart"',  # Token 用量 · 云端透传
         'id="monTtftChart"',    # 延迟小倍数 · TTFT P50/P95（v6.0 双卡）
@@ -455,8 +455,8 @@ def test_monitor_js_present():
         "monitor.js tab renderer registration not inlined into HTML"
     )
     js = js_path.read_text(encoding="utf-8")
-    # 四图均通过 IFCharts.create 创建（null-check each）；Token 拆本地/云端两张
-    assert "IFCharts.create('monGpuChart')" in js
+    # 五图均通过 IFCharts.create 创建（null-check each）；Token 拆本地/云端两张
+    assert "IFCharts.create('monPowerChart')" in js
     assert "IFCharts.create('monTokenLocalChart')" in js
     assert "IFCharts.create('monTokenCloudChart')" in js
     assert "IFCharts.create('monTtftChart')" in js
@@ -744,69 +744,48 @@ def test_monitor_chart_series_limit():
         )
 
 
-def test_monitor_gpu_ring_buffer_continuous_accumulation():
-    """GPU ring buffer 必须在每次 sync_meta（snapshot 到达）时持续积累样本，
-    而非一次性种子后停止。
+def test_monitor_power_card_contract():
+    """功耗/电费卡契约（客户端 GPU ring buffer 已删除——采样移到服务端
+    PowerSampler，60s 落 v007 表，独立于前端是否打开页面）。
 
-    回归守卫（fix round 1）：原实现用 _gpuBufSeeded one-shot 标志守护
-    sync_meta handler 的 pushGpuSample()，且 renderGpuChart 内另有一次
-    无条件 pushGpuSample()。结果：背景积累只触发一次（种子），之后仅
-    monitor tab 活跃时才采样——切到 24h/7d 窗口只能看到几分钟会话数据。
+    用户约束「不要刷新太快」双层落地：后端 5min TTL 缓存 + 前端 5min TTL
+    + 已渲染档位守卫——3s 轮询的 snapshot 不得触发图表重绘。
 
     断言（源文本级，逻辑为订阅驱动难以隔离单测）：
-    1. 不得存在 _gpuBufSeeded（或任何 *Seeded one-shot 种子标志）。
-    2. renderGpuChart 函数体内不得调用 pushGpuSample（采样统一由
-       sync_meta handler 负责，避免 tab 活跃时双倍写入）。
-    3. sync_meta 订阅 handler 必须（无条件或仅 gpu 存在性检查后）调用
-       pushGpuSample——不得被 one-shot 标志门控。"""
+    1. 客户端采样环彻底移除：无 pushGpuSample / renderGpuChart / _gpuBuf。
+    2. 数据源只读 GET /api/power?gran=（右侧驱动为服务端分桶 display filter）。
+    3. 前端 5min TTL（_POWER_TTL = 300000）与后端 _power_series_cache 对齐。
+    4. 双轴为显式受权例外：{dualAxis:true} + 右轴累计（position:'right'），
+       量纲流速↔存量因果对（功耗 W 与累计电量 度 是积分关系）。"""
     import re
     js = (ROOT / "inferfabric" / "dashboard" / "js" / "monitor.js").read_text(encoding="utf-8")
 
-    # 1. 无 one-shot 种子标志（_gpuBufSeeded 或任何 *Seeded 变量）
-    seeded_refs = re.findall(r'\b\w*Seeded\b', js)
-    assert not seeded_refs, (
-        "monitor.js contains one-shot seed flag(s) %r — background GPU "
-        "accumulation must be continuous, not gated by a seed flag" % seeded_refs
+    # 1. 客户端 ring buffer 采样彻底删除（采样职责移交服务端 PowerSampler）
+    for dead in ('pushGpuSample', 'renderGpuChart', '_gpuBuf', '_gpuWin'):
+        assert dead not in js, "monitor.js still contains removed GPU ring buffer ref: %s" % dead
+
+    # 2. 数据源：GET /api/power（只读 fetch，无 POST）
+    assert "/api/power?gran=" in js, "monitor.js must fetch /api/power?gran= for power series"
+    if 'method:"POST"' in js or 'method: "POST"' in js:
+        raise AssertionError("monitor.js power fetch must be GET-only (read-only monitor tab)")
+
+    # 3. 前端 5min TTL + 已渲染档位守卫（snapshot 3s 轮询不得触发重绘）
+    assert re.search(r'_POWER_TTL\s*=\s*300000', js), (
+        "monitor.js frontend power cache must be 5min TTL (300000ms) to honor "
+        "「不要刷新太快」"
+    )
+    assert re.search(r'_pgranRendered\s*===?\s*_pgran', js), (
+        "monitor.js must guard re-render with a per-gran rendered marker so 3s "
+        "snapshot polls don't redraw the power chart"
     )
 
-    # 2. renderGpuChart 函数体内不得调用 pushGpuSample
-    #    提取 renderGpuChart 函数体（到下一个顶层 function/window. 为止）
-    m = re.search(r'function\s+renderGpuChart\s*\(\)\s*\{', js)
-    assert m, "renderGpuChart function not found in monitor.js"
-    body_start = m.end()
-    # 扫描到匹配的 } （跟踪花括号深度）
-    depth = 1
-    i = body_start
-    while i < len(js) and depth > 0:
-        if js[i] == '{':
-            depth += 1
-        elif js[i] == '}':
-            depth -= 1
-        i += 1
-    render_body = js[body_start:i - 1]
-    assert 'pushGpuSample' not in render_body, (
-        "renderGpuChart calls pushGpuSample — sampling must be solely via "
-        "the sync_meta handler to avoid double-sampling when tab is active"
+    # 4. 双轴显式受权：dualAxis:true（charts.js 唯一放行点）+ 右轴累计电量
+    assert 'dualAxis: true' in js, (
+        "power card must opt into dual-axis via {dualAxis:true} — the sole "
+        "sanctioned exception in charts.js _applyRules"
     )
-
-    # 3. sync_meta 订阅 handler 必须调用 pushGpuSample，且不得被种子标志门控
-    #    （允许 gpu 存在性检查，但不允许 !seeded 之类的 one-shot 守卫）
-    sync_block = re.search(
-        r"store\.on\('sync_meta'[^}]*?pushGpuSample[^}]*?\}", js, re.S
-    )
-    assert sync_block, (
-        "sync_meta handler does not call pushGpuSample — GPU ring buffer "
-        "won't accumulate on snapshot polls"
-    )
-    sync_text = sync_block.group(0)
-    # 不得含 one-shot 守卫（!seeded / && !flag 之类）
-    assert not re.search(r'!\s*\w*Seeded', sync_text), (
-        "sync_meta handler gates pushGpuSample with a one-shot seed guard — "
-        "background accumulation must fire on EVERY snapshot: %s" % sync_text
-    )
-    # 确认 handler 确实调用了 pushGpuSample
-    assert 'pushGpuSample()' in sync_text, (
-        "sync_meta handler does not invoke pushGpuSample(): %s" % sync_text
+    assert "position: 'right'" in js and "'度'" in js, (
+        "cumulative kWh must render on the right axis (position:'right')"
     )
 
 

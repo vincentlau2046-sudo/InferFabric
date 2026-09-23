@@ -3,21 +3,27 @@
   <!-- Row 1: GPU 曲线卡 (col 8) + 五联 KPI (col 4) -->
   <div class="if-grid">
 
-    <!-- GPU 显存/利用率时间曲线（1h/24h/7d 切换 — display filter） -->
+    <!-- 功耗 / 电费：单图双轴（柱=平均功耗 W 左轴，阶梯线=累计电量/电费 度=元 右轴）。
+         小时=近24h每小时桶 / 天=近30天每日桶 / 月=自然月；后端 60s 采样 + 5min TTL。 -->
     <div class="col-8">
       <div class="if-card">
         <div class="if-card-hdr">
-          <span class="if-card-title">GPU 显存 / 利用率</span>
-          <div class="mon-seg" data-seg="win">
-            <button type="button" class="mon-seg-btn" data-win="1h">1h</button>
-            <button type="button" class="mon-seg-btn active" data-win="24h">24h</button>
-            <button type="button" class="mon-seg-btn" data-win="7d">7d</button>
+          <span class="if-card-title">功耗 / 电费</span>
+          <span class="if-card-sub" id="monPowerSub">GPU 板卡功耗 · ¥1.00/度</span>
+          <div class="mon-seg" data-seg="pgran">
+            <button type="button" class="mon-seg-btn active" data-gran="hour">小时</button>
+            <button type="button" class="mon-seg-btn" data-gran="day">天</button>
+            <button type="button" class="mon-seg-btn" data-gran="month">月</button>
           </div>
         </div>
         <div class="if-card-body">
+          <div class="mon-power-hero" id="monPowerHero">
+            <span class="mon-power-hero-val mono" id="monPowerCost">¥0.00</span>
+            <span class="mon-power-hero-sub" id="monPowerMeta">累计 0 度 · 平均 — · 近 24h</span>
+          </div>
           <div class="mon-chart-wrap">
-            <div id="monGpuChart" class="mon-chart"></div>
-            <div id="monGpuEmpty" class="mon-chart-empty" style="display:none">采集积累中（页面打开后开始记录）</div>
+            <div id="monPowerChart" class="mon-chart mon-chart--power"></div>
+            <div id="monPowerEmpty" class="mon-chart-empty" style="display:none">后台每 60s 采集 GPU 板卡功耗——约 1 分钟后出现首个柱状数据</div>
           </div>
         </div>
       </div>

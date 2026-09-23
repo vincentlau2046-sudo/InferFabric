@@ -138,6 +138,10 @@ _LAT_CACHE_TTL = {"1h": 300.0, "24h": 300.0, "7d": 300.0}   # 5min——延迟�
 # 单飞 TTL 缓存：重扫描（deque + 分位）不随 3s 轮询重算；按 window 各一个实例。
 _lat_series_cache = {w: _ExpensiveCache(ttl=_LAT_CACHE_TTL[w]) for w in _LAT_CACHE_TTL}
 
+# v6.2 功耗/电费：档位 小时/天/月 各一实例 TTL 缓存（5min——功耗历史无需秒级刷新）。
+_POWER_CACHE_TTL_GRANS = ("hour", "day", "month")
+_power_series_cache = {g: _ExpensiveCache(ttl=300.0) for g in _POWER_CACHE_TTL_GRANS}
+
 
 def _compute_expensive(pm) -> dict:
     """C2: 采集昂贵字段组（mgr.status 健康探测 + metrics 24h 扫描）。
@@ -182,6 +186,7 @@ _GET_ROUTES = {
     "/system":                  lambda h, pm: h._send_json(h._system_info()),
     "/api/metrics":             lambda h, pm: h._handle_api_metrics(pm),
     "/api/latency":           lambda h, pm: h._handle_api_latency(pm),
+    "/api/power":             lambda h, pm: h._handle_api_power(pm),
     "/api/request_log":         lambda h, pm: h._handle_request_log(pm),
     "/api/token-stats":         lambda h, pm: h._handle_token_stats(pm),
     "/api/token-curve":         lambda h, pm: h._handle_token_curve(pm),
@@ -759,6 +764,25 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             log.error("/api/latency failed: %s", e)
             self._send_json({"error": "latency series unavailable"}, 500)
+
+    def _handle_api_power(self, pm):
+        """GET /api/power?gran=hour|day|month — 功耗/电费分桶序列（v6.2）。
+
+        每桶 {t, avg_w, kwh, cum_kwh, cum_yuan}；口径：GPU 板卡功耗、¥1/度。
+        5min TTL 单飞缓存（采样 60s + 前端 5min 刷新，窗外无需秒级重算）。
+        """
+        from urllib.parse import urlparse, parse_qs
+        try:
+            qs = parse_qs(urlparse(self.path).query)
+            gran = qs.get("gran", ["hour"])[0]
+            if gran not in _POWER_CACHE_TTL_GRANS:
+                gran = "hour"
+            data = _power_series_cache[gran].get_or_refresh(
+                lambda: pm.telemetry.get_power_series(gran))
+            self._send_json(data, 200)
+        except Exception as e:
+            log.error("/api/power failed: %s", e)
+            self._send_json({"error": "power series unavailable"}, 500)
 
     def _handle_vllm_metrics(self, pm):
         from urllib.parse import urlparse, parse_qs

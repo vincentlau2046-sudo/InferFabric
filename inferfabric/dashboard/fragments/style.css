@@ -902,6 +902,31 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
 .mon-cost-row .model { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mon-cost-row .amt { color: var(--ink); }
 
+/* 功耗/电费卡 hero 行：窗口累计电费（大字）+ 累计度数 · 平均功率 · 窗口（小字） */
+.mon-power-hero {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  padding-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+}
+.mon-power-hero-val {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.mon-power-hero-sub {
+  color: var(--ink-3);
+  font-size: var(--fs-table);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 图表空态覆盖（居中提示，不遮挡坐标轴） */
 .mon-chart-empty {
   position: absolute;

@@ -1,7 +1,9 @@
 /* InferFabric Console — Monitor tab (v2, Task 5)
  * 纯遥测、只读、零操作（spec §4.3）。
- *   - 4 ECharts: GPU vram+util 时间曲线 / Token prompt+completion 堆叠条 /
- *     TTFT/TPOT 双卡趋势折线（v6.0 时间轴 × 逐模型分色，取代模型条形小倍数）
+ *   - 5 ECharts: 功耗/电费单图双轴（v6.2 取代 GPU vram+util 时间曲线——实时值已在
+ *     顶部 GPU KPI 卡；柱=平均功耗 W 左轴 + 阶梯线=累计电量/电费 度=元 右轴：
+ *     流速↔存量因果对，charts.js 的 dualAxis 显式放行，见 _applyRules 注释）/
+ *     Token prompt+completion 堆叠条 / TTFT/TPOT 双卡趋势折线
  *   - 6 KPI（2 行 × 3 列）: KV Cache / Batch Size / Seq Length / TPOT(ms) / TTFT(s) / Throughput
  *     （GET /api/engine_metrics）
  *   - 2 表: 请求日志 + 切换历史（13px 紧凑）
@@ -13,6 +15,8 @@
  *   - GET /api/token-curve?granularity=hour → 小时图 60 分钟桶（local/cloud 双 scope）
  *   - window.__TOKEN_STATS__ → 天/月图兜底（代理启动时烘焙的双 scope 快照）
  *   - GET /api/engine_metrics?model=<active> → 6 KPI 原始指标
+ *   - GET /api/power?gran=hour|day|month → 功耗/电费分桶（5min TTL；服务端 60s
+ *     采样落 SQLite，页面关着历史也连续；小时=近24h/天=近30天/月=自然月）
  *
  * 窗口/粒度切换 = 客户端 display filter（不触达服务端状态变更）。
  *
@@ -32,15 +36,17 @@
   var $ = function (id) { return document.getElementById(id); };
 
   /* ── 状态 ── */
-  var _gpuWin = '24h';           // GPU 图表窗口 display filter
+  var _pgran = 'hour';           // 功耗/电费图表粒度 display filter（小时/天/月）
   var _tokenGran = 'hour';       // Token 图表粒度 display filter
-  var _charts = { gpu: null, tokenLocal: null, tokenCloud: null, ttft: null, tpot: null };
+  var _charts = { power: null, tokenLocal: null, tokenCloud: null, ttft: null, tpot: null };
   var _chartsInit = false;
 
-  // GPU 客户端时间序列 ring buffer（snapshot 轮询时积累）
-  // 后端无历史 GPU 时间序列 API；此处客户端采样积累，页面打开后开始记录。
-  var _gpuBuf = [];
-  var _GPU_BUF_CAP = 2880;       // ~2.4h @3s 轮询；超出后移除最旧
+  // 功耗/电费卡独立 TTL 缓存（5min）——历史功耗无需秒级刷新；不随 3s snapshot 重绘。
+  // 数据源 /api/power（服务端 60s 采样 + v007 表 + 5min 后端 TTL），与延迟卡同构。
+  var _pgranCache = {};
+  var _pgranInflight = {};
+  var _POWER_TTL = 300000;       // 5min——与后端 _power_series_cache 对齐
+  var _pgranRendered = null;     // 已完整渲染（热缓存 + 同档 → 3s 轮询下跳过重绘）
 
   // 引擎指标节流（避免每 3s 轮询都打 /api/engine_metrics）
   var _engineCache = null;
@@ -92,16 +98,16 @@
     if (_chartsInit) return;
     _chartsInit = true;
     if (IFCharts && typeof IFCharts.create === 'function') {
-      _charts.gpu = IFCharts.create('monGpuChart');
+      _charts.power = IFCharts.create('monPowerChart');
       _charts.tokenLocal = IFCharts.create('monTokenLocalChart');
       _charts.tokenCloud = IFCharts.create('monTokenCloudChart');
       _charts.ttft = IFCharts.create('monTtftChart');
       _charts.tpot = IFCharts.create('monTpotChart');
     }
     // null → 容器显示 empty state（IFCharts 已 log warning）
-    if (!_charts.gpu) {
-      var g = $('monGpuChart');
-      if (g) g.innerHTML = '<div class="if-empty">图表库不可用</div>';
+    if (!_charts.power) {
+      var p = $('monPowerChart');
+      if (p) p.innerHTML = '<div class="if-empty">图表库不可用</div>';
     }
     if (!_charts.tokenLocal) {
       var tl = $('monTokenLocalChart');
@@ -121,70 +127,131 @@
     }
   }
 
-  /* ── 1. GPU 显存/利用率时间曲线 ──
-   * 2 系列（VRAM% + Util%），单 y 轴 0-100%。客户端 ring buffer 采样积累。
-   * 窗口 1h/24h/7d = display filter（过滤 ring buffer 回看范围）。 */
-  function pushGpuSample() {
-    var gpu = store.get('gpu') || {};
-    var util = store.get('gpu_util') || {};
-    var vramPct = gpu.pct;
-    var utilPct = util.pct;
-    if (vramPct == null && utilPct == null) return;
-    _gpuBuf.push({
-      ts: Date.now(),
-      vram: vramPct != null ? +Number(vramPct).toFixed(1) : 0,
-      util: utilPct != null ? +Number(utilPct).toFixed(1) : 0,
-    });
-    if (_gpuBuf.length > _GPU_BUF_CAP) _gpuBuf.shift();
+  /* ── 1. 功耗 / 电费（单图双轴，v6.2 取代 GPU 显存/利用率曲线）──
+   * 口径：GPU 板卡功耗（nvidia-smi power.draw，含 idle），¥1/度。
+   * 粒度 hour/day/month = display filter（服务端分桶，GET /api/power）。
+   *   - 柱（左轴 W）  = 每桶平均功耗——看"哪个时段烧得凶"
+   *   - 阶梯线（右轴 度=元） = 窗口起点累计电量/电费——看"一共烧了多少、花了多少"
+   * 双轴合法性：功耗↔累计电量是 流速↔存量 因果对（累计=功率对时间积分），
+   * 非 TTFT/TPOT 那种无关量纲对比；故显式 {dualAxis:true} 放行（charts.js 唯一受权例外）。
+   * 刷新：5min TTL 独立拉取 + 完成回调重绘；不随 3s snapshot 重绘（热缓存+同档跳过）。 */
+  function _pgranWinText(gran) {
+    if (gran === 'day') return '近 30 天';
+    if (gran === 'month') return '按自然月';
+    return '近 24h';
   }
 
-  function renderGpuChart() {
-    ensureCharts();
-    if (!_charts.gpu) return;
+  function _pgranLabels(buckets, gran) {
+    return buckets.map(function (b) {
+      var d = new Date(b.t * 1000);   // b.t = 桶起点 epoch 秒（服务端本地时区对齐）
+      if (gran === 'day') return (d.getMonth() + 1) + '-' + d.getDate();
+      if (gran === 'month') return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+      return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    });
+  }
 
-    // 采样由 sync_meta handler 统一负责（每次 snapshot 到达 push 一次），
-    // 此处不重复采样，避免 tab 活跃时双倍写入。
-    var winMs = { '1h': 3600000, '24h': 86400000, '7d': 604800000 }[_gpuWin] || 86400000;
-    var cutoff = Date.now() - winMs;
-    var pts = [];
-    for (var i = 0; i < _gpuBuf.length; i++) {
-      if (_gpuBuf[i].ts >= cutoff) pts.push(_gpuBuf[i]);
+  function getPgranSeries(gran) {
+    var c = _pgranCache[gran];
+    var now = Date.now();
+    if (c && now - c.at < _POWER_TTL) return c.data;
+    if (!_pgranInflight[gran]) {
+      _pgranInflight[gran] = true;
+      fetch('/api/power?gran=' + gran, { cache: 'no-store' })
+        .then(function (res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function (data) {
+          _pgranCache[gran] = { data: data || {}, at: Date.now() };
+          if (isMonitorActive()) drawPower();
+        })
+        .catch(function (e) { console.warn('[monitor] /api/power fetch failed:', e); })
+        .then(function () { _pgranInflight[gran] = false; });
+    }
+    return c ? c.data : {};
+  }
+
+  function _pgranTooltip(params) {
+    if (!params || !params.length) return '';
+    var label = params[0].axisValue;
+    var rows = '';
+    for (var i = 0; i < params.length; i++) {
+      var p = params[i];
+      if (p.seriesName === '平均功耗') {
+        rows += '<div>' + p.seriesName + '：' +
+          (p.value == null ? '—' : Math.round(p.value) + ' W') + '</div>';
+      } else if (p.seriesName === '累计电量') {
+        var v = p.value;
+        rows += '<div>' + p.seriesName + '：' +
+          (v == null ? '—' : Number(v).toFixed(2) + ' 度 · ¥' + Number(v).toFixed(2)) + '</div>';
+      }
+    }
+    return '<div><b>' + label + '</b></div>' + rows;
+  }
+
+  function drawPower() {
+    ensureCharts();
+    var data = getPgranSeries(_pgran);
+    var buckets = (data && data.buckets) || [];
+    var totals = (data && data.totals) || {};
+    var available = !!(data && data.available);
+
+    // hero 行：窗口累计电费（大字）+ 累计度数 · 平均功率 · 窗口
+    var heroCost = $('monPowerCost');
+    var heroMeta = $('monPowerMeta');
+    if (heroCost) {
+      heroCost.textContent = '¥' + (totals.yuan || 0).toFixed(2);
+    }
+    if (heroMeta) {
+      heroMeta.textContent = '累计 ' + (totals.kwh || 0).toFixed(1) + ' 度 · 平均 ' +
+        (totals.avg_w != null ? Math.round(totals.avg_w) + ' W' : '—') +
+        ' · ' + _pgranWinText(_pgran);
     }
 
-    if (pts.length < 2) {
-      showEmpty('monGpuEmpty', true);
-      // 清空图表但保留坐标系
-      IFCharts.update(_charts.gpu, {
+    if (!_charts.power) return;
+    showEmpty('monPowerEmpty', !available || !buckets.length);
+    if (!available || !buckets.length) {
+      IFCharts.update(_charts.power, {
         xAxis: { data: [] },
-        yAxis: { max: 100 },
         series: [
-          { type: 'line', name: 'VRAM %', data: [], areaStyle: { opacity: 0.08 } },
-          { type: 'line', name: '利用率 %', data: [] },
+          { type: 'bar', name: '平均功耗', yAxisIndex: 0, data: [] },
+          { type: 'line', name: '累计电量', yAxisIndex: 1, data: [] },
         ],
       });
       return;
     }
-    showEmpty('monGpuEmpty', false);
 
-    var xs = [];
-    var vram = [];
-    var util = [];
-    for (var j = 0; j < pts.length; j++) {
-      var d = new Date(pts[j].ts);
-      xs.push(d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }));
-      vram.push(pts[j].vram);
-      util.push(pts[j].util);
-    }
+    var xs = _pgranLabels(buckets, _pgran);
+    var avg = buckets.map(function (b) { return b.avg_w == null ? null : b.avg_w; });
+    var cum = buckets.map(function (b) { return b.cum_kwh == null ? null : b.cum_kwh; });
+    var maxKwh = (totals.kwh || 0) || 1;   // 右轴上限=窗口总量 → 阶梯线天然灌满右上角
 
-    IFCharts.update(_charts.gpu, {
-      xAxis: { data: xs },
-      yAxis: { max: 100, axisLabel: { formatter: '{value}%' } },
-      series: [
-        { type: 'line', name: 'VRAM %', data: vram, areaStyle: { opacity: 0.08 } },
-        { type: 'line', name: '利用率 %', data: util },
+    IFCharts.update(_charts.power, {
+      xAxis: { data: xs, boundaryGap: true },
+      yAxis: [
+        { name: 'W', min: 0, max: 'dataMax', position: 'left',
+          axisLabel: { formatter: function (v) { return v + ' W'; } } },
+        { name: '度', min: 0, max: maxKwh, position: 'right', splitNumber: 1,
+          axisLabel: { formatter: function (v) { return Number(v).toFixed(1) + ' 度'; } } },
       ],
-      dataZoom: [{ type: 'inside', start: 0, end: 100 }],
-    });
+      tooltip: { trigger: 'axis', formatter: _pgranTooltip },
+      legend: { data: ['平均功耗', '累计电量'] },
+      series: [
+        { type: 'bar', name: '平均功耗', yAxisIndex: 0, data: avg, barWidth: '55%' },
+        { type: 'line', name: '累计电量', yAxisIndex: 1, step: 'end', data: cum,
+          areaStyle: { opacity: 0.08 } },
+      ],
+    }, { dualAxis: true });
+  }
+
+  function renderPowerCard() {
+    // 热缓存 + 本档已渲染 → 数据没变，跳过重绘（3s 轮询不闪图）；
+    // 只读路径（getPgranSeries 内部 TTL 过期 → fetch → 落地 drawPower()）。
+    ensureCharts();
+    var c = _pgranCache[_pgran];
+    if (c && (Date.now() - c.at) < _POWER_TTL && _pgranRendered === _pgran) return;
+    drawPower();
+    _pgranRendered = _pgran;
   }
 
   /* ── 2. Token 用量：prompt/completion 堆叠条 ──
@@ -805,7 +872,7 @@
 
   /* ── 渲染入口 ── */
   function renderMonitor() {
-    renderGpuChart();
+    renderPowerCard();
     renderTokenChart();
     // 延迟趋势卡不随 3s snapshot 重渲染（数据源 /api/latency 有独立 5min TTL 缓存，
     // 数据不变时重画纯属浪费且让图闪）。延迟卡由 getLatSeries 的 TTL 节流：
@@ -819,11 +886,9 @@
   window.tabRenderers['tab-monitor'] = renderMonitor;
 
   /* ── 订阅：sync_meta → 仅 monitor tab 活跃时刷新 ──
-   * GPU ring buffer 在每次 sync_meta（snapshot 到达）时积累样本。
-   * 无条件 push（不限定 tab 活跃、无 one-shot 种子标志）——保证切回
-   * monitor tab 时 ring buffer 已有跨会话时长的连续数据。 */
+   * 功耗采样在服务端（PowerSampler 60s，页面关着历史也连续），前端零积累——
+   * 不再有 GPU ring buffer 采样 push。 */
   store.on('sync_meta', function () {
-    if (store.get('gpu')) pushGpuSample();
     if (isMonitorActive()) renderMonitor();
   });
 
@@ -831,9 +896,9 @@
     if (tab === 'tab-monitor') {
       // 切到 monitor tab：立即渲染（charts 可能需要 init）
       renderMonitor();
-      // 延迟卡从 renderMonitor() 的 3s 路径摘出后，切回 tab 时强制渲染一次
-      // （首渲染走 getLatSeries → 缓存命中即时画 / 未命中触发 fetch 落地后画）
+      // 延迟卡 + 功耗卡：TTL 缓存命中即时画 / 过期触发 fetch 落地后重绘
       renderLatencyCards();
+      renderPowerCard();
     }
   });
 
@@ -853,11 +918,12 @@
           });
           btn.classList.add('active');
 
-          if (segType === 'win') {
-            var win = btn.getAttribute('data-win');
-            if (win && win !== _gpuWin) {
-              _gpuWin = win;
-              renderGpuChart();
+          if (segType === 'pgran') {
+            var pgran = btn.getAttribute('data-gran');
+            if (pgran && pgran !== _pgran) {
+              _pgran = pgran;
+              _pgranRendered = null;
+              renderPowerCard();
             }
           } else if (segType === 'gran') {
             var gran = btn.getAttribute('data-gran');
@@ -900,9 +966,11 @@
   /* ── 主题变更：IFCharts 自动 dispose+重建，但我们需要重新注入数据 ── */
   if (IFCharts && typeof IFCharts.onThemeChange === 'function') {
     IFCharts.onThemeChange(function () {
-      // 重建后实例已更新，重新渲染所有图表注入数据
+      // 重建后实例已更新，重新渲染所有图表注入数据；功耗卡强制重画
+      // （实例已重建，热缓存 guard 的 _pgranRendered 需复位否则被跳过）
       if (isMonitorActive()) {
-        renderGpuChart();
+        _pgranRendered = null;
+        renderPowerCard();
         renderTokenChart();
         renderLatencyCards();
       }

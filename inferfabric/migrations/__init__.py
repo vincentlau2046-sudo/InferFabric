@@ -24,3 +24,7 @@ IFFDB.register_migration(5, "state", "reconcile_manual_stops")
 # v006: request_log.tokens_in_cached (v6.1 缓存命中率统计)
 from inferfabric.migrations import v006_add_tokens_in_cached
 IFFDB.register_migration(6, "request_log", "add_tokens_in_cached")
+
+# v007: gpu_power_samples (v6.2 功耗/电费时间序列)
+from inferfabric.migrations import v007_gpu_power_series
+IFFDB.register_migration(7, "request_log", "gpu_power_series")
