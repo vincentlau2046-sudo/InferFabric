@@ -1,7 +1,7 @@
 /* InferFabric Console — Monitor tab (v2, Task 5)
  * 纯遥测、只读、零操作（spec §4.3）。
  *   - 5 ECharts: 功耗/电费单图双轴（v6.2 取代 GPU vram+util 时间曲线——实时值已在
- *     顶部 GPU KPI 卡；柱=平均功耗 W 左轴 + 阶梯线=累计电量/电费 度=元 右轴：
+ *     顶部 GPU KPI 卡；柱=平均功耗 W 左轴 + 折线=累计电量/电费 度=元 右轴：
  *     流速↔存量因果对，charts.js 的 dualAxis 显式放行，见 _applyRules 注释）/
  *     Token prompt+completion 堆叠条 / TTFT/TPOT 双卡趋势折线
  *   - 6 KPI（2 行 × 3 列）: KV Cache / Batch Size / Seq Length / TPOT(ms) / TTFT(s) / Throughput
@@ -131,7 +131,7 @@
    * 口径：GPU 板卡功耗（nvidia-smi power.draw，含 idle），¥1/度。
    * 粒度 hour/day/month = display filter（服务端分桶，GET /api/power）。
    *   - 柱（左轴 W）  = 每桶平均功耗——看"哪个时段烧得凶"
-   *   - 阶梯线（右轴 度=元） = 窗口起点累计电量/电费——看"一共烧了多少、花了多少"
+   *   - 折线（右轴 度=元） = 窗口起点累计电量/电费——看"一共烧了多少、花了多少"
    * 双轴合法性：功耗↔累计电量是 流速↔存量 因果对（累计=功率对时间积分），
    * 非 TTFT/TPOT 那种无关量纲对比；故显式 {dualAxis:true} 放行（charts.js 唯一受权例外）。
    * 刷新：5min TTL 独立拉取 + 完成回调重绘；不随 3s snapshot 重绘（热缓存+同档跳过）。 */
@@ -246,7 +246,7 @@
     var cum = buckets.map(function (b) {
       return { value: b.cum_kwh, symbol: 'circle', symbolSize: 5 };
     });
-    var maxKwh = (totals.kwh || 0) || 1;   // 右轴上限=窗口总量 → 阶梯线天然灌满右上角
+    var maxKwh = (totals.kwh || 0) || 1;   // 右轴上限=窗口总量 → 累计折线终点封顶右上角
 
     IFCharts.update(_charts.power, {
       xAxis: { data: xs, boundaryGap: true },
@@ -260,7 +260,7 @@
       legend: { data: ['平均功耗', '累计电量'] },
       series: [
         { type: 'bar', name: '平均功耗', yAxisIndex: 0, data: avg, barWidth: '55%', z: 2 },
-        { type: 'line', name: '累计电量', yAxisIndex: 1, step: 'end', data: cum, z: 3,
+        { type: 'line', name: '累计电量', yAxisIndex: 1, data: cum, z: 3,
           areaStyle: { opacity: 0.08 } },
       ],
     }, { dualAxis: true });

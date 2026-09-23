@@ -820,6 +820,11 @@ def test_monitor_power_card_contract():
         "cumulative line must render ABOVE the bars (line z:3 > bar z:2) so the "
         "step curve is never occluded by bar tops"
     )
+    assert "step: 'end'" not in js, (
+        "cumulative line must connect dots STRAIGHT (点与点直连，用户拍板) — "
+        "step:'end' renders 90° staircase at each bucket boundary, reading like "
+        "a bar chart and violating cumulative-curve intuition"
+    )
 
 
 # ── Task 6: 推理 TAB（模型卡片 + 网关控制卡） ──────────────────────
