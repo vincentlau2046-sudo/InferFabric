@@ -1,30 +1,36 @@
-/* InferFabric Console — Cloud TAB (v2, Task 8)
- * 预设厂商网格（9 项，点击展开内联 API Key 表单）+ Provider 表（行内 测试/发现/删除）
- * + 手动配置表单 + 发现模型紧凑列表。
+/* InferFabric Console — Cloud TAB (v2.1, 模型策展)
+ * 预设厂商网格（9 项，点击展开内联 API Key 表单）+ Provider 表
+ * （行内 测试/发现/模型/删除，模型 = 行下内联策展面板）
+ * + 手动配置表单 + 可路由模型列表。
+ *
+ * 策展语义（v6.1 Phase 1 白名单制）：
+ *   - 发现候选 = 上游 /models 快照，默认不勾、不路由 → 注销不路由
+ *   - 勾选 = 可路由；取消 = 隐藏；手填 = 新增（恒可路由）
+ *   - 操作即生效：勾选/移除/添加即时 POST，无「保存」按钮
  *
  * 数据源（全部 /admin/cloud/*，UI.adminHeaders()）：
- *   - GET    /admin/cloud/presets    — {presets:[{id,display_name,openai_base,anthropic_base,env_var,discovery,model_count}]}
- *   - GET    /admin/cloud/providers  — {providers:[{name,enabled,openai_base,anthropic_base,discovery_enabled,discovery_interval,model_count,key_env_var,key_env_set,preset_id}], models:[…], total_cloud_models, last_discovery}
- *   - POST   /admin/cloud/providers  — 预设路径 {preset, api_key}；手动路径 {name, api_key, openai_base, anthropic_base}
+ *   - GET    /admin/cloud/presets    — {presets:[…]}
+ *   - GET    /admin/cloud/providers  — {providers:[{name,enabled,openai_base,anthropic_base,
+ *            discovery_enabled,discovery_interval,enabled_models,model_specs:[{id,manual}],
+ *            candidates,routable_count,key_env_var,key_env_set,preset_id}], models:[…],
+ *            total_cloud_models, last_discovery}
+ *   - POST   /admin/cloud/providers  — 预设 {preset, api_key}；手动 {name, api_key, openai_base, anthropic_base}
+ *   - POST   /admin/cloud/provider-models — {provider, action: enable|disable|add|remove, model}
  *   - DELETE /admin/cloud/providers  — {name}
- *   - POST   /admin/cloud/test       — {url: openai_base + '/models', api_key}
- *   - POST   /admin/cloud/discover   — 全部 {}；单个 {provider: <name>}
+ *   - POST   /admin/cloud/test       — {url, api_key}
+ *   - POST   /admin/cloud/discover   — 全部 {}；单个 {provider}
  *   - POST   /admin/cloud/reload     — {}
  *
- * 设计纪律（R13 / spec §4.5 §7）：
- *   - 零 emoji：preset `icon` 字段（emoji）一律不渲染，改用文本 monogram 徽章；
- *     状态全部 SVG 图标 + 文本标签双编码（已启用/已禁用、已设置/未设置、OpenAI/Anthropic 可用/不可用），
- *     绝不单独用颜色表达状态。
- *   - 数字（model_count / discovery_interval）等宽 + tabular-nums。
- *   - 删除走 UI.confirm danger（不 use 原生 confirm）。
- *   - 无 inline onclick：#tab-cloud 上事件委托（[data-action] + [data-provider]），
- *     预设卡为 role=button，Enter/Space 可触发。
- *   - 不新增 API（R10）：仅既有 /admin/cloud/* 端点。
+ * 设计纪律（R13 / spec §4.5 §7 / v2 token 延伸）：
+ *   - 零 emoji；状态全部 SVG 图标 + 文本标签双编码，绝不单独用颜色
+ *   - 数字等宽 tabular-nums；无 inline onclick；无自制伪 checkbox（原生控件）
+ *   - 面板为行下内联展开（非模态）：curate 对象是高亮的 provider 行，上下文不丢
+ *   - 空态给动作指路，不空悲叹
  *
  * 暴露：
  *   - window.tabRenderers['tab-cloud'] = renderCloud；window.renderCloud
- *   - window.doCloudAdd() / window.doCloudAddPreset() / window.doCloudTest()
- *   - window.doCloudDiscover(name?) / window.doCloudDelete(name) / window.doCloudReload()
+ *   - window.doCloudAdd() / doCloudAddPreset() / doCloudTest() / doCloudDiscover() / doCloudDelete() / doCloudReload()
+ *   - window.doCpmToggle() / doCpmAdd() / doCpmRemove() / doCpmRefresh()
  */
 (function () {
   'use strict';
@@ -41,6 +47,7 @@
   var _presets = [];          // 预设缓存（GET /admin/cloud/presets）
   var _selectedPreset = null; // 当前选中预设
   var _providers = [];        // provider 缓存（行内 测试 需查 openai_base）
+  var _openProvider = null;   // 当前展开策展面板的 provider 名（一次只开一个）
 
   /* ── XSS-safe 转义（与 inference.js escHtml 一致） ── */
   function esc(s) {
@@ -225,13 +232,13 @@
         '<span class="cp-chip ' + (oi ? 'on' : 'off') + '">' + icon(oi ? 'check' : 'xmark') + 'OpenAI</span>' +
         '<span class="cp-chip ' + (ai ? 'on' : 'off') + '">' + icon(ai ? 'check' : 'xmark') + 'Anthropic</span>' +
       '</span>';
-    // 模型数 + 发现间隔（数字等宽 tabular-nums）
-    var intervalSub = (p.discovery_enabled && p.discovery_interval != null)
-      ? '<span class="cp-sub">' + UI.fmtNum(p.discovery_interval) + 's 间隔</span>'
-      : '';
+    // 可路由数 + 候选/发现状态（数字等宽 tabular-nums）
+    var sub = p.discovery_enabled
+      ? '<span class="cp-sub">候选 ' + UI.fmtNum((p.candidates || []).length) + '</span>'
+      : '<span class="cp-sub">发现关闭</span>';
     var countHtml =
-      '<div class="cp-cell"><span class="cp-num mono">' + UI.fmtNum(p.model_count) + '</span>' +
-      intervalSub + '</div>';
+      '<div class="cp-cell"><span class="cp-num mono">' + UI.fmtNum(p.routable_count || 0) + '</span>' +
+      sub + '</div>';
     // Key 状态：icon + 已设置/未设置 + 变量名
     var keyOn = !!p.key_env_set;
     var keyHtml =
@@ -241,11 +248,16 @@
       '</div>';
     var nameAttr = esc(p.name);
     var canTest = !!p.openai_base;
+    var isOpen = _openProvider === p.name;
+    var modelsBtn =
+      '<button type="button" class="btn btn-sec btn-sm" data-action="provider-models" data-provider="' + nameAttr + '"' +
+        ' aria-expanded="' + (isOpen ? 'true' : 'false') + '">模型</button>';
     var opsHtml =
       '<div class="cp-ops">' +
         '<button type="button" class="btn btn-sec btn-sm" data-action="provider-test" data-provider="' + nameAttr + '"' +
           (canTest ? '' : ' disabled title="该 Provider 无 OpenAI Base URL"') + '>测试</button>' +
         '<button type="button" class="btn btn-sec btn-sm" data-action="provider-discover" data-provider="' + nameAttr + '">发现</button>' +
+        modelsBtn +
         '<button type="button" class="btn btn-danger btn-sm" data-action="provider-delete" data-provider="' + nameAttr + '">删除</button>' +
       '</div>';
     return '<tr>' +
@@ -279,12 +291,18 @@
         return;
       }
       _providers = d.providers || [];
+      ensureOpenProviderAlive();
       if (!_providers.length) {
         tbody.innerHTML = '<tr class="cp-row-loading"><td colspan="6">' +
           '<div class="if-empty">暂无 Provider — 使用预设或手动配置添加</div></td></tr>';
+        _openProvider = null;
       } else {
+        // 行序重排后一次渲染：provider 行 + （若打开）紧邻其后的策展面板行
         var rows = '';
-        _providers.forEach(function (p) { rows += providerRow(p); });
+        _providers.forEach(function (p) {
+          rows += providerRow(p);
+          if (_openProvider === p.name) rows += renderModelPanelRow(p.name);
+        });
         tbody.innerHTML = rows;
       }
       cloudRenderModels(d);
@@ -293,27 +311,223 @@
     }
   }
 
-  /* ── 发现模型紧凑列表：providers.models → #cloudModels ── */
+  /* [data-provider] 命中的 provider 不存在（已删除）时复位打开态 */
+  function ensureOpenProviderAlive() {
+    if (_openProvider &&
+        !_providers.some(function (p) { return p.name === _openProvider; })) {
+      _openProvider = null;
+    }
+  }
+
+  function renderModelPanelRow(providerName) {
+    var p = null;
+    for (var i = 0; i < _providers.length; i++) {
+      if (_providers[i].name === providerName) { p = _providers[i]; break; }
+    }
+    if (!p) return '';
+    var panel = renderModelPanel(p);
+    return '<tr class="cpm-tr"><td colspan="6">' + panel + '</td></tr>';
+  }
+
+  /* ══ 模型策展面板（行下内联展开，一次一个） ══
+   * 三段：发现候选（checkbox 勾选=可路由）/ 已声明（spec 可移除）/ 添加模型。
+   * footer 诚实注脚：未勾选的候选 → 显式 404 不兜底。 */
+  function renderModelPanel(p) {
+    var nameAttr = esc(p.name);
+    var cands = p.candidates || [];
+    var enabled = (p.enabled_models || []).slice();
+    var enableSet = {};
+    enabled.forEach(function (m) { enableSet[m] = true; });
+    var specs = p.model_specs || [];
+
+    // ── 发现候选段 ──
+    var candHtml = '';
+    if (!p.discovery_enabled) {
+      candHtml = '<div class="if-empty">该 Provider 发现已关闭 — 在上方「发现」手动拉取候选，或直接用右栏手填模型名</div>';
+    } else if (!cands.length) {
+      candHtml = '<div class="if-empty">暂无候选 — 点上方「发现」从上游 /models 拉取候选</div>';
+    } else {
+      candHtml = cands.map(function (mid) {
+        var checked = !!enableSet[mid];
+        var chips = availabilityChips(p);
+        return '<label class="cpm-item" data-action="cpm-toggle" data-provider="' + nameAttr + '" data-model="' + esc(mid) + '">' +
+          '<input type="checkbox" class="cpm-check" ' + (checked ? 'checked' : '') + ' aria-label="' + esc(mid) + '">' +
+          '<span class="cpm-id mono">' + esc(mid) + '</span>' +
+          '<span class="cpm-src">发现</span>' +
+          chips +
+        '</label>';
+      }).join('');
+    }
+
+    // ── 已声明段（spec：配置声明 / 手填） ──
+    var specHtml = '';
+    if (!specs.length) {
+      specHtml = '<div class="if-empty">没有已声明模型 — 手动添加的模型名在这里列出，恒可路由</div>';
+    } else {
+      specHtml = specs.map(function (s) {
+        var label = s.manual ? '手填' : '配置声明';
+        return '<div class="cpm-item">' +
+          '<span class="cpm-check-ph" aria-hidden="true"></span>' +
+          '<span class="cpm-id mono">' + esc(s.id) + '</span>' +
+          '<span class="cpm-src">' + label + '</span>' +
+          '<span class="cpm-ops">' +
+            '<button type="button" class="btn btn-danger btn-xs" data-action="cpm-remove" data-provider="' + nameAttr + '" data-model="' + esc(s.id) + '">移除</button>' +
+          '</span>' +
+        '</div>';
+      }).join('');
+    }
+
+    var refreshBtn = p.discovery_enabled
+      ? '<button type="button" class="btn btn-sec btn-sm" data-action="cpm-refresh" data-provider="' + nameAttr + '">刷新发现</button>'
+      : '';
+
+    return '' +
+      '<div class="cpm" data-provider="' + nameAttr + '">' +
+        '<div class="cpm-hdr">' +
+          '<span class="cpm-title">模型管理</span>' +
+          '<span class="cpm-status">可路由 <b class="num">' + UI.fmtNum(p.routable_count || 0) + '</b>' +
+            ' · 候选 <b class="num">' + UI.fmtNum(cands.length) + '</b></span>' +
+          refreshBtn +
+        '</div>' +
+        '<div class="cpm-cols">' +
+          '<section class="cpm-sec">' +
+            '<div class="cpm-sec-hdr">发现候选 <span class="cpm-hint">勾选 = 可路由</span></div>' +
+            '<div class="cpm-list">' + candHtml + '</div>' +
+          '</section>' +
+          '<section class="cpm-sec">' +
+            '<div class="cpm-sec-hdr">已声明 <span class="cpm-hint">手动添加 / 预设模型，恒可路由</span></div>' +
+            '<div class="cpm-list">' + specHtml + '</div>' +
+            '<div class="cpm-add">' +
+              '<input type="text" class="if-field-input mono cpm-add-input" placeholder="模型名，如 my-glm" ' +
+                'autocomplete="off" spellcheck="false" data-action="cpm-add" data-provider="' + nameAttr + '" aria-label="添加模型名">' +
+              '<button type="button" class="btn btn-pri btn-sm" data-action="cpm-add" data-provider="' + nameAttr + '">添加</button>' +
+            '</div>' +
+          '</section>' +
+        '</div>' +
+        '<div class="cpm-foot">路由只认「已启用」 — 未勾选的候选按未知模型返回 404，不静默兜底</div>' +
+      '</div>';
+  }
+
+  // 协议可用徽标（面板行内用，OpenAI/Anthropic 双编码）
+  function availabilityChips(p) {
+    var oi = !!p.openai_base;
+    var ai = !!p.anthropic_base;
+    var chips = '';
+    if (oi) chips += '<span class="cp-chip on">' + icon('check') + 'OpenAI</span>';
+    if (ai) chips += '<span class="cp-chip on">' + icon('check') + 'Anthropic</span>';
+    return chips ? '<span class="cp-chips cpm-chips">' + chips + '</span>' : '';
+  }
+
+  /* ══ 面板开关：provider-models 按钮 ══ */
+  function cloudToggleModels(provider) {
+    if (!provider) return;
+    _openProvider = (_openProvider === provider) ? null : provider;
+    cloudLoadProviders();
+  }
+
+  /* ══ 策展动作：POST /admin/cloud/provider-models ══ */
+  async function callProviderModels(provider, action, model) {
+    var res = await fetch('/admin/cloud/provider-models', {
+      method: 'POST',
+      headers: UI.adminHeaders(),
+      body: JSON.stringify({ provider: provider, action: action, model: model }),
+    });
+    var d = null;
+    try { d = await res.json(); } catch (_) {}
+    return { ok: res.ok, data: d, status: res.status };
+  }
+
+  window.doCpmToggle = async function (provider, model, checked) {
+    var action = checked ? 'enable' : 'disable';
+    try {
+      var r = await callProviderModels(provider, action, model);
+      if (!r.ok || !r.data || r.data.error) {
+        UI.toast((r.data && r.data.error) || ('操作失败 · HTTP ' + r.status), 'error');
+        return;
+      }
+      UI.toast(checked ? model + ' 已加入可路由' : model + ' 已隐藏', 'success');
+      await cloudLoadProviders();
+    } catch (e) {
+      UI.toast('操作失败: ' + (e.message || e), 'error');
+    }
+  };
+
+  window.doCpmAdd = async function (provider, inputEl) {
+    var model = (inputEl ? inputEl.value : '').trim();
+    if (!model) { UI.toast('请填写模型名', 'error'); return; }
+    try {
+      var r = await callProviderModels(provider, 'add', model);
+      if (!r.ok || !r.data || r.data.error) {
+        UI.toast((r.data && r.data.error) || ('添加失败 · HTTP ' + r.status), 'error');
+        return;
+      }
+      UI.toast(model + ' 已添加（恒可路由）', 'success');
+      if (inputEl) inputEl.value = '';
+      await cloudLoadProviders();
+    } catch (e) {
+      UI.toast('添加失败: ' + (e.message || e), 'error');
+    }
+  };
+
+  window.doCpmRemove = function (provider, model) {
+    if (!provider || !model) { UI.toast('缺少模型名称', 'error'); return; }
+    UI.confirm({
+      title: '移除模型',
+      body: '从 "已声明" 移除 "' + model + '"？它将不再可路由。',
+      danger: true,
+      onOk: async function () {
+        try {
+          var r = await callProviderModels(provider, 'remove', model);
+          if (!r.ok || !r.data || r.data.error) {
+            UI.toast((r.data && r.data.error) || ('移除失败 · HTTP ' + r.status), 'error');
+            return;
+          }
+          UI.toast(model + ' 已移除', 'success');
+          await cloudLoadProviders();
+        } catch (e) {
+          UI.toast('移除失败: ' + (e.message || e), 'error');
+        }
+      },
+    });
+  };
+
+  window.doCpmRefresh = function (provider) {
+    if (!provider) return;
+    window.doCloudDiscover(provider);
+  };
+
+  /* ── 可路由模型列表（策展后 = 注册表；行内来源徽标） ── */
   function cloudRenderModels(data) {
     var models = (data && data.models) || [];
     var count = $('cloudModelCount');
-    if (count) count.textContent = UI.fmtNum(models.length) + ' 个模型';
+    if (count) count.textContent = UI.fmtNum(models.length) + ' 个可路由';
     var list = $('cloudModelsList');
     if (!list) return;
     if (!models.length) {
-      list.innerHTML = '<div class="if-empty">暂无模型 — 在 Provider 行点击「发现」或「发现全部」</div>';
+      list.innerHTML = '<div class="if-empty">暂无可路由模型 — 某 Provider 行点「模型」勾选候选或手填模型名</div>';
       return;
     }
+    // 来源索引：{provider: {mid: '发现'|'手填'|'配置声明'}}
+    var srcIndex = {};
+    _providers.forEach(function (p) {
+      var map = (srcIndex[p.name] = {});
+      (p.enabled_models || []).forEach(function (m) { map[m] = '发现'; });
+      (p.model_specs || []).forEach(function (s) { map[s.id] = s.manual ? '手填' : '配置声明'; });
+    });
     var sorted = models.slice().sort(function (a, b) {
-      return (b.discovered_at || 0) - (a.discovered_at || 0);
+      var pa = (a.provider || '') < (b.provider || '') ? -1 : (a.provider === b.provider ? 0 : 1);
+      if (pa !== 0) return pa;
+      return ((b.discovered_at || 0) - (a.discovered_at || 0));
     });
     var html = '';
     sorted.forEach(function (m) {
+      var src = ((srcIndex[m.provider] || {})[m.model_id || m.id]) || '发现';
       var chips = '';
       if (m.openai_available) chips += '<span class="cp-chip on">' + icon('check') + 'OpenAI</span>';
       if (m.anthropic_available) chips += '<span class="cp-chip on">' + icon('check') + 'Anthropic</span>';
       html +=
         '<div class="cp-model-row">' +
+          '<span class="cpm-src">' + esc(src) + '</span>' +
           '<span class="cp-model-id">' + esc(m.model_id || m.id) + '</span>' +
           chips +
           '<span class="cp-model-prov">' + esc(m.provider) + '</span>' +
@@ -386,7 +600,7 @@
         UI.toast('连接失败: ' + ((d && d.error) || ('HTTP ' + res.status)), 'error');
         return;
       }
-      UI.toast('连接成功 · 发现 ' + (d.model_count || 0) + ' 个模型', 'success');
+      UI.toast('连接成功 · 上游 ' + (d.model_count || 0) + ' 个模型', 'success');
     } catch (e) {
       UI.toast('测试失败: ' + (e.message || e), 'error');
     }
@@ -406,8 +620,8 @@
         UI.toast((d && d.error) || ('发现失败 · HTTP ' + res.status), 'error');
         return;
       }
-      if (provider) UI.toast('Provider ' + provider + ': 发现 ' + (d.cloud_models || 0) + ' 个模型', 'success');
-      else UI.toast('发现 ' + (d.cloud_models || 0) + ' 个云端模型', 'success');
+      if (provider) UI.toast('Provider ' + provider + ': 发现 ' + (d.cloud_models || 0) + ' 个可路由候选', 'success');
+      else UI.toast('发现 ' + (d.cloud_models || 0) + ' 个可路由候选', 'success');
     } catch (e) {
       UI.toast('发现失败: ' + (e.message || e), 'error');
     } finally {
@@ -438,6 +652,7 @@
             return;
           }
           UI.toast('Provider ' + name + ' 已删除', 'success');
+          if (_openProvider === name) _openProvider = null;
           await cloudLoadProviders();
         } catch (e) {
           UI.toast('删除失败: ' + (e.message || e), 'error');
@@ -462,7 +677,7 @@
         UI.toast((d && d.error) || ('重载失败 · HTTP ' + res.status), 'error');
         return;
       }
-      UI.toast('已重新加载: ' + (d.providers || 0) + ' 个 provider, ' + (d.cloud_models || 0) + ' 个模型', 'success');
+      UI.toast('已重新加载: ' + (d.providers || 0) + ' 个 provider, ' + (d.cloud_models || 0) + ' 个可路由模型', 'success');
       await cloudLoadProviders();
     } catch (e) {
       UI.toast('重载失败: ' + (e.message || e), 'error');
@@ -485,7 +700,9 @@
 
   /* ── 事件委托（无 inline onclick） ──
    * #tab-cloud 点击：[data-action] + [data-provider]。
-   * 预设卡为 div[role=button] → 另挂 keydown，Enter/Space 触发（BUTTON 原生处理）。 */
+   * checkbox 的动作挂 label：点击文本/控件都能命中（closest 上溯到 label），
+   * label 原生切换 checkbox → 读 checked 得新状态。
+   * 预设卡 / 添加输入为 div/input → keydown Enter/Space 亦触发。 */
   function handleAction(el) {
     var act = el.getAttribute('data-action');
     if (!act || el.disabled) return;
@@ -517,6 +734,30 @@
       case 'provider-discover':
         window.doCloudDiscover(provider || '');
         break;
+      case 'provider-models':
+        cloudToggleModels(provider);
+        break;
+      case 'cpm-refresh':
+        window.doCpmRefresh(provider);
+        break;
+      case 'cpm-toggle': {
+        if (!provider) return;
+        var ck = el.querySelector ? el.querySelector('input') : null;
+        if (!ck) return;
+        window.doCpmToggle(provider, el.getAttribute('data-model'), !!ck.checked);
+        break;
+      }
+      case 'cpm-add': {
+        if (!provider) return;
+        var wrap = el.closest ? el.closest('.cpm-add') : null;
+        var input = wrap ? wrap.querySelector('.cpm-add-input') : null;
+        if (!input) { UI.toast('找不到输入框', 'error'); return; }
+        window.doCpmAdd(provider, input);
+        break;
+      }
+      case 'cpm-remove':
+        if (provider) window.doCpmRemove(provider, el.getAttribute('data-model'));
+        break;
       case 'provider-test': {
         if (!provider) return;
         var p = null;
@@ -544,8 +785,12 @@
       handleAction(el);
     });
     root.addEventListener('keydown', function (ev) {
+      var t = ev.target;
+      var typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA');
+      // 输入框内：空格正常输入；仅 Enter 提交
+      if (typing && ev.key !== 'Enter') return;
       if (ev.key !== 'Enter' && ev.key !== ' ') return;
-      var el = ev.target.closest ? ev.target.closest('[data-action]') : null;
+      var el = t.closest ? t.closest('[data-action]') : null;
       if (!el || !root.contains(el) || el.tagName === 'BUTTON') return;
       ev.preventDefault();
       handleAction(el);

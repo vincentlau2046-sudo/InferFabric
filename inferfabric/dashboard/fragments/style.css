@@ -1150,6 +1150,121 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
 }
 .cp-model-prov { color: var(--ink-3); font-size: 11px; margin-left: auto; }
 
+/* ── v6.1 模型策展面板（行下内联展开） ───────────────────────────
+ * 主题：勾选 = 所有权（铜色），未启用 = 静音 ink-3。
+ * 面板挂在 <tr class=cpm-tr><td colspan=6>，内部 .cpm 视为浮动卡片。 */
+.cpm-tr > td {
+  padding: 0 !important;
+  border-top: none;
+  background: var(--bg);
+}
+.cpm {
+  margin: 0 var(--sp-2) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.cpm-hdr {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+.cpm-title { font-size: var(--fs-title); font-weight: 600; }
+.cpm-status {
+  margin-left: auto;
+  font-size: var(--fs-table);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.cpm-status b { color: var(--ink); }
+.cpm-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+}
+@media (max-width: 900px) {
+  .cpm-cols { grid-template-columns: 1fr; }
+}
+.cpm-sec {
+  padding: var(--sp-2);
+  min-width: 0;
+}
+.cpm-sec + .cpm-sec { border-left: 1px solid var(--border); }
+@media (max-width: 900px) {
+  .cpm-sec + .cpm-sec { border-left: none; border-top: 1px solid var(--border); }
+}
+.cpm-sec-hdr {
+  font-size: var(--fs-table);
+  font-weight: 600;
+  color: var(--ink-2);
+  margin-bottom: var(--sp-1);
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+}
+.cpm-hint { color: var(--ink-3); font-weight: 400; font-size: 11px; }
+.cpm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.cpm-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 5px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-table);
+  cursor: pointer;
+}
+.cpm-item:hover { background: var(--surface-2); }
+.cpm-item:has(input:checked) { background: color-mix(in srgb, var(--accent) 9%, var(--surface)); }
+.cpm-check {
+  /* 原生 checkbox：无障碍零债务；铜色仅勾选态（勾选 = 所有权） */
+  accent-color: var(--accent);
+  width: 15px; height: 15px;
+  margin: 0; flex-shrink: 0;
+  cursor: pointer;
+}
+.cpm-check-ph { width: 15px; height: 15px; flex-shrink: 0; }
+.cpm-id {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cpm-src {
+  font-size: 10px;
+  color: var(--ink-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0 6px;
+  line-height: 16px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.cpm-chips { margin-left: auto; }
+.cpm-ops { margin-left: auto; flex-shrink: 0; }
+.btn-xs { padding: 1px 8px; font-size: 11px; }
+.cpm-add {
+  display: flex;
+  gap: var(--sp-1);
+  margin-top: var(--sp-2);
+}
+.cpm-add-input { flex: 1 1 160px; min-width: 120px; }
+.cpm-foot {
+  padding: var(--sp-1) var(--sp-2);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
 /* ── 异常 TAB (Task 9)：过滤栏 / 严重度双编码 / critical 行高亮 ───── */
 .anom-filterbar {
   display: flex;

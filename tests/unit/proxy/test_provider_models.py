@@ -140,7 +140,8 @@ class TestProviderModelsGET:
         assert status == 200
         p = next(x for x in data["providers"] if x["name"] == "openai-x")
         assert p["enabled_models"] == ["glm-5"]
-        assert p["model_specs"] == ["my-custom-glm"]
+        # 手填空 spec → manual=True；带元数据 spec → manual=False
+        assert p["model_specs"] == [{"id": "my-custom-glm", "manual": True}]
         assert set(p["candidates"]) == {"glm-5", "deepseek-v4-flash"}
         assert p["routable_count"] == 2
         # 顶层 models 列表 = 可路由集（短名去重）

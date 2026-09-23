@@ -1499,7 +1499,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     "discovery_interval": cfg.discovery_interval,
                     "include_pattern": cfg.include_pattern,
                     "enabled_models": list(cfg.enabled_models),
-                    "model_specs": list(cfg.model_specs.keys()),
+                    # model_specs: [{id, manual}] — manual=true 表示空 spec 手填模型
+                    "model_specs": [
+                        {"id": mid, "manual": not bool(spec)}
+                        for mid, spec in cfg.model_specs.items()
+                    ],
                     "candidates": [c.model_id for c in pm.cloud.get_candidates(name)],
                     "routable_count": routable,
                     "model_count": routable,  # 兼容旧字段：语义对齐可路由数
