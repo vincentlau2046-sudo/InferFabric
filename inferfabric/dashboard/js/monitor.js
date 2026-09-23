@@ -141,6 +141,11 @@
     return '近 24h';
   }
 
+  /* 右轴（度）刻度标签：总量小（<1 度）时 2 位小树不被 toFixed(1) 压成 0.0。 */
+  function _pgranKwhFmt(v) {
+    return (Math.abs(v) >= 1 ? Number(v).toFixed(1) : Number(v).toFixed(2)) + ' 度';
+  }
+
   function _pgranLabels(buckets, gran) {
     return buckets.map(function (b) {
       var d = new Date(b.t * 1000);   // b.t = 桶起点 epoch 秒（服务端本地时区对齐）
@@ -181,7 +186,9 @@
         rows += '<div>' + p.seriesName + '：' +
           (p.value == null ? '—' : Math.round(p.value) + ' W') + '</div>';
       } else if (p.seriesName === '累计电量') {
-        var v = p.value;
+        // 数据为对象式点位 {value, symbol:'circle'}——逐桶打点后须解包
+        var vRaw = p.value;
+        var v = (vRaw && typeof vRaw === 'object') ? vRaw.value : vRaw;
         rows += '<div>' + p.seriesName + '：' +
           (v == null ? '—' : Number(v).toFixed(2) + ' 度 · ¥' + Number(v).toFixed(2)) + '</div>';
       }
@@ -219,14 +226,14 @@
         yAxis: [
           { name: 'W', min: 0, max: 'dataMax', position: 'left',
             axisLabel: { formatter: function (v) { return v + ' W'; } } },
-          { name: '度', min: 0, max: 1, position: 'right', splitNumber: 1,
-            axisLabel: { formatter: function (v) { return Number(v).toFixed(1) + ' 度'; } } },
+          { name: '度', min: 0, max: 1, position: 'right',
+            axisLabel: { formatter: _pgranKwhFmt } },
         ],
         tooltip: { trigger: 'axis', formatter: _pgranTooltip },
         legend: { data: ['平均功耗', '累计电量'] },
         series: [
-          { type: 'bar', name: '平均功耗', yAxisIndex: 0, data: [] },
-          { type: 'line', name: '累计电量', yAxisIndex: 1, data: [] },
+          { type: 'bar', name: '平均功耗', yAxisIndex: 0, data: [], z: 2 },
+          { type: 'line', name: '累计电量', yAxisIndex: 1, data: [], z: 3 },
         ],
       }, { dualAxis: true });
       return;
@@ -234,7 +241,11 @@
 
     var xs = _pgranLabels(buckets, _pgran);
     var avg = buckets.map(function (b) { return b.avg_w == null ? null : b.avg_w; });
-    var cum = buckets.map(function (b) { return b.cum_kwh == null ? null : b.cum_kwh; });
+    // 累计线：全部桶逐桶打点（方案 B）——前导空桶 cum=0 也带点、数据桶带真值，
+    // 线从窗口起点 0 连续到末端总量；对象式点位在 house symbol:'none' 下才可见。
+    var cum = buckets.map(function (b) {
+      return { value: b.cum_kwh, symbol: 'circle', symbolSize: 5 };
+    });
     var maxKwh = (totals.kwh || 0) || 1;   // 右轴上限=窗口总量 → 阶梯线天然灌满右上角
 
     IFCharts.update(_charts.power, {
@@ -242,14 +253,14 @@
       yAxis: [
         { name: 'W', min: 0, max: 'dataMax', position: 'left',
           axisLabel: { formatter: function (v) { return v + ' W'; } } },
-        { name: '度', min: 0, max: maxKwh, position: 'right', splitNumber: 1,
-          axisLabel: { formatter: function (v) { return Number(v).toFixed(1) + ' 度'; } } },
+        { name: '度', min: 0, max: maxKwh, position: 'right',
+          axisLabel: { formatter: _pgranKwhFmt } },
       ],
       tooltip: { trigger: 'axis', formatter: _pgranTooltip },
       legend: { data: ['平均功耗', '累计电量'] },
       series: [
-        { type: 'bar', name: '平均功耗', yAxisIndex: 0, data: avg, barWidth: '55%' },
-        { type: 'line', name: '累计电量', yAxisIndex: 1, step: 'end', data: cum,
+        { type: 'bar', name: '平均功耗', yAxisIndex: 0, data: avg, barWidth: '55%', z: 2 },
+        { type: 'line', name: '累计电量', yAxisIndex: 1, step: 'end', data: cum, z: 3,
           areaStyle: { opacity: 0.08 } },
       ],
     }, { dualAxis: true });

@@ -797,6 +797,30 @@ def test_monitor_power_card_contract():
         "empty-state branch omitted it, crashing on first render)"
     )
 
+    # 5. 累计线逐桶打点（方案 B，用户拍板）：全部桶对象式点位带 symbol:'circle'
+    #    ——house 规则 series 级 symbol:'none' 下普通数值点位不可见，必须对象式
+    #    声明才出点；前导空桶 cum=0 也打点，线从窗口起点连续到末端总量。
+    #    右轴改为常规分格（去 splitNumber:1——原来只剩"上限"一个有效刻度），
+    #    标签小数位自适应（_pgranKwhFmt）；line z:3 > bar z:2，曲线在柱之上不被遮盖。
+    assert "symbol: 'circle'" in js and 'value: b.cum_kwh' in js, (
+        "power cumulative line must map EVERY bucket to {value:b.cum_kwh, symbol:'circle'} "
+        "(all-dots 方案 B); a bare number under series symbol:'none' renders no dot"
+    )
+    assert 'symbolSize: 5' in js, "power line dots must declare symbolSize"
+    assert "'splitNumber'" not in js and 'splitNumber: 1' not in js, (
+        "right kWh axis must NOT force splitNumber:1 — that renders a single "
+        "effective tick (the window total only); keep max=window total with "
+        "default 5-way split for a real scale"
+    )
+    assert '_pgranKwhFmt' in js, (
+        "right axis label formatter must adapt decimals (>=1 度 → 1 位；<1 度 → 2 位) "
+        "so small totals (0.02 度) don't collapse to '0.0 度'"
+    )
+    assert 'z: 3' in js and 'z: 2' in js, (
+        "cumulative line must render ABOVE the bars (line z:3 > bar z:2) so the "
+        "step curve is never occluded by bar tops"
+    )
+
 
 # ── Task 6: 推理 TAB（模型卡片 + 网关控制卡） ──────────────────────
 
