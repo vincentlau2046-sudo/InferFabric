@@ -192,14 +192,18 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
     """
     start = time.monotonic()
 
+    # B1: 协议不匹配 501 附 hint —— 引导客户端改打该 provider 支持的协议端点
+    # （只读错误路径，不改请求体/转发核心；单协议 provider 无法透传时给可执行指引）。
     if protocol == "anthropic":
         if not cloud_model.anthropic_available:
             err = f"Provider {provider_cfg.name} does not support Anthropic protocol"
-            send_json(handler, {"error": err}, 501)
+            hint = "该 provider 仅支持 OpenAI 协议，请改用 POST /v1/chat/completions"
+            send_json(handler, {"error": err, "hint": hint}, 501)
             return CloudResult(status=501, error=err)
         if not provider_cfg.anthropic_base:
             err = f"Provider {provider_cfg.name} has no Anthropic base configured"
-            send_json(handler, {"error": err}, 501)
+            hint = "该 provider 未配置 Anthropic 端点（anthropic_base），无法以 Anthropic 协议访问"
+            send_json(handler, {"error": err, "hint": hint}, 501)
             return CloudResult(status=501, error=err)
         url = f"{provider_cfg.anthropic_base.rstrip('/')}/messages"
         headers = {
@@ -209,11 +213,13 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
     else:  # openai
         if not cloud_model.openai_available:
             err = f"Provider {provider_cfg.name} does not support OpenAI protocol"
-            send_json(handler, {"error": err}, 501)
+            hint = "该 provider 仅支持 Anthropic 协议，请改用 POST /v1/messages"
+            send_json(handler, {"error": err, "hint": hint}, 501)
             return CloudResult(status=501, error=err)
         if not provider_cfg.openai_base:
             err = f"Provider {provider_cfg.name} has no OpenAI base configured"
-            send_json(handler, {"error": err}, 501)
+            hint = "该 provider 未配置 OpenAI 端点（openai_base），无法以 OpenAI 协议访问"
+            send_json(handler, {"error": err, "hint": hint}, 501)
             return CloudResult(status=501, error=err)
         url = f"{provider_cfg.openai_base.rstrip('/')}/chat/completions"
         headers = {

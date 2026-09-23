@@ -313,6 +313,64 @@ class TestForwardToCloud:
         result = forward_to_cloud(h, {}, provider, cloud, protocol="anthropic")
         assert result.status == 501
 
+    @patch("inferfabric.forwarder.send_json")
+    def test_501_body_includes_hint_openai_only_provider(self, mock_send):
+        """Anthropic 请求打到 OpenAI-only provider → 501 错误体含 hint，引导改用 OpenAI 端点。"""
+        from inferfabric.forwarder import forward_to_cloud
+        h = _make_handler()
+        provider = MagicMock()
+        provider.name = "agnes"
+        provider.openai_base = "https://agnes.example.com/v1"
+        provider.anthropic_base = ""
+        cloud = MagicMock()
+        cloud.anthropic_available = False
+        cloud.openai_available = True
+        cloud.model_id = "agnes-1"
+
+        result = forward_to_cloud(h, {}, provider, cloud, protocol="anthropic")
+        assert result.status == 501
+        # send_json(handler, body, status) → call_args[0][1] 是错误体 dict
+        body = mock_send.call_args[0][1]
+        assert "hint" in body
+        assert "/v1/chat/completions" in body["hint"]
+
+    @patch("inferfabric.forwarder.send_json")
+    def test_501_body_includes_hint_anthropic_only_provider(self, mock_send):
+        """OpenAI 请求打到 Anthropic-only provider → 501 错误体含 hint，引导改用 Anthropic 端点。"""
+        from inferfabric.forwarder import forward_to_cloud
+        h = _make_handler()
+        provider = MagicMock()
+        provider.name = "anthropic-only"
+        provider.openai_base = ""
+        provider.anthropic_base = "https://anthropic.example.com"
+        cloud = MagicMock()
+        cloud.anthropic_available = True
+        cloud.openai_available = False
+        cloud.model_id = "m"
+
+        result = forward_to_cloud(h, {}, provider, cloud, protocol="openai")
+        assert result.status == 501
+        body = mock_send.call_args[0][1]
+        assert "hint" in body
+        assert "/v1/messages" in body["hint"]
+
+    @patch("inferfabric.forwarder.send_json")
+    def test_501_body_includes_hint_missing_base(self, mock_send):
+        """base 缺失的 501 也带 hint（提示配置问题，而非引导换协议端点）。"""
+        from inferfabric.forwarder import forward_to_cloud
+        h = _make_handler()
+        provider = MagicMock()
+        provider.name = "test"
+        provider.anthropic_base = ""
+        cloud = MagicMock()
+        cloud.anthropic_available = True
+        cloud.model_id = "m"
+
+        result = forward_to_cloud(h, {}, provider, cloud, protocol="anthropic")
+        assert result.status == 501
+        body = mock_send.call_args[0][1]
+        assert "hint" in body
+
 
 # ═══════════════════════════════════════════════════════════════
 # 6. pipe_stream_response
