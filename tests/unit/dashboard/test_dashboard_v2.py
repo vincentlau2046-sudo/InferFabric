@@ -800,21 +800,42 @@ def test_monitor_power_card_contract():
     # 5. 累计线逐桶打点（方案 B，用户拍板）：全部桶对象式点位带 symbol:'circle'
     #    ——house 规则 series 级 symbol:'none' 下普通数值点位不可见，必须对象式
     #    声明才出点；前导空桶 cum=0 也打点，线从窗口起点连续到末端总量。
-    #    右轴改为常规分格（去 splitNumber:1——原来只剩"上限"一个有效刻度），
-    #    标签小数位自适应（_pgranKwhFmt）；line z:3 > bar z:2，曲线在柱之上不被遮盖。
+    #    标签小数位自适应（_pgranKwhFmt 去尾零）；line z:3 > bar z:2，
+    #    曲线在柱之上不被遮盖。
     assert "symbol: 'circle'" in js and 'value: b.cum_kwh' in js, (
         "power cumulative line must map EVERY bucket to {value:b.cum_kwh, symbol:'circle'} "
         "(all-dots 方案 B); a bare number under series symbol:'none' renders no dot"
     )
     assert 'symbolSize: 5' in js, "power line dots must declare symbolSize"
-    assert "'splitNumber'" not in js and 'splitNumber: 1' not in js, (
-        "right kWh axis must NOT force splitNumber:1 — that renders a single "
-        "effective tick (the window total only); keep max=window total with "
-        "default 5-way split for a real scale"
+
+    # 5b. 双轴单网格 + 整数坐标（用户拍板）：左 W 固定 0–600（卡 TDP 封顶），
+    #     右 度 max=_niceCeil(累计量,6) nice 上取整到 6 等分干净步长，
+    #     两轴同 splitNumber:6 + min:0 → 网格位置重合，右轴 splitLine 隐藏只印标签。
+    #     原 splitNumber:1 一刀切设计已废弃（单刻度过秃），此处防的是退化回去。
+    assert 'splitNumber: 6' in js and 'min: 0' in js, (
+        "both power y-axes must share splitNumber:6 + min:0 so the 6-division "
+        "pixel positions coincide — right axis reuses left gridline positions"
+    )
+    assert 'max: 600' in js and "'dataMax'" not in js, (
+        "left W axis must be FIXED 0–600 (card TDP ceiling, never exceeded) — "
+        "dynamic dataMax top would give non-integer/non-adapted tick values"
+    )
+    assert 'splitLine: { show: false }' in js, (
+        "right kWh axis must hide its own split lines — ONE scale-line set "
+        "(left W axis only); two independent grids read as messy double axes"
+    )
+    assert re.search(r'_niceCeil\s*\(', js), (
+        "right kWh max must be nice-ceiled via _niceCeil (max = 6×{1,2,5}×10^k)"
+        "so 6 equal divisions land on clean values: integers when total large,"
+        "0.1/0.2/0.5 steps when total < 1 度"
+    )
+    assert 'splitNumber: 1' not in js, (
+        "the obsolete splitNumber:1 single-tick design must stay gone"
     )
     assert '_pgranKwhFmt' in js, (
-        "right axis label formatter must adapt decimals (>=1 度 → 1 位；<1 度 → 2 位) "
-        "so small totals (0.02 度) don't collapse to '0.0 度'"
+        "right axis label formatter must adapt decimals (>=1 度 → 1 位；<1 度 → 2 位)"
+        "and strip trailing zeros (0.20 → 0.2) so small totals (0.02 度)"
+        "don't collapse to '0.0 度'"
     )
     assert 'z: 3' in js and 'z: 2' in js, (
         "cumulative line must render ABOVE the bars (line z:3 > bar z:2) so the "

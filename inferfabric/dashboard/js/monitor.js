@@ -141,9 +141,31 @@
     return '近 24h';
   }
 
-  /* 右轴（度）刻度标签：总量小（<1 度）时 2 位小树不被 toFixed(1) 压成 0.0。 */
+  /* 右轴（度）刻度标签：总量小（<1 度）时 2 位小数不被 toFixed(1) 压成 0.0；
+   * 步长恒为 {1,2,5}×10^k（见 _niceCeil），去掉尾零 —— 0.20 度 → 0.2 度。 */
   function _pgranKwhFmt(v) {
-    return (Math.abs(v) >= 1 ? Number(v).toFixed(1) : Number(v).toFixed(2)) + ' 度';
+    var s = (Math.abs(v) >= 1 ? Number(v).toFixed(1) : Number(v).toFixed(2));
+    return s.replace(/0+$/, '').replace(/\.$/, '') + ' 度';
+  }
+
+  /* nice 上取整：返回最小的 n×步长 ≥ v，步长 ∈ {1,2,5}×10^k。
+   * 右轴（度）用它定 max —— max/n 是干净步长，n 等分下每格标签
+   * 总量大时是整数（37 度 → max 60 → 0,10,…,60），
+   * 总量 <1 度时是 0.1/0.2/0.5 档干净小数（0.64 度 → max 1.2 → 0,0.2,…,1.2）。 */
+  function _niceCeil(v, n) {
+    if (!(v > 0)) v = 1;
+    var raw = v / n;
+    var mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    var norm = raw / mag;           // [1, 10)
+    var step;
+    if (norm <= 1) step = 1;
+    else if (norm <= 2) step = 2;
+    else if (norm <= 5) step = 5;
+    else step = 10;
+    // 拍掉浮点噪声（0.6442/6→step 0.2 → n*step*mag=1.2000000000000002）：
+    // 若带回 1.2000000000000002，echarts 刻度数 = ceil(max/interval)
+    // = ceil(6.000000000000001)=7，与左轴 6 等分错位 → 网格对不齐。
+    return +((n * step * mag).toFixed(12));
   }
 
   function _pgranLabels(buckets, gran) {
@@ -223,10 +245,14 @@
       // echarts 首渲染即抛 cartesian2d getInitialData 异常）
       IFCharts.update(_charts.power, {
         xAxis: { data: [], boundaryGap: true },
+        // 双轴同构骨架：左 W 固定 0–600（卡 TDP 封顶，不会突破，无需动态取整）；
+        // 右 度 空态 _niceCeil(0,6)=1.2 → 0,0.2,…,1.2。两轴同 splitNumber:6 + min:0
+        // → 6 等分像素位置重合，右轴只印标签不画网格线，一套尺度线（左轴的）。
         yAxis: [
-          { name: 'W', min: 0, max: 'dataMax', position: 'left',
+          { name: 'W', min: 0, max: 600, splitNumber: 6, position: 'left',
             axisLabel: { formatter: function (v) { return v + ' W'; } } },
-          { name: '度', min: 0, max: 1, position: 'right',
+          { name: '度', min: 0, max: _niceCeil(0, 6), splitNumber: 6,
+            splitLine: { show: false }, position: 'right',
             axisLabel: { formatter: _pgranKwhFmt } },
         ],
         tooltip: { trigger: 'axis', formatter: _pgranTooltip },
@@ -246,14 +272,20 @@
     var cum = buckets.map(function (b) {
       return { value: b.cum_kwh, symbol: 'circle', symbolSize: 5 };
     });
-    var maxKwh = (totals.kwh || 0) || 1;   // 右轴上限=窗口总量 → 累计折线终点封顶右上角
+    // 左轴 W 固定 0–600（卡 TDP 封顶，不会突破）；右轴 度 max = _niceCeil(累计量, 6)
+    // —— nice 上取整到 6 等分干净步长，max/6 恒为 {1,2,5}×10^k：
+    //   总量大 → 整数刻度（37 度 → max 60 → 0,10,…,60），总量 <1 度 → 0.1/0.2/0.5 档。
+    // 两轴同 splitNumber:6 + min:0 → 6 等分像素位置重合，右轴只印标签（splitLine 隐藏），
+    // 只有左轴一套尺度线——「坐标整数」「max 随实际调节」「不能有两套尺度线」三点齐。
+    var maxKwh = _niceCeil((totals.kwh || 0) || 1, 6);
 
     IFCharts.update(_charts.power, {
       xAxis: { data: xs, boundaryGap: true },
       yAxis: [
-        { name: 'W', min: 0, max: 'dataMax', position: 'left',
+        { name: 'W', min: 0, max: 600, splitNumber: 6, position: 'left',
           axisLabel: { formatter: function (v) { return v + ' W'; } } },
-        { name: '度', min: 0, max: maxKwh, position: 'right',
+        { name: '度', min: 0, max: maxKwh, splitNumber: 6,
+          splitLine: { show: false }, position: 'right',
           axisLabel: { formatter: _pgranKwhFmt } },
       ],
       tooltip: { trigger: 'axis', formatter: _pgranTooltip },
