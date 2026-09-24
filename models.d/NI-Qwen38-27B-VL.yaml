@@ -4,7 +4,7 @@ type: ninfer
 gpu_role: exclusive
 model_type: vl
 quantization: NVFP4
-peak_vram_mb: 30500
+peak_vram_mb: 31000
 
 ninfer:
   served_name: NI-Qwen38-27B-VL
@@ -18,11 +18,11 @@ ninfer:
   kv_dtype: nvfp4
   weight_precision: NVFP4
   max_concurrency: 4
-  default_max_tokens: 16000
-  prefill_chunk: 4096
+  default_max_tokens: 32000
+  prefill_chunk: 2048
   pending_timeout_ms: 600000
   enable_mtp: true
-  draft_tokens: 4
+  draft_tokens: 1
   vision: true
   # 压 media 显存让给 KV: cache 0(关跨请求复用) + live 1024MiB(minimum ~384MiB)
   media_cache_mib: 0
