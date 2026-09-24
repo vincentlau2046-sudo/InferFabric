@@ -415,6 +415,7 @@ def test_theme_state_hooked_in_store():
 
 def test_monitor_structure():
     """监控页 DOM 契约：7 个面板 id 必须在 get_html() 中出现（spec §4.3）。"""
+    import re as _re
     html = _html()
     for panel_id in (
         'id="monPowerChart"',   # 功耗 / 电费：单图双轴（柱=平均功耗 W，阶梯线=累计电量/电费 度=元）
@@ -437,6 +438,11 @@ def test_monitor_structure():
     assert 'data-gran="month"' not in html, "month granularity must be dropped from Token card"
     for gran in ('minute', 'hour', 'day', 'week'):
         assert 'data-gran="%s"' % gran in html, "missing token granularity toggle: %s" % gran
+    # Token 四档按钮按单位升序排列（分钟 → 小时 → 天 → 周）——锚定分钟后紧邻的同卡按钮，
+    # 避免误匹配功耗卡（hour/day/week）在前的位置
+    assert _re.search(
+        r'data-gran="minute"[\s\S]*?data-gran="hour"[\s\S]*?data-gran="day"[\s\S]*?data-gran="week"',
+        html), "token granularity buttons must render in ascending unit order: 分钟/小时/天/周"
     for win in ('minute', 'hour', 'day'):
         assert 'data-win="%s"' % win in html, "missing latency window toggle: %s" % win
     assert 'data-win="week"' not in html, "latency must NOT offer week (data only 30d)"
