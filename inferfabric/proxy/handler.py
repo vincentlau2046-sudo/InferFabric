@@ -133,13 +133,18 @@ def _metrics_axis(pm) -> list[tuple[str, str]]:
     return out
 
 
-_LAT_BUCKET_MS = {"1h": 5 * 60 * 1000, "24h": 3600 * 1000, "7d": 6 * 3600 * 1000}
-_LAT_CACHE_TTL = {"1h": 300.0, "24h": 300.0, "7d": 300.0}   # 5min——延迟趋势历史值无需秒级刷新
+# 延迟趋势档位（单位语义统一：分钟/小时/天，月/周不做——数据仅 30d 回放）：
+#   minute = 近 60min · 12×5min  桶宽 5min（请求级 1min 太碎，5min 对齐一次请求量级）
+#   hour   = 近 24h  · 24×1h
+#   day    = 近 30 天 · 30×1d（deque 回放 720h=30d，天档恰在数据边界）
+_LAT_BUCKET_MS = {"minute": 5 * 60 * 1000, "hour": 3600 * 1000, "day": 86400 * 1000}
+_LAT_CACHE_TTL = {"minute": 300.0, "hour": 300.0, "day": 300.0}   # 5min——延迟趋势历史值无需秒级刷新
 # 单飞 TTL 缓存：重扫描（deque + 分位）不随 3s 轮询重算；按 window 各一个实例。
 _lat_series_cache = {w: _ExpensiveCache(ttl=_LAT_CACHE_TTL[w]) for w in _LAT_CACHE_TTL}
 
-# v6.2 功耗/电费：档位 小时/天/月 各一实例 TTL 缓存（5min——功耗历史无需秒级刷新）。
-_POWER_CACHE_TTL_GRANS = ("hour", "day", "month")
+# v6.2 功耗/电费：档位 小时/天/周 各一实例 TTL 缓存（5min——功耗历史无需秒级刷新）。
+# month 保留键（端点只读无害），UI 不再提供「月」；week = 近~90 天 · 13×7d 周桶。
+_POWER_CACHE_TTL_GRANS = ("hour", "day", "week", "month")
 _power_series_cache = {g: _ExpensiveCache(ttl=300.0) for g in _POWER_CACHE_TTL_GRANS}
 
 
@@ -748,13 +753,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": "metrics unavailable"}, 500)
 
     def _handle_api_latency(self, pm):
-        """GET /api/latency?window=1h|24h|7d — 模型延迟趋势（时间分桶 × 逐模型分位）。"""
+        """GET /api/latency?window=minute|hour|day — 模型延迟趋势（时间分桶 × 逐模型分位）。"""
         from urllib.parse import urlparse, parse_qs
         try:
             qs = parse_qs(urlparse(self.path).query)
-            window = qs.get("window", ["24h"])[0]
-            if window not in ("1h", "24h", "7d"):
-                window = "24h"
+            window = qs.get("window", ["hour"])[0]
+            if window not in ("minute", "hour", "day"):
+                window = "hour"
             source_of = {name: src for name, src in _metrics_axis(pm)}
             data = _lat_series_cache[window].get_or_refresh(
                 lambda: pm.metrics.get_latency_series(
@@ -766,7 +771,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": "latency series unavailable"}, 500)
 
     def _handle_api_power(self, pm):
-        """GET /api/power?gran=hour|day|month — 功耗/电费分桶序列（v6.2）。
+        """GET /api/power?gran=hour|day|week|month — 功耗/电费分桶序列（v6.2）。
 
         每桶 {t, avg_w, kwh, cum_kwh, cum_yuan}；口径：GPU 板卡功耗、¥1/度。
         5min TTL 单飞缓存（采样 60s + 前端 5min 刷新，窗外无需秒级重算）。
@@ -910,24 +915,28 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": "token stats unavailable"}, 500)
 
     def _handle_token_curve(self, pm):
-        """GET /api/token-curve — 本地模型 Token 使用曲线 (v5.7)。
+        """GET /api/token-curve — 模型 Token 使用曲线 (v5.7)。
 
-        ?granularity=hour|day|month
-        hour  : 最近 1h  → x = 分钟 (0–59)，60 桶
-        day   : 最近 24h → x = 小时 (0–23)，24 桶
-        month : 最近 30d → x = 天 (1–31)，31 桶
-        Y 轴 = tokens_in + tokens_out 总和
+        统一单位语义（分钟/小时/天/周，月整体弃用；标签 = 分桶单位）：
+          minute : 近 60min  → 12×5min  桶      （原 hour；桶宽 1min→5min）
+          hour   : 近 24h    → 24×1h    桶      （原 day）
+          day    : 近 30 天  → 30×1d    桶      （原 month；31→30）
+          week   : 近 90 天  → 13×7d    周桶    （新增）
+        全档「相对年龄」分桶（idx = n-1 - floor(age/width)）：最旧在左 idx=0、
+        最新在右 idx=n-1 —— 与图 x 轴「近 X」语义一致，且避免墙钟把间隔 > 窗口宽
+        的离散时段合并不连续桶（旧 hour 档即此语义，现推广到全档）。
+        Y 轴 = tokens_in + tokens_out 总和；dual-scope {local, cloud}。
         """
         from urllib.parse import urlparse, parse_qs
-        from datetime import datetime, timedelta, timezone
 
         try:
             qs = parse_qs(urlparse(self.path).query or "")
             g = (qs.get("granularity", ["hour"])[0]).lower()
             specs = {
-                "hour":  {"since": 3600,       "buckets": 60, "xkey": "minute"},
-                "day":   {"since": 86400,      "buckets": 24, "xkey": "hour"},
-                "month": {"since": 30 * 86400, "buckets": 31, "xkey": "day"},
+                "minute": {"since": 3600,        "n": 12, "width_s": 5 * 60},      # 60min / 12×5min
+                "hour":   {"since": 24 * 3600,   "n": 24, "width_s": 3600},        # 24h / 24×1h
+                "day":    {"since": 30 * 86400,  "n": 30, "width_s": 86400},       # 30d / 30×1d
+                "week":   {"since": 90 * 86400,  "n": 13, "width_s": 7 * 86400},   # 90d / ~13 周桶
             }
             if g not in specs:
                 self._send_json({"error": f"invalid granularity: {g}"}, 400)
@@ -935,67 +944,44 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             spec = specs[g]
             now_ts = time.time()
             since = int(now_ts - spec["since"])
-            tz8 = timezone(timedelta(hours=8))
             rows = pm.telemetry.query_request_log(since=since, limit=100000)
 
-            n = spec["buckets"]
-            # 月档 x 轴为日号 (1-31)，其余档 x 从 0 起
-            x_start = 1 if g == "month" else 0
+            n = spec["n"]
+            w_s = spec["width_s"]
             # 每桶含 prompt/completion 拆分（供 Prompt/Completion 堆叠条图表用）；
             # tokens 保留（= prompt+completion，向后兼容已有消费者）；
             # cached = 缓存命中 token 数（供缓存命中率 = cached/prompt）
-            local_b = [{"x": x_start + i, "tokens": 0, "prompt": 0,
+            local_b = [{"x": i, "tokens": 0, "prompt": 0,
                         "completion": 0, "cached": 0, "requests": 0}
                        for i in range(n)]
-            cloud_b = [{"x": x_start + i, "tokens": 0, "prompt": 0,
+            cloud_b = [{"x": i, "tokens": 0, "prompt": 0,
                         "completion": 0, "cached": 0, "requests": 0}
                        for i in range(n)]
-
-            def x_of(ts):
-                dt = datetime.fromtimestamp(ts, tz=tz8)
-                return {"minute": dt.minute, "hour": dt.hour, "day": dt.day}[spec["xkey"]]
 
             for r in rows:
                 ts = r.get("timestamp")
                 if ts is None:
                     continue
-                # hour 档按"相对年龄"分桶（idx = 59 - 分钟差），与图表 x 轴语义一致
-                # （最旧在左 idx=0、最新在右 idx=59）。避免时钟分钟把"m 分钟前的整点"
-                # 与"m-(60) 分钟前"合并不连续时段。
-                if g == "hour":
-                    min_ago = int((now_ts - ts) // 60)
-                    idx = 59 - min_ago
-                    try:
-                        tokens_in = int(r.get("tokens_in") or 0)
-                        tokens_out = int(r.get("tokens_out") or 0)
-                        cached = int(r.get("tokens_in_cached") or 0)
-                    except (ValueError, TypeError):
-                        continue
-                    tokens = tokens_in + tokens_out
-                    target = cloud_b if r.get("cloud_provider") else local_b
-                    if 0 <= idx < n:
-                        target[idx]["tokens"] += tokens
-                        target[idx]["prompt"] += tokens_in
-                        target[idx]["completion"] += tokens_out
-                        target[idx]["cached"] += cached
-                        target[idx]["requests"] += 1
+                # 相对年龄分桶：idx = n-1 - floor(age/width)。窗口右缘 = now →
+                # 每条请求仅当落在 [now-since, now] 内才入桶；窗外（如恰好越过
+                # since 边界）idx < 0 → 丢弃。
+                age_s = now_ts - ts
+                idx = n - 1 - int(age_s // w_s)
+                if not (0 <= idx < n):
                     continue
                 try:
-                    x = x_of(ts)
-                except (ValueError, OSError):
+                    tokens_in = int(r.get("tokens_in") or 0)
+                    tokens_out = int(r.get("tokens_out") or 0)
+                    cached = int(r.get("tokens_in_cached") or 0)
+                except (ValueError, TypeError):
                     continue
-                tokens_in = int(r.get("tokens_in") or 0)
-                tokens_out = int(r.get("tokens_out") or 0)
-                cached = int(r.get("tokens_in_cached") or 0)
                 tokens = tokens_in + tokens_out
                 target = cloud_b if r.get("cloud_provider") else local_b
-                idx = x - x_start
-                if 0 <= idx < n:
-                    target[idx]["tokens"] += tokens
-                    target[idx]["prompt"] += tokens_in
-                    target[idx]["completion"] += tokens_out
-                    target[idx]["cached"] += cached
-                    target[idx]["requests"] += 1
+                target[idx]["tokens"] += tokens
+                target[idx]["prompt"] += tokens_in
+                target[idx]["completion"] += tokens_out
+                target[idx]["cached"] += cached
+                target[idx]["requests"] += 1
 
             self._send_json({
                 "granularity": g,

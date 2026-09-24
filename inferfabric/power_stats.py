@@ -8,7 +8,8 @@ inferfabric/power_stats.py — GPU 板卡功耗时间序列 (v6.2 监控 TAB「�
 视图语义（已与用户定稿）：
   小时 = 近 24h，每小时一桶（对齐整点，末桶为当前小时的部分桶）
   天   = 近 30 天，每天一桶（对齐本地零点）
-  月   = 按自然月（YYYY-MM），从最早有数据的月份到当前月
+  周   = 近 ~90 天，每周一桶（对齐本地周一，末桶为本周的部分桶；月整体弃用）
+  月   = 按自然月（YYYY-MM），从最早有数据的月份到当前月（只读端点保留，UI 不再提供）
 
 每桶输出：
   avg_w     桶内样本均值（无样本 → None，前端断开）
@@ -33,6 +34,8 @@ PRICE_YUAN_PER_KWH = 1.0          # 电价常量（¥/度；1 度 = 1 kWh）
 SAMPLE_INTERVAL_SEC = 60.0        # PowerSampler 采样间隔（单样本能量折算用）
 HOUR_WIN_BUCKETS = 24             # 小时视图桶数
 DAY_WIN_BUCKETS = 30              # 天视图桶数
+WEEK_WIN_BUCKETS = 13             # 周视图桶数（13×7d ≈ 91 天，覆盖「近 90 天」）
+WEEK_BUCKET_SEC = 7 * 86400       # 一周边界秒数
 
 
 # ── 探针 ───────────────────────────────────────────────────────
@@ -132,6 +135,19 @@ def day_slots(now_ts: int) -> list[tuple[int, int]]:
             for i in range(DAY_WIN_BUCKETS)]
 
 
+def week_slots(now_ts: int) -> list[tuple[int, int]]:
+    """近 ~90 天：本地周一对齐的 13 个周桶（7 天），末桶 = 本周（部分桶）。
+
+    对齐自然周而非滑动窗口——「周」语义 = 星期；末桶从本周周一起算到 now。
+    """
+    lt = time.localtime(now_ts)
+    midnight = int(time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1)))
+    week_start = midnight - lt.tm_wday * 86400      # 本地周一 00:00
+    return [(week_start - (WEEK_WIN_BUCKETS - 1 - i) * WEEK_BUCKET_SEC,
+             week_start - (WEEK_WIN_BUCKETS - 2 - i) * WEEK_BUCKET_SEC)
+            for i in range(WEEK_WIN_BUCKETS)]
+
+
 def _next_month(y: int, m: int) -> tuple[int, int]:
     return (y + 1, 1) if m == 12 else (y, m + 1)
 
@@ -199,10 +215,12 @@ def bucket_stats(samples: list[tuple[int, float]],
 # ── 查询入口（handler /api/power 调用）────────────────────────
 
 def query_power_series(db, gran: str = "hour", price: float = PRICE_YUAN_PER_KWH) -> dict:
-    """按档位返回分桶功耗/电费序列 + 窗口汇总。gran ∈ {hour, day, month}。"""
+    """按档位返回分桶功耗/电费序列 + 窗口汇总。gran ∈ {hour, day, week, month}。"""
     now = int(time.time())
     if gran == "day":
         slots = day_slots(now)
+    elif gran == "week":
+        slots = week_slots(now)
     elif gran == "month":
         oldest = db.query_gpu_power_samples(since=0, limit=1)
         slots = month_slots(now, oldest[0]["ts"] if oldest else now)

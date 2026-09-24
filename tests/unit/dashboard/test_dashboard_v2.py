@@ -430,11 +430,16 @@ def test_monitor_structure():
         assert panel_id in html, "missing monitor panel id: %s" % panel_id
     # Token 用量双 scope 拆分容器（本地 / 云端两张独立图）
     assert 'class="mon-token-split"' in html
-    # 窗口/粒度切换按钮 data-win / data-gran 契约（display filter）
-    for win in ('1h', '24h', '7d'):
-        assert 'data-win="%s"' % win in html, "missing GPU window toggle: %s" % win
-    for gran in ('hour', 'day', 'month'):
+    # 窗口/粒度切换按钮 data-win / data-gran 契约（display filter，单位语义统一 v6.3）
+    # 功耗/电费 pgran: 小时/天/周（月整体弃用）；Token gran: 分钟/小时/天/周；
+    # 延迟 latwin: 分钟/小时/天（数据仅 30d 不做周）
+    assert 'data-gran="hour"' in html and 'data-gran="day"' in html and 'data-gran="week"' in html
+    assert 'data-gran="month"' not in html, "month granularity must be dropped from Token card"
+    for gran in ('minute', 'hour', 'day', 'week'):
         assert 'data-gran="%s"' % gran in html, "missing token granularity toggle: %s" % gran
+    for win in ('minute', 'hour', 'day'):
+        assert 'data-win="%s"' % win in html, "missing latency window toggle: %s" % win
+    assert 'data-win="week"' not in html, "latency must NOT offer week (data only 30d)"
     # v6.0: 延迟趋势双卡 — 共享控制条（窗口 latwin 单条不再镜像 + 分位 latq）+ 模型 chip 选择器
     assert 'data-seg="latwin"' in html
     assert 'data-seg="latq"' in html
@@ -467,13 +472,36 @@ def test_monitor_js_present():
     assert "data-win" in js and "data-gran" in js
 
 
+def test_monitor_token_curve_all_tiers_endpoint():
+    """Token 卡四档（分钟/小时/天/周）统一走 /api/token-curve 端点；token_stats
+    的按天/按月聚合代码与 __TOKEN_STATS__ 引用已从 monitor.js 移除（overview.js
+    7 天趋势仍用 __TOKEN_STATS__，不受影响）；月档整体弃用。"""
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "monitor.js").read_text(encoding="utf-8")
+    assert "/api/token-curve?granularity=" in js, "all tiers must fetch token-curve endpoint"
+    # 桶语义常量（与服务端 spec 字典一一对应）：minute=12×5min / hour=24×1h /
+    # day=30×1d / week=13×1周。fetch URL 动态拼接（granularity=' + gran），
+    # 档位覆盖以 _TOKEN_N/_TOKEN_W 双映射为静态契约断言。
+    import re as _re
+    assert _re.search(r"_TOKEN_N\s*=\s*\{\s*minute:\s*12,\s*hour:\s*24,\s*day:\s*30,\s*week:\s*13", js), \
+        "bucket-count map must cover minute/hour/day/week"
+    assert _re.search(r"_TOKEN_W\s*=\s*\{\s*minute:\s*5\s*\*\s*60000,\s*hour:\s*3600000,\s*day:\s*86400000,\s*week:\s*7\s*\*\s*86400000", js), \
+        "bucket-width map must cover minute/hour/day/week"
+    # token_stats 按天/按月聚合已移除（周档只有端点有 90d 数据）
+    for dead in ("buildTokenDay", "buildTokenMonth", "_tokenStatsSource",
+                 "buildTokenHour", "_tokenHourFromBuckets"):
+        assert dead not in js, "monitor.js still contains removed token-stats builder: %s" % dead
+    # 月整体弃用：monitor.js 不得再出现 month 档位分支
+    assert "granularity=month" not in js and "gran === 'month'" not in js, \
+        "month tier must be dropped from monitor.js"
+
+
 def test_monitor_latency_cards():
     """v6.0 延迟双卡趋势契约：TTFT/TPOT 各单 y 轴（两指标量纲差 ~2 个数量级，禁双 y 轴，
     spec 反模式 #1）；窗口数据走 GET /api/latency（Task 2 端点，只读 display filter）；
     图表/表格视图切换（data-view）已移除。"""
     js = (ROOT / "inferfabric" / "dashboard" / "js" / "monitor.js").read_text(encoding="utf-8")
     assert "monTtftChart" in js and "monTpotChart" in js
-    assert "/api/latency?window=" in js      # 1h/24h/7d 窗口取数（GET-only）
+    assert "/api/latency?window=" in js      # minute/hour/day 窗口取数（GET-only）
     assert "data-view" not in js             # 图表/表格视图切换已移除
     html = _html()
     assert 'id="monTtftChart"' in html and 'id="monTpotChart"' in html
@@ -766,6 +794,11 @@ def test_monitor_power_card_contract():
 
     # 2. 数据源：GET /api/power（只读 fetch，无 POST）
     assert "/api/power?gran=" in js, "monitor.js must fetch /api/power?gran= for power series"
+    # 2b. 档位语义：小时/天/周（月整体弃用）；_pgranWinText 周 → 近 90 天
+    assert re.search(r"_pgranWinText\([^)]*\)\s*\{\s*if \(gran === 'day'\) return '近 30 天';", js), (
+        "monitor.js power window text must map day → 近 30 天"
+    )
+    assert "近 90 天" in js, "monitor.js must show 周 as 近 90 天 (_pgranWinText)"
     if 'method:"POST"' in js or 'method: "POST"' in js:
         raise AssertionError("monitor.js power fetch must be GET-only (read-only monitor tab)")
 

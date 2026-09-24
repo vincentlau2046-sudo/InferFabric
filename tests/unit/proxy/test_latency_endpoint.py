@@ -16,7 +16,7 @@ from inferfabric.proxy.handler import ProxyHandler
 @pytest.fixture
 def fresh_cache(monkeypatch):
     """每个测试用全新的 per-window 缓存：模块级 _lat_series_cache 会跨测试串缓存
-    （否则 fallback/透传测试会被前一测试的 24h 缓存掩盖，实际路径未执行）。"""
+    （否则 fallback/透传测试会被前一测试的 hour 缓存掩盖，实际路径未执行）。"""
     caches = {w: handler_module._ExpensiveCache(ttl=handler_module._LAT_CACHE_TTL[w])
               for w in handler_module._LAT_CACHE_TTL}
     monkeypatch.setattr(handler_module, "_lat_series_cache", caches)
@@ -55,34 +55,46 @@ def _handler(path):
     return h
 
 
-def test_latency_default_24h(fresh_cache):
+def test_latency_default_hour(fresh_cache):
     pm = _mk()
     h = _handler("/api/latency")
     h._handle_api_latency(pm)
     code, data = h._sent[-1]
     assert code == 200
-    assert data["window"] == "24h"
+    assert data["window"] == "hour"
     # source 由 _metrics_axis → source_of 派生：handler 丢 source_of 时 fake 返回
     # "observed" → 本断言失败（非空洞断言）。
     assert data["series"]["m1"]["source"] == "local"
 
 
-def test_latency_bad_window_falls_back_24h(fresh_cache):
+def test_latency_bad_window_falls_back_hour(fresh_cache):
     pm = _mk()
     h = _handler("/api/latency?window=bogus")
     h._handle_api_latency(pm)
     data = h._sent[-1][1]
-    assert data["window"] == "24h"
-    # fallback 真实执行（非缓存掩盖）：底层调用收到归一后的 24h 参数
+    assert data["window"] == "hour"
+    # fallback 真实执行（非缓存掩盖）：底层调用收到归一后的 hour 参数
     a, k = pm._calls[-1]
-    assert a[0] == "24h" and k["bucket_ms"] == 3600 * 1000 and k["top_n"] == 5
+    assert a[0] == "hour" and k["bucket_ms"] == 3600 * 1000 and k["top_n"] == 5
 
 
-def test_latency_window_passthrough(fresh_cache):
+def test_latency_window_passthrough_minute(fresh_cache):
+    """分钟档 = 近 60min · 12×5min 桶（request 级 1min 太碎，5min 对齐一次请求量级）。"""
     pm = _mk()
-    h = _handler("/api/latency?window=7d")
+    h = _handler("/api/latency?window=minute")
     h._handle_api_latency(pm)
-    assert h._sent[-1][1]["window"] == "7d"
+    assert h._sent[-1][1]["window"] == "minute"
     a, k = pm._calls[-1]
-    assert a[0] == "7d" and k["bucket_ms"] == 6 * 3600 * 1000
+    assert a[0] == "minute" and k["bucket_ms"] == 5 * 60 * 1000
+    assert k["percentiles"] == (0.50, 0.95) and k["source_of"] == {"m1": "local"}
+
+
+def test_latency_window_passthrough_day(fresh_cache):
+    """天档 = 近 30 天 · 30×1d 桶（数据仅 30d，不做周）。"""
+    pm = _mk()
+    h = _handler("/api/latency?window=day")
+    h._handle_api_latency(pm)
+    assert h._sent[-1][1]["window"] == "day"
+    a, k = pm._calls[-1]
+    assert a[0] == "day" and k["bucket_ms"] == 86400 * 1000
     assert k["percentiles"] == (0.50, 0.95) and k["source_of"] == {"m1": "local"}

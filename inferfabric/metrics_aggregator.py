@@ -264,7 +264,7 @@ class MetricsAggregator:
         result["success_rate"] = round(result["success"] / max(result["total_requests"], 1) * 100, 1)
         return result
 
-    def get_latency_series(self, window: str = "24h", bucket_ms: int = 3600000,
+    def get_latency_series(self, window: str = "hour", bucket_ms: int = 3600000,
                           top_n: int = 5,
                           percentiles: tuple[float, ...] = (0.50, 0.95),
                           source_of: dict | None = None) -> dict:
@@ -278,7 +278,7 @@ class MetricsAggregator:
         - source_of: {模型友好名: "local"/"cloud"}，缺省/未命中 → "observed"。
         """
         now = time.time()
-        window_s = {"1h": 3600, "24h": 86400, "7d": 604800, "all": 86400}
+        window_s = {"minute": 3600, "hour": 86400, "day": 2592000, "all": 86400}
         ws = window_s.get(window, 86400)
         cutoff = now - ws
         bucket_s = max(1.0, bucket_ms / 1000.0)

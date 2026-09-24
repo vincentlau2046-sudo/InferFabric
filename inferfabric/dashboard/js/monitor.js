@@ -11,12 +11,13 @@
  *
  * 数据源（全部 GET，只读）：
  *   - store /api/snapshot → metrics_24h request_log history gpu gpu_util active_services
- *     + token_stats（双 scope {local,cloud}，DB 驱动、引擎无关 → 天/月图实时）
- *   - GET /api/token-curve?granularity=hour → 小时图 60 分钟桶（local/cloud 双 scope）
- *   - window.__TOKEN_STATS__ → 天/月图兜底（代理启动时烘焙的双 scope 快照）
+ *     （token_stats 30d 属 overview.js 7 天趋势，Monitor Token 卡四档改走端点）
+ *   - GET /api/token-curve?granularity=minute|hour|day|week → Token 用量四档
+ *     （服务端分桶 + limit=100000；label=分桶单位：分钟=12×5min/小时=24×1h/
+ *      天=30×1d/周=13×7d；local/cloud 双 scope；月整体弃用）
  *   - GET /api/engine_metrics?model=<active> → 6 KPI 原始指标
- *   - GET /api/power?gran=hour|day|month → 功耗/电费分桶（5min TTL；服务端 60s
- *     采样落 SQLite，页面关着历史也连续；小时=近24h/天=近30天/月=自然月）
+ *   - GET /api/power?gran=hour|day|week → 功耗/电费分桶（5min TTL；服务端 60s
+ *     采样落 SQLite，页面关着历史也连续；小时=近24h/天=近30天/周=近~90天）
  *
  * 窗口/粒度切换 = 客户端 display filter（不触达服务端状态变更）。
  *
@@ -36,8 +37,8 @@
   var $ = function (id) { return document.getElementById(id); };
 
   /* ── 状态 ── */
-  var _pgran = 'hour';           // 功耗/电费图表粒度 display filter（小时/天/月）
-  var _tokenGran = 'hour';       // Token 图表粒度 display filter
+  var _pgran = 'hour';           // 功耗/电费图表粒度 display filter（小时/天/周）
+  var _tokenGran = 'hour';       // Token 图表粒度 display filter（分钟/小时/天/周）
   var _charts = { power: null, tokenLocal: null, tokenCloud: null, ttft: null, tpot: null };
   var _chartsInit = false;
 
@@ -54,13 +55,14 @@
   var _lastEngineFetch = 0;
   var ENGINE_TTL = 15000;        // 15s
 
-  // Token 小时图节流 + 数据源切换（方案 B）：
-  // 旧版复用 snapshot 的 request_log（limit=50）→ 重流量下只画 ~4 根柱子。
-  // 改为单独 fetch /api/token-curve?granularity=hour（服务端 60 桶聚合 + limit=100000）。
-  // local[i] = idx i（i=0 最旧 59 分钟前、i=59 最新），含 prompt/completion 拆分。
-  var _tokenHourCache = null;
-  var _lastTokenHourFetch = 0;
-  var TOKEN_HOUR_TTL = 15000;    // 15s — 同 ENGINE_TTL
+  // Token 卡四档统一节流 + 数据源（单位语义统一 v6.3）：
+  // 四档都走 GET /api/token-curve?granularity=（服务端分桶 + limit=100000；
+  // 不再用 token_stats 的 day/月 —— token_stats 30d 留存且随 snapshot 3s 轮询，
+  // 周档只有端点有 90d 数据）。每档独立缓存：_tokenCurveCache[gran] = {data, at}，
+  // data = 端点响应 {local, cloud}，local[i]/cloud[i] = idx i（i=0 最旧 → n-1 最新），
+  // 含 prompt/completion/cached 拆分。
+  var _tokenCurveCache = {};         // gran -> {data, at}
+  var TOKEN_CURVE_TTL = 15000;       // 15s — 同 ENGINE_TTL
 
   /* ── 小工具 ── */
   function escHtml(s) {
@@ -129,7 +131,7 @@
 
   /* ── 1. 功耗 / 电费（单图双轴，v6.2 取代 GPU 显存/利用率曲线）──
    * 口径：GPU 板卡功耗（nvidia-smi power.draw，含 idle），¥1/度。
-   * 粒度 hour/day/month = display filter（服务端分桶，GET /api/power）。
+   * 粒度 hour/day/week = display filter（服务端分桶，GET /api/power；月整体弃用）。
    *   - 柱（左轴 W）  = 每桶平均功耗——看"哪个时段烧得凶"
    *   - 折线（右轴 度=元） = 窗口起点累计电量/电费——看"一共烧了多少、花了多少"
    * 双轴合法性：功耗↔累计电量是 流速↔存量 因果对（累计=功率对时间积分），
@@ -137,7 +139,7 @@
    * 刷新：5min TTL 独立拉取 + 完成回调重绘；不随 3s snapshot 重绘（热缓存+同档跳过）。 */
   function _pgranWinText(gran) {
     if (gran === 'day') return '近 30 天';
-    if (gran === 'month') return '按自然月';
+    if (gran === 'week') return '近 90 天';
     return '近 24h';
   }
 
@@ -171,8 +173,7 @@
   function _pgranLabels(buckets, gran) {
     return buckets.map(function (b) {
       var d = new Date(b.t * 1000);   // b.t = 桶起点 epoch 秒（服务端本地时区对齐）
-      if (gran === 'day') return (d.getMonth() + 1) + '-' + d.getDate();
-      if (gran === 'month') return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+      if (gran === 'day' || gran === 'week') return (d.getMonth() + 1) + '-' + d.getDate();
       return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     });
   }
@@ -310,159 +311,84 @@
 
   /* ── 2. Token 用量：prompt/completion 堆叠条 ──
    * 2 系列（Prompt + Completion），单 y 轴。
-   * 粒度 hour/day/month = display filter。
-   *   - hour: /api/token-curve?granularity=hour（服务端 60 分钟桶 + limit=100000）
-   *         — 不再用 snapshot request_log（limit=50，重流量下只画 ~4 根柱子）
-   *   - day:  __TOKEN_STATS__ 按日（已有 prompt_tokens/generation_tokens 拆分）
-   *   - month: __TOKEN_STATS__ 按月聚合 */
-  function buildTokenData(gran, scope) {
-    if (gran === 'day') return buildTokenDay(scope);
-    if (gran === 'month') return buildTokenMonth(scope);
-    return buildTokenHour(scope);
-  }
+   * 粒度 minute/hour/day/week = display filter，四档统一走端点：
+   *   GET /api/token-curve?granularity=minute|hour|day|week
+   *（服务端分桶：minute=12×5min / hour=24×1h / day=30×1d / week=13×1周；
+   *  token_stats 的 day/月 已弃用 —— 周档只有端点有 90d 数据）。
+   * 响应 {local:[...], cloud:[...]} 双 scope，各桶含 prompt/completion/cached 拆分。 */
+  // 每档桶数 n 与桶宽（ms），与服务端 spec 字典一一对应
+  var _TOKEN_N = { minute: 12, hour: 24, day: 30, week: 13 };
+  var _TOKEN_W = { minute: 5 * 60000, hour: 3600000, day: 86400000, week: 7 * 86400000 };
+  var _tokenCurveInflight = {};   // gran -> true（防并发重复 fetch）
 
-  function buildTokenHour(scope) {
-    // 数据源：/api/token-curve?granularity=hour（服务端 60 桶 + limit=100000）。
-    // 响应含 {local:[...], cloud:[...]} 两个 scope 的桶数组，本地/云端两张图各取一份。
+  function buildTokenData(gran, scope) {
     var now = Date.now();
 
     // 同步返回缓存（命中 TTL）；否则启动异步 fetch 并返回上次缓存或全零（不阻塞渲染）。
-    if (_tokenHourCache && (now - _lastTokenHourFetch) < TOKEN_HOUR_TTL) {
-      return _tokenHourFromBuckets((_tokenHourCache[scope]) || [], now);
+    var hit = _tokenCurveCache[gran];
+    if (hit && (now - hit.at) < TOKEN_CURVE_TTL) {
+      return _tokenFromBuckets(gran, hit.data[scope] || [], now);
     }
-    if (!_tokenHourFetchInflight) {
-      _tokenHourFetchInflight = true;
-      fetch('/api/token-curve?granularity=hour', { cache: 'no-store' })
+    if (!_tokenCurveInflight[gran]) {
+      _tokenCurveInflight[gran] = true;
+      fetch('/api/token-curve?granularity=' + gran, { cache: 'no-store' })
         .then(function (res) {
           if (!res.ok) throw new Error('HTTP ' + res.status);
           return res.json();
         })
         .then(function (data) {
           // 保留 local + cloud 两个 scope（供本地/云端两张图各自取用）
-          _tokenHourCache = data || {};
-          _lastTokenHourFetch = Date.now();
+          _tokenCurveCache[gran] = { data: data || {}, at: now };
         })
         .catch(function (e) {
-          console.warn('[monitor] token-curve fetch failed:', e);
+          console.warn('[monitor] token-curve(' + gran + ') fetch failed:', e);
           // 失败不清缓存（保留下次可用旧值）；无缓存则置空
-          _lastTokenHourFetch = Date.now();
         })
         .then(function () {
-          _tokenHourFetchInflight = false;
+          _tokenCurveInflight[gran] = false;
           if (isMonitorActive()) renderTokenChart();
         });
     }
-    return _tokenHourFromBuckets((_tokenHourCache && _tokenHourCache[scope]) || [], now);
+    return _tokenFromBuckets(gran, (hit && hit.data[scope]) || [], now);
   }
 
-  // 把 token-curve 的 local 桶数组（idx 0=最旧→59=最新）转成图表数据。
-  // 无缓存时返回 60 个零桶（空图 + empty state）。
-  var _tokenHourFetchInflight = false;
-  function _tokenHourFromBuckets(local, now) {
-    var xs = [];
-    var prompt = [];
-    var comp = [];
-    for (var k = 0; k < 60; k++) {
-      var dd = new Date(now - (59 - k) * 60000);
-      xs.push(dd.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }));
-      var b = (local && local[k]) || {};
+  // 把 token-curve 的 scope 桶数组（idx 0=最旧→n-1=最新）转成图表数据。
+  // 无缓存时返回 n 个零桶（空图 + empty state）。
+  function _tokenFromBuckets(gran, buckets, now) {
+    var n = _TOKEN_N[gran] || 24;
+    var w = _TOKEN_W[gran] || 3600000;
+    var xs = [], prompt = [], comp = [];
+    for (var k = 0; k < n; k++) {
+      var end = now - (n - 1 - k) * w;   // 桶结束时刻（最旧桶 = now-(n-1)w，最新桶 = now）
+      xs.push(_tokenGranLabel(gran, end));
+      var b = (buckets && buckets[k]) || {};
       prompt.push(b.prompt || 0);
       comp.push(b.completion || 0);
     }
     return { xs: xs, prompt: prompt, completion: comp };
   }
 
-  /* 按天/按月数据源：优先 store 里的 token_stats（/api/snapshot 每 3s 轮询、
-   * 后端 DB 驱动、引擎无关、双 scope local/cloud），回退到 head 注入的
-   * window.__TOKEN_STATS__（同样双 scope，代理启动时烘焙）。两者都返回
-   * {local:{date:{model:bucket}}, cloud:{...}}。 */
-  function _tokenStatsSource() {
-    var live = store.get('token_stats');
-    if (live && (live.local || live.cloud)) return live;
-    var baked = window.__TOKEN_STATS__;
-    if (baked && (baked.local || baked.cloud)) return baked;
-    return {};
-  }
-
-  function buildTokenDay(scope) {
-    var stats = _tokenStatsSource();
-    var s = stats[scope] || {};
-    var keys = Object.keys(s).sort();
-    if (!keys.length) return { xs: [], prompt: [], completion: [] };
-    var recent = keys.slice(-30);   // 最近 30 天（柱状图标准化为 30 天）
-    var xs = [], prompt = [], comp = [];
-    for (var i = 0; i < recent.length; i++) {
-      var day = recent[i];
-      var models = s[day] || {};
-      var p = 0, c = 0;
-      for (var m in models) {
-        if (!models[m]) continue;
-        p += (models[m].prompt_tokens || 0);
-        c += (models[m].generation_tokens || 0);
-      }
-      // label = MM-DD
-      var label = day.length >= 10 ? day.slice(5) : day;
-      xs.push(label);
-      prompt.push(p);
-      comp.push(c);
-    }
-    return { xs: xs, prompt: prompt, completion: comp };
-  }
-
-  function buildTokenMonth(scope) {
-    var stats = _tokenStatsSource();
-    var s = stats[scope] || {};
-    var keys = Object.keys(s).sort();
-    if (!keys.length) return { xs: [], prompt: [], completion: [] };
-    var months = {};   // YYYY-MM → {p, c}
-    for (var i = 0; i < keys.length; i++) {
-      var day = keys[i];
-      var ym = day.length >= 7 ? day.slice(0, 7) : day;
-      if (!months[ym]) months[ym] = { p: 0, c: 0 };
-      var models = s[day] || {};
-      for (var m in models) {
-        if (!models[m]) continue;
-        months[ym].p += (models[m].prompt_tokens || 0);
-        months[ym].c += (models[m].generation_tokens || 0);
-      }
-    }
-    var mkeys = Object.keys(months).sort();
-    var xs = [], prompt = [], comp = [];
-    for (var j = 0; j < mkeys.length; j++) {
-      xs.push(mkeys[j]);
-      prompt.push(months[mkeys[j]].p);
-      comp.push(months[mkeys[j]].c);
-    }
-    return { xs: xs, prompt: prompt, completion: comp };
+  // 桶标签：minute → HH:mm（桶结束时刻）；hour → HH:00；day/week → MM-DD
+  function _tokenGranLabel(gran, endDate) {
+    var d = new Date(endDate);
+    if (gran === 'minute') return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    if (gran === 'hour') return String(d.getHours()).padStart(2, '0') + ':00';
+    return (d.getMonth() + 1) + '-' + d.getDate();
   }
 
   /* 缓存命中率（Cache Hit Rate）= 缓存命中 prompt tokens / 总 prompt tokens。
    * 双协议统一口径：OpenAI 系取 prompt_tokens_details.cached_tokens（计入
    * prompt_tokens）；Anthropic 系取 cache_read_input_tokens（creation 计入
-   * 总量、不计命中）。窗口随当前粒度：hour → token-curve 60 桶 cached/prompt；
-   * day → 最近 30 天 token_stats；month → 全部 token_stats（30 天留存）。 */
+   * 总量、不计命中）。窗口 = 当前粒度的全部桶（端点响应 cached/prompt 汇总；
+   * 不再用 token_stats 的 30d）。 */
   function _scopeCacheHitRate(scope) {
-    var p = 0, c = 0, i, k;
-    if (_tokenGran === 'hour') {
-      var buckets = (_tokenHourCache && _tokenHourCache[scope]) || [];
-      for (k = 0; k < buckets.length; k++) {
-        var b = buckets[k] || {};
-        p += b.prompt || 0;
-        c += b.cached || 0;
-      }
-      return p > 0 ? c / p : null;
-    }
-    var stats = _tokenStatsSource();
-    var s = stats[scope] || {};
-    var keys = Object.keys(s).sort();
-    if (_tokenGran === 'day') keys = keys.slice(-30);
-    for (i = 0; i < keys.length; i++) {
-      var models = s[keys[i]] || {};
-      for (var m in models) {
-        if (!models[m]) continue;
-        p += models[m].prompt_tokens || 0;
-        c += models[m].prompt_tokens_cached || 0;
-      }
+    var hit = _tokenCurveCache[_tokenGran];
+    var buckets = (hit && hit.data[scope]) || [];
+    var p = 0, c = 0;
+    for (var k = 0; k < buckets.length; k++) {
+      var b = buckets[k] || {};
+      p += b.prompt || 0;
+      c += b.cached || 0;
     }
     return p > 0 ? c / p : null;
   }
@@ -510,8 +436,9 @@
   }
 
   /* ── 3. 模型延迟趋势：时间轴 × 逐模型分色折线（v6.0 取代模型条形双卡）──
-   * 共享控制条：窗口 1h/24h/7d（latwin，单条不再镜像）+ 分位 P50/P50+P95（latq）
-   * + 模型 chip 选择器（≤5 个在用模型，默认全选中；颜色按 rank 定，chip 与图同色）。
+   * 共享控制条：窗口 分钟/小时/天（latwin，minute/hour/day，数据仅 30d 不做周）
+   * + 分位 P50/P50+P95（latq）+ 模型 chip 选择器（≤5 个在用模型，默认全选中；
+   * 颜色按 rank 定，chip 与图同色）。
    * 数据源：GET /api/latency?window=（时间分桶 × 逐模型 TTFT/TPOT 分位，只读 display filter）。 */
 
   /* v6.0: 模型折线 5 色分类调色板（CVD 安全，固定顺序、绝不循环；主题各自校验通过）。
@@ -522,12 +449,13 @@
     light: ['#1f6fd6', '#b45309', '#0e8f7f', '#7c3aed', '#cf4636'],
   };
 
-  var _latWin = '24h';
+  var _latWin = 'hour';            // minute | hour | day（数据仅 30d，无周档）
   var _latQ = 'p50';               // 'p50' | 'p50p95'
   var _latSel = null;              // 选中模型名数组（null=默认全部在用模型）
   var _latCache = {};              // window -> { data, at }
   var _latFetchInflight = {};
-  var _LAT_TTL = { '1h': 300000, '24h': 300000, '7d': 300000 };   // 5min，与后端 _LAT_CACHE_TTL 逐档对齐
+  var _LAT_TTL = { minute: 300000, hour: 300000, day: 300000 };   // 5min，与后端 _LAT_CACHE_TTL 逐档对齐
+  var _latWinText = { minute: '近 60min', hour: '近 24h', day: '近 30 天' };   // 副标题窗口文案
 
   function _modelColors() {
     /* currentTheme 在 IFCharts 命名空间（charts.js 导出）；monitor.js 是 strict IIFE，
@@ -580,7 +508,7 @@
     return i >= 0 ? _modelColors()[i] : '#888';   // 按 rank 定色：chip 与图同色，绝不循环
   }
 
-  function _latBucketLabel(win) { return win === '1h' ? '5min' : (win === '7d' ? '6h' : '1h'); }
+  function _latBucketLabel(win) { return ({ minute: '5min', hour: '1h', day: '1d' })[win] || '1h'; }
 
   function _lowPt(v, n, color) {
     // 低置信（0<n<30）→ 半透明小圆点；n=0/无值 → null（断线）。
@@ -683,8 +611,9 @@
     renderLatChips(seriesObj);
     var bl = _latBucketLabel(_latWin);
     var sub1 = $('monTtftSub'), sub2 = $('monTpotSub'), sub0 = $('monLatSub');
-    if (sub1) sub1.textContent = 'ms · ' + _latWin + ' · 每 ' + bl;
-    if (sub2) sub2.textContent = 'ms/token · ' + _latWin + ' · 每 ' + bl;
+    var winTxt = _latWinText[_latWin] || '近 24h';
+    if (sub1) sub1.textContent = 'ms · ' + winTxt + ' · 每 ' + bl;
+    if (sub2) sub2.textContent = 'ms/token · ' + winTxt + ' · 每 ' + bl;
     if (sub0) sub0.textContent = '时间分桶 · 桶内 ' + (_latQ === 'p50p95' ? 'P50/P95' : 'P50');
     renderLatCard('ttft');
     renderLatCard('tpot');

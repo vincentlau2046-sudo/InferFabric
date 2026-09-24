@@ -30,6 +30,7 @@ from inferfabric.power_stats import (  # noqa: E402
     day_slots,
     hour_slots,
     month_slots,
+    week_slots,
     query_power_series,
 )
 from inferfabric.db import REQUEST_LOG_DB  # noqa: E402
@@ -104,6 +105,21 @@ def test_day_slots_aligned_local_midnight():
     assert slots[-1][0] == _mktime(2026, 9, 23)             # 今天零点
     assert slots[0][0] == _mktime(2026, 9, 23) - 29 * 86400
     assert all(end - start == 86400 for start, end in slots)
+
+
+def test_week_slots_aligned_local_monday():
+    now = _mktime(2026, 9, 23, 14, 0, 0)
+    slots = week_slots(now)
+    assert len(slots) == 13
+    # 每桶恰 7 天；桶起点 = 本地周一 00:00（对齐自然周，非滑动窗口）
+    assert all(end - start == 7 * 86400 for start, end in slots)
+    for start, _ in slots:
+        lt = time.localtime(start)
+        assert (lt.tm_hour, lt.tm_min, lt.tm_sec) == (0, 0, 0)
+        assert lt.tm_wday == 0, "周桶必须本地周一 00:00 对齐"
+    # 末桶 = 本周（部分）：起点 ≤ now < 终点；首桶 = 12 周前周一（13×7d ≈ 91 天，覆盖近 90 天）
+    assert slots[-1][0] <= now < slots[-1][1]
+    assert slots[0][0] == slots[-1][0] - 12 * 7 * 86400
 
 
 def test_month_slots_natural_months():
@@ -192,6 +208,26 @@ def test_query_power_series_day_buckets(tmp_iffdb, monkeypatch):
     assert res["buckets"][-1]["avg_w"] is not None
     assert res["buckets"][0]["avg_w"] is None                    # 29 天前无数据
     assert res["totals"]["count"] == 8
+
+
+def test_query_power_series_week(tmp_iffdb, monkeypatch):
+    now = _mktime(2026, 9, 21, 8, 0, 0)          # 周一
+    monkeypatch.setattr("inferfabric.power_stats.time.time", lambda: now)
+    week_start = _mktime(2026, 9, 21)
+    # 本周 / 上周 / 上上周 各一个样本（样本时刻 = 各自周一起点 + 1h，向过去回退）
+    for i in range(3):
+        tmp_iffdb.insert_gpu_power_samples(
+            [{"ts": week_start - i * 7 * 86400 + 3600, "watts": 500.0 / (i + 1)}])
+    res = query_power_series(tmp_iffdb, "week")
+    assert res["gran"] == "week"
+    assert len(res["buckets"]) == 13
+    assert res["buckets"][-1]["t"] == week_start          # 末桶 = 本周
+    nonempty = [b for b in res["buckets"] if b["avg_w"] is not None]
+    assert len(nonempty) == 3
+    assert res["totals"]["count"] == 3
+    # 累计只增不减、末桶 total 对齐
+    cums = [b["cum_kwh"] for b in res["buckets"]]
+    assert cums == sorted(cums)
 
 
 def test_query_power_series_month(tmp_iffdb, monkeypatch):

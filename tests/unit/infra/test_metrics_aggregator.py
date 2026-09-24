@@ -78,7 +78,7 @@ def test_latency_series_near_zero_tpot_bucket_is_none():
         _Entry("m", ttft=5000.0, dur=5000.35, tout=300, ts=now - 60),  # ≈0.0012 → 排除
         _Entry("m", ttft=6000.0, dur=6000.5, tout=400, ts=now - 30),   # ≈0.0013 → 排除
     ])
-    s = agg.get_latency_series("24h", bucket_ms=3600000)["series"]["m"]
+    s = agg.get_latency_series("hour", bucket_ms=3600000)["series"]["m"]
     assert all(v is None for v in s["tpot_p50"])
     assert all(v == 0 for v in s["tpot_n"])
     # TTFT 序列不受影响（样本有 ttft>0）
