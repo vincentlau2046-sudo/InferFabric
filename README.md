@@ -353,7 +353,7 @@ A macOS-inspired sidebar dashboard for model management, monitoring, and multi-e
 |:---:|:---:|
 | **Overview — GPU metrics + model cards** | **Inference — model lifecycle & engine metrics** |
 | ![Dashboard Overview](docs/screenshots/00-dashboard-overview.png) | ![Inference](docs/screenshots/03-inference.png) |
-| **Metrics & monitoring** | **Cloud providers management** |
+| **Monitor — 统一时间档位三卡（功耗/Token/延迟）** | **Cloud providers management** |
 | ![Metrics](docs/screenshots/04-metrics.png) | ![Cloud Providers](docs/screenshots/02-cloud-providers.png) |
 | **Anomaly detection** | |
 | ![Anomaly](docs/screenshots/05-anomaly.png) | |
@@ -362,7 +362,9 @@ A macOS-inspired sidebar dashboard for model management, monitoring, and multi-e
 - Sidebar navigation（总览/推理/监控/部署/云端/异常）
 - Live status rail: GPU memory · GPU load · GPU temp · VRAM · System memory · CPU
 - Overview: model card grid with macOS-icon-box layout, status badges, start/stop controls, live snapshot freshness (ETag / 304 + TTL single-flight cache)
-- Monitor: **6-KPI 2×3 panel**（KV Cache · Batch Size · Seq Length · TPOT ms · TTFT s · Throughput）, GPU time-series ring buffer (3s sampling), local + cloud token-usage charts standardized to **30-day** bars (day / hour / month granularity)
+- Monitor: **6-KPI 2×3 panel**（KV Cache · Batch Size · Seq Length · TPOT ms · TTFT s · Throughput）, GPU time-series ring buffer (3s sampling)
+- **统一时间单位语义（分钟/小时/天/周，整体弃用 月）**：三张带档位卡按钮同词同序——功耗/电费 小时/天/周（周 = 近 90 天 · 7 天周桶，双轴单网格：左 W 固定 0–600 + 右温度 nice 步长，累计电量/电费逐点直连）；Token 用量 分钟/小时/天/周（60min·12×5min / 24h·24×1h / 30d·30×1d / 90d·13×1周）；模型延迟趋势 分钟/小时/天（60min·12×5min / 24h·24×1h / 30d·30×1d，严格定值桶数）
+- Monitor 三卡：功耗/电费（上）、Token 用量 = 本地/云端双 scope 并排 + Cache Hit Rate 徽标（统一走 `/api/token-curve`）、模型延迟趋势 = TTFT/TPOT 逐桶分位（P50 / P50+P95）双卡，桶内空 → connectNulls
 - **Engine-agnostic token stats**: DB-sourced instead of engine Prometheus counters — works across vLLM / sglang / ninfer; `/api/engine_metrics` route exposes per-model KV cache, batch size, sequence length, latency & throughput
 - **Two-scope token charts**: local engine vs. cloud provider consumption split side-by-side
 - Cloud provider management: CRUD, auto-discover, connection test, API key masked-then-expanded forwarding
@@ -441,7 +443,9 @@ python3 -m inferfabric.proxy.handler --async
 | `GET` | `/metrics` | Prometheus text format (R6) |
 | `GET` | `/api/request_log` | Request log history (R1) |
 | `GET` | `/api/token-stats` | Historical token usage |
-| `GET` | `/api/token-curve` | Token curve data |
+| `GET` | `/api/token-curve` | Token curve data（`?granularity=minute\|hour\|day\|week`，双 scope local/cloud） |
+| `GET` | `/api/power` | GPU 功耗/电费（`?gran=hour\|day\|week`，双轴 W/温度） |
+| `GET` | `/api/latency` | 模型延迟趋势（`?window=minute\|hour\|day`，TTFT/TPOT 逐桶分位） |
 | `GET` | `/api/anomalies` | Structured anomaly events (R9) |
 | `GET` | `/engine_metrics` | Engine-level metrics (with `?model=`) |
 | `GET` | `/watchdog_status` | Watchdog fail counts + running state |
@@ -574,6 +578,7 @@ bash scripts/iff-recovery.sh --full  # Nuclear: SIGKILL all + nvidia-smi -gpu-re
 | v5.6.8 | 2026-09 | **Gateway Hardening**: R1-R10, Prometheus /metrics, AnomalyCollector, silent fallback removal |
 | **v5.8.0** | **2026-09** | **PR-19: Production-grade aiohttp async edge (`--async`)** — hybrid executor model, 7 stream routes with incremental SSE pump, 30+ buffered routes with full header propagation, chunked request body support, 100MB client_max_size, EADDRINUSE retry, systemd sd_notify, C extension wheel rebuild (2.7x perf), dead route cleanup, **path normalization fix**: `/v1/completions`/`/api/chat`/`/api/generate` aliased to `/v1/chat/completions` (engine-type-driven via YAML). |
 | **v6.0.0** | **2026-09** | **Dashboard data-chain engine-agnostic + two-scope** — token stats DB-sourced (no longer vLLM Prometheus-only, works across vLLM/sglang/ninfer); local vs. cloud two-scope token charts; `/api/engine_metrics` route (KV cache / batch size / seq length / TPOT / TTFT / throughput); **6-KPI 2×3 panel** with Batch Size + unified TPOT(ms, 2dp)/TTFT(s, 2dp) units; 30-day standardized bar charts; live snapshot freshness (ETag/304 + TTL single-flight cache); AnomalyCollector tab. |
+| v6.0.x | 2026-09 | **统一 Monitor 三卡时间档位单位语义（分钟/小时/天/周，整体弃用 月）** — 功耗/电费 小时/天/周（周 = 近 90 天 · 7 天周桶，双轴单网格 W 0–600 + 温度 nice 刻度）；Token 用量 分钟/小时/天/周（60min·12×5min / 24h·24×1h / 30d·30×1d / 90d·13×1周，双 scope + Cache Hit Rate）；模型延迟趋势 分钟/小时/天（相对年龄对齐、严格 12/24/30 桶）；`/api/token-curve` 档位重定义，`/api/latency`、`/api/power` 端点就位。 |
 
 ---
 
