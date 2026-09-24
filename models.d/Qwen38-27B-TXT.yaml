@@ -4,7 +4,7 @@ type: ninfer
 gpu_role: exclusive
 model_type: llm
 quantization: NVFP4
-peak_vram_mb: 31000
+peak_vram_mb: 30500
 ninfer:
   served_name: Qwen38-27B-TXT
   weight_path: ~/models/ninfer-nvfp4/qwen3_8_27b_nvfp4.ninfer
