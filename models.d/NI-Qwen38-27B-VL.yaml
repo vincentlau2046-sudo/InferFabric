@@ -4,7 +4,7 @@ type: ninfer
 gpu_role: exclusive
 model_type: vl
 quantization: NVFP4
-peak_vram_mb: 31000
+peak_vram_mb: 30500
 
 ninfer:
   served_name: NI-Qwen38-27B-VL
