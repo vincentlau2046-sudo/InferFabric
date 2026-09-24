@@ -11,7 +11,6 @@ v4.6.2: 启动时从 SQLite request_log.db 回填最近 N 小时数据。
 import collections
 import datetime
 import logging
-import math
 import queue as _queue
 import threading
 import time
@@ -270,8 +269,11 @@ class MetricsAggregator:
                           source_of: dict | None = None) -> dict:
         """时间分桶 × 逐模型 TTFT/TPOT 分位序列（模型延迟趋势图数据源）。
 
-        - 桶起点 = 窗口起点向下取整到桶边界（墙钟对齐），保证不同客户端/刷新
-          拿到同一套桶；桶内无样本 → 该位置 None（前端只桥接中间空桶，首尾空不延伸）。
+        - 严格 n 桶覆盖窗口（n = 窗口/桶宽精确整除）：minute=12×5min、
+          hour=24×1h、day=30×1d——桶数 = 档位定值，不随墙钟多点/少点。
+        - 桶按「相对年龄」锚定 now（同 token-curve）：idx 0 = 最旧（窗口左缘）、
+          idx n-1 = 最新（含 now）；桶内无样本 → 该位置 None（前端只桥接中间
+          空桶，首尾空不延伸）。
         - 仅保留窗口内**有 TTFT 样本的模型**中请求数前 top_n 个（404 unknown_model
           等零数据模型不占位；键序 = 请求数降序 → 名称升序）。
         - 零 schema 变更：TPOT 逐请求推导（同 get_metrics 过滤条件）。
@@ -282,8 +284,8 @@ class MetricsAggregator:
         ws = window_s.get(window, 86400)
         cutoff = now - ws
         bucket_s = max(1.0, bucket_ms / 1000.0)
-        start_bucket = math.floor(cutoff / bucket_s) * bucket_s
-        n_buckets = int((now - start_bucket) / bucket_s) + 1
+        n_buckets = int(ws / bucket_s)          # 定值：12 / 24 / 30
+        start_bucket = now - n_buckets * bucket_s
 
         with self._lock:
             samples = [s for s in self._samples if s.get("timestamp", 0) >= cutoff]
@@ -309,7 +311,8 @@ class MetricsAggregator:
             if m not in top_set:
                 continue
             ts = s.get("timestamp", 0)
-            bi = int((ts - start_bucket) / bucket_s)
+            age_s = now - ts
+            bi = n_buckets - 1 - int(age_s // bucket_s)   # 相对年龄：idx 0 最旧 → n-1 最新
             if bi < 0 or bi >= n_buckets:
                 continue
             cell = cells[(m, bi)]
