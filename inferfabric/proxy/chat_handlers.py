@@ -9,7 +9,7 @@ import time
 import uuid
 import logging
 from inferfabric import forwarder
-from inferfabric.proxy.sse_buffer import SSELineBuffer
+from inferfabric.proxy.sse_buffer import SSELineBuffer, first_token_ttft_cb
 from inferfabric.proxy.request_logger import RequestLog
 from inferfabric.proxy.usage import normalize_usage
 from inferfabric.anomaly_collector import AnomalyEvent
@@ -447,16 +447,19 @@ def _forward_request(handler, pm, target_port, body, stream, model_name="", upst
             handler.send_header("Transfer-Encoding", "chunked")
             handler.send_header("Cache-Control", "no-cache")
             handler.end_headers()
-            # PR-B: TTFT tracking — record time of first chunk
+            # PR-B: TTFT tracking — v6.1 语义 = 首个内容 delta（回调记录，精确到
+            # token）；首 chunk 记录仅作无回调时的兜底（避免在 role-only 前言
+            # chunk 上提前记）
             ttft_recorded = False
-            sse_buf = SSELineBuffer()  # G-1b: SSE usage extractor
+            sse_buf = SSELineBuffer(first_token_ttft_cb(handler))  # G-1b + v6.1
+            use_token_ttft = getattr(sse_buf, "_on_first_token", None) is not None
             try:
                 while True:
                     chunk = resp.read(8192)
                     if not chunk:
                         break
-                    # PR-B: Record TTFT on first data chunk
-                    if not ttft_recorded:
+                    # PR-B: Record TTFT on first data chunk（无回调时兜底）
+                    if not ttft_recorded and not use_token_ttft:
                         ttft_recorded = True
                         if hasattr(handler, '_req_start'):
                             handler._ttft_ms = (time.monotonic() - handler._req_start) * 1000

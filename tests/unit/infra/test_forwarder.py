@@ -371,6 +371,64 @@ class TestForwardToCloud:
         body = mock_send.call_args[0][1]
         assert "hint" in body
 
+    @patch("inferfabric.forwarder.urlopen")
+    @patch("inferfabric.forwarder.send_json")
+    def test_cloud_nonstream_ttft_is_none(self, mock_send, mock_urlopen):
+        """v6.1: 云端非流式成功 → ttft_ms=None（header 到达无首 token 语义，
+        与本地非流式路径一致 → 请求日志 ttft_ms NULL，不进 TPOT 分位）。"""
+        from inferfabric.forwarder import forward_to_cloud
+        h = _make_handler()
+        provider = MagicMock()
+        provider.name = "test"
+        provider.openai_base = "https://api.test.com/v1"
+        provider.timeout = 5
+        cloud = MagicMock()
+        cloud.anthropic_available = True
+        cloud.openai_available = True
+        cloud.model_id = "m-1"
+        resp = MagicMock()
+        resp.status = 200
+        resp.read.return_value = json.dumps(
+            {"choices": [{}], "usage": {"prompt_tokens": 5, "completion_tokens": 10}}
+        ).encode()
+        mock_urlopen.return_value = resp
+
+        result = forward_to_cloud(h, {"model": "m", "stream": False},
+                                  provider, cloud, protocol="openai")
+        assert result.status == 200
+        assert result.ttft_ms is None
+        assert result.duration_ms >= 0.0
+        assert result.usage["completion_tokens"] == 10
+
+    @patch("inferfabric.forwarder.urlopen")
+    @patch("inferfabric.forwarder.send_json")
+    def test_cloud_stream_ttft_from_first_token(self, mock_send, mock_urlopen):
+        """v6.1: 云端流式 → ttft_ms 取自首个内容 token（回调记 handler._ttft_ms），
+        不再用 urlopen 返回（header 到达）时刻。"""
+        from inferfabric.forwarder import forward_to_cloud
+        h = _make_handler()
+        h._req_start = time.monotonic()
+        provider = MagicMock()
+        provider.name = "test"
+        provider.openai_base = "https://api.test.com/v1"
+        provider.timeout = 5
+        cloud = MagicMock()
+        cloud.anthropic_available = True
+        cloud.openai_available = True
+        cloud.model_id = "m-1"
+        resp = MagicMock()
+        resp.status = 200
+        resp.getheader.return_value = None
+        content = b'data: {"choices": [{"delta": {"content": "hi"}}]}\n\n'
+        resp.read.side_effect = [content, b""]
+        mock_urlopen.return_value = resp
+
+        result = forward_to_cloud(h, {"model": "m", "stream": True},
+                                  provider, cloud, protocol="openai")
+        assert result.status == 200
+        assert h._ttft_ms is not None          # 回调在首个 content delta 时设置
+        assert result.ttft_ms == h._ttft_ms    # CloudResult 直接透传该值
+
 
 # ═══════════════════════════════════════════════════════════════
 # 6. pipe_stream_response
@@ -422,6 +480,48 @@ class TestPipeStreamResponse:
 
         # Should not raise
         pipe_stream_response(h, resp)
+
+    def test_ttft_defers_to_first_token_callback(self):
+        """v6.1: sse_buf 挂首 token 回调 → ttft 由回调在首个内容 delta 时记录
+        （首 chunk 兜底让位，不在 role 前言 chunk 上提前记）。"""
+        from inferfabric.forwarder import pipe_stream_response
+        from inferfabric.proxy.sse_buffer import SSELineBuffer, first_token_ttft_cb
+        h = _make_handler()
+        h._req_start = time.monotonic()
+        h._ttft_ms = None
+
+        role = b'data: {"choices": [{"delta": {"role": "assistant"}}]}\n\n'
+        content = b'data: {"choices": [{"delta": {"content": "hi"}}]}\n\n'
+        resp = MagicMock()
+        resp.status = 200
+        resp.getheader.return_value = None
+        resp.read.side_effect = [role, content, b""]
+
+        sse_buf = SSELineBuffer(first_token_ttft_cb(h))
+        pipe_stream_response(h, resp, sse_buf)
+        assert sse_buf.first_token_seen
+        assert h._ttft_ms is not None  # 回调在 content chunk 解析时设置
+
+    def test_ttft_none_when_stream_has_no_content(self):
+        """v6.1: 流只有 role/usage 前言（无内容 delta）→ _ttft_ms 保持 None。"""
+        from inferfabric.forwarder import pipe_stream_response
+        from inferfabric.proxy.sse_buffer import SSELineBuffer, first_token_ttft_cb
+        h = _make_handler()
+        h._req_start = time.monotonic()
+        h._ttft_ms = None
+
+        role = b'data: {"choices": [{"delta": {"role": "assistant"}}]}\n\n'
+        usage = (b'data: {"choices": [{"delta": {}, "finish_reason": "stop"}], '
+                 b'"usage": {"prompt_tokens": 1, "completion_tokens": 1}}\n\n')
+        resp = MagicMock()
+        resp.status = 200
+        resp.getheader.return_value = None
+        resp.read.side_effect = [role, usage, b""]
+
+        sse_buf = SSELineBuffer(first_token_ttft_cb(h))
+        pipe_stream_response(h, resp, sse_buf)
+        assert not sse_buf.first_token_seen
+        assert h._ttft_ms is None
 
 
 # ═══════════════════════════════════════════════════════════════

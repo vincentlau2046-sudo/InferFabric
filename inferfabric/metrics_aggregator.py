@@ -37,10 +37,13 @@ def quantile(data: list[float], q: float) -> float:
     return sorted_data[lo] + frac * (sorted_data[hi] - sorted_data[lo])
 
 
-# 低于此值（ms/token）的 TPOT 四舍五入为 0.00，属无意义值：不统计、当空值处理
-# （桶 → None，前端 connectNulls 亮点直连）。典型来源：非流式 ttft≈duration
-# （header 到达 ≈ 总耗时）时 (duration-ttft) 只剩 body 传输开销（亚 ms 级）。
-TPOT_FLOOR_MS = 0.005
+# 物理下限护栏（ms/token）：低于此值的 TPOT 样本物理上不可能（RTX 5090D 真实
+# decode ~8–18 ms/token），一律当测量伪值排除：不统计、当空值处理（桶 → None，
+# 前端 connectNulls 亮点直连）。典型来源：非流式 ttft≈duration（header 到达 ≈
+# 总耗时）、引擎缓冲后冲刷时 ttft 贴近 duration → (duration-ttft) 只剩亚 ms 级
+# 传输开销（历史伪值 0.2ms/token ≈ 8k–50M t/s 即此类）。
+# v6.1: 0.005 → 1.0（相对真实 decode 留 ~8× 安全裕度，伪值 0.2 < 1.0 被排除）。
+TPOT_FLOOR_MS = 1.0
 
 
 def _tpot_of(sample: dict) -> float | None:
@@ -57,6 +60,19 @@ def _tpot_of(sample: dict) -> float | None:
               / ((sample.get("tokens_out") or 0) - 1))
         if tp >= TPOT_FLOOR_MS:
             return tp
+    return None
+
+
+def _e2e_tps_of(sample: dict) -> float | None:
+    """v6.1: 逐请求 E2E 端到端速率（tokens/s）= tokens_out / (duration_ms/1000)。
+
+    不依赖 ttft_ms — 流式/非流式通用，不受 ttft 语义伪值影响；
+    排除失败（status>=400）/ 零时长 / 零输出样本。
+    """
+    if (sample["status"] < 400
+            and sample.get("duration_ms") and sample["duration_ms"] > 0
+            and (sample.get("tokens_out") or 0) >= 1):
+        return (sample["tokens_out"] or 0) / (sample["duration_ms"] / 1000.0)
     return None
 
 
@@ -176,7 +192,8 @@ class MetricsAggregator:
         """
         now = time.time()
         window_s = {"1h": 3600, "24h": 86400, "7d": 604800, "all": float("inf")}
-        cutoff = now - window_s.get(window, 86400)
+        win = window_s.get(window, 86400)
+        cutoff = now - win
 
         with self._lock:
             samples = [s for s in self._samples if s.get("timestamp", 0) >= cutoff]
@@ -255,6 +272,20 @@ class MetricsAggregator:
                 m["tpot_p50"] = round(median(tpots), 2)
                 m["tpot_p95"] = round(quantile(tpots, 0.95), 2)
                 m["tpot_p99"] = round(quantile(tpots, 0.99), 2)
+
+            # v6.1: E2E 端到端速率（tok/s，逐请求派生后取分位；ttft 无关，
+            # 流式/非流式通用 — 监控 KPI 第 7 卡）
+            e2es = [e for s in msamples if (e := _e2e_tps_of(s)) is not None]
+            m["e2e_tps_samples"] = len(e2es)
+            if e2es:
+                m["e2e_tps_p50"] = round(median(e2es), 1)
+                m["e2e_tps_p95"] = round(quantile(e2es, 0.95), 1)
+
+            # v6.1: 请求速率 + 平均输出长度（监控 KPI 第 8/9 卡；window="all"
+            # 时 win=inf → rps=0.0 占位）。rps 留 6 位小数保精度（24h 个位数
+            # 请求 → ~3e-05，4 位会全 0）。
+            m["rps"] = round(len(msamples) / win, 6)
+            m["avg_out_len"] = round(tokens_out / max(len(msamples), 1), 1)
 
             result["models"][model] = m
             result["cost_yuan"] += cost

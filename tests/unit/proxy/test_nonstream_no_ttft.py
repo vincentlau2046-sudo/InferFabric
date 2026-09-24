@@ -5,7 +5,8 @@
 → 四舍五入 0.0，污染模型延迟趋势（0ms 值）。
 
 契约：非流式成功路径不设置 handler._ttft_ms（保持 None → 请求日志 ttft_ms NULL）；
-流式路径回归守卫 —— 仍在首 chunk 记录 TTFT。
+流式路径回归守卫 —— v6.1 起 TTFT 记在「首个内容 delta」（SSELineBuffer 首 token
+回调），而非首个 chunk（role-only / message_start 前言 chunk 不算 token）。
 """
 import sys
 import time
@@ -94,9 +95,33 @@ def test_nonstream_success_does_not_record_ttft():
 
 
 def test_stream_still_records_ttft():
-    """回归守卫：流式路径仍在首 chunk 记录 TTFT。"""
+    """回归守卫：流式路径仍记录 TTFT（v6.1 起 = 首个内容 delta 时刻）。"""
     chunks = [b'data: {"delta": {"content": "hi"}}\n\n', b"data: [DONE]\n\n"]
     h = _H()
     ok = chat_handlers._forward_request(h, _pm(_FakeResp(chunks)), 8003, b"{}", True, model_name="m")
     assert ok is True
     assert h._ttft_ms is not None and h._ttft_ms >= 0
+
+
+def test_stream_ttft_at_first_content_not_first_chunk():
+    """v6.1: TTFT 落在首个内容 delta，不在首个（role-only 前言）chunk。"""
+    role_chunk = b'data: {"choices": [{"delta": {"role": "assistant"}}]}\n\n'
+    content_chunk = b'data: {"choices": [{"delta": {"content": "hi"}}]}\n\n'
+    chunks = [role_chunk, content_chunk, b"data: [DONE]\n\n"]
+    h = _H()
+    ok = chat_handlers._forward_request(h, _pm(_FakeResp(chunks)), 8003, b"{}", True, model_name="m")
+    assert ok is True
+    # 回调在 content chunk 解析时触发 → _ttft_ms 被设置（值 ≥ 0，距 _req_start 很小）
+    assert h._ttft_ms is not None and h._ttft_ms >= 0
+
+
+def test_stream_without_content_keeps_ttft_none():
+    """流里只有 role/usage 前言、无内容 delta → 不记 TTFT（保持 None）。"""
+    role_chunk = b'data: {"choices": [{"delta": {"role": "assistant"}}]}\n\n'
+    usage_chunk = (b'data: {"choices": [{"delta": {}, "finish_reason": "stop"}], '
+                   b'"usage": {"prompt_tokens": 5, "completion_tokens": 0}}\n\n')
+    h = _H()
+    ok = chat_handlers._forward_request(h, _pm(_FakeResp([role_chunk, usage_chunk, b"data: [DONE]\n\n"])),
+                                        8003, b"{}", True, model_name="m")
+    assert ok is True
+    assert getattr(h, "_ttft_ms", None) is None

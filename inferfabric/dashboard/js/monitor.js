@@ -619,10 +619,12 @@
     renderLatCard('tpot');
   }
 
-  /* ── 4. 六联 KPI（2 行 × 3 列）──
-   * GET /api/engine_metrics?model=<active> → kv_cache_usage_perc /
+  /* ── 4. 九联 KPI（3 行 × 3 列）──
+   * 前 6 卡：GET /api/engine_metrics?model=<active> → kv_cache_usage_perc /
    * running_batch(live 在途并发, 0..max_batch) / seq_length /
-   * tpot_seconds.mean(→ms) / ttft_seconds.mean(→s) / throughput */
+   * tpot_seconds.mean(→ms) / ttft_seconds.mean(→s) / throughput
+   * 后 3 卡（v6.1）：store.get('metrics_24h')（request_log 聚合器，3s 快照轮询
+   * 已灌入，无新端点）→ E2E tok/s（P50）/ Req Rate（RPS）/ Avg Out Len */
   function kpiTile(label, val, tip) {
     return '<div class="kpi" title="' + escHtml(tip) + '">' +
       '<span class="kpi-label">' + escHtml(label) + '</span>' +
@@ -654,6 +656,15 @@
     var ttft = data.ttft_seconds;
     var thr = data.throughput;
 
+    // v6.1: 新增 3 卡来自 request_log 聚合器（metrics_24h 随 3s 快照灌入 store，
+    // 无需新端点）；键 = active 模型名（与 engine_metrics 同源），缺键/无数据 → "—"。
+    // 与引擎 6 卡数据源解耦：引擎卡走 _engineCache TTL，新 3 卡随快照刷新。
+    var m24 = (store.get('metrics_24h') || {}).models || {};
+    var mm = m24[_engineModel] || {};
+    var e2e = mm.e2e_tps_p50;      // E2E tok/s（P50）
+    var rps = mm.rps;              // 24h 窗口请求速率
+    var avgOut = mm.avg_out_len;   // 单请求平均输出长度
+
     // 单位统一：TPOT → ms（2 位小数）；TTFT → 秒 s（2 位小数）。
     // Batch Size = 在途并发请求数的「最近 20 条非零采样平均」（live 值，跳过 idle 0 采样，
     // 避免单点跌 0 / 被零值拉低；上限 max_batch），非累计完成数。
@@ -672,6 +683,12 @@
           'Time To First Token — 首 token 延迟（秒，保留 2 位）') +
         kpiTile('Throughput', thr != null ? UI.fmtNum(Math.round(thr)) + ' tok/s' : '—',
           'EMA 平滑吞吐（tokens/s）') +
+        kpiTile('E2E tok/s', e2e != null ? Number(e2e).toFixed(1) : '—',
+          '端到端速率 P50 = 输出 tokens ÷ 请求总时长（24h 窗口；不依赖 TTFT，流式/非流式通用）') +
+        kpiTile('Req Rate', rps != null ? Number(rps).toFixed(4) + ' req/s' : '—',
+          '请求速率 RPS = 24h 窗口请求数 ÷ 窗口秒数') +
+        kpiTile('Avg Out Len', avgOut != null ? UI.fmtNum(avgOut) + ' tok' : '—',
+          '单请求平均输出长度（tokens，24h 窗口）') +
       '</div>';
   }
 

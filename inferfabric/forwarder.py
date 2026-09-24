@@ -19,7 +19,7 @@ from inferfabric.config import (
     exponential_backoff,
     should_retry_on_status,
 )
-from inferfabric.proxy.sse_buffer import SSELineBuffer
+from inferfabric.proxy.sse_buffer import SSELineBuffer, first_token_ttft_cb
 from inferfabric.proxy.usage import normalize_usage
 
 
@@ -113,6 +113,11 @@ def pipe_stream_response(handler, resp, sse_buf=None):
     handler.send_header("Transfer-Encoding", "chunked")
     handler.end_headers()
     # PR-B: TTFT — 仅在 handler 携带 _req_start 时记录（本地路径）
+    # v6.1: sse_buf 挂有首 token 回调时，ttft 以回调为准（首个内容 delta 时刻，
+    # 精确到 token）；首 chunk 记录仅作无回调时的兜底（避免在 role / message_start
+    # 前言 chunk 上提前记）
+    use_token_ttft = (sse_buf is not None
+                      and getattr(sse_buf, "_on_first_token", None) is not None)
     ttft_recorded = False
     try:
         while True:
@@ -120,7 +125,7 @@ def pipe_stream_response(handler, resp, sse_buf=None):
             if not chunk:
                 break
             try:
-                if not ttft_recorded:
+                if not ttft_recorded and not use_token_ttft:
                     ttft_recorded = True
                     if hasattr(handler, '_req_start'):
                         handler._ttft_ms = (time.monotonic() - handler._req_start) * 1000
@@ -241,7 +246,6 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
         try:
             req = Request(url, data=body, headers=headers, method="POST")
             resp = urlopen(req, timeout=provider_cfg.timeout)
-            first_byte_time = time.monotonic()
 
             # Retryable status (429/5xx) → close and backoff
             if should_retry_on_status(resp.status) and attempt < max_retries - 1:
@@ -255,12 +259,14 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
                 continue
 
             if was_stream:
-                sse_buf = SSELineBuffer()
+                # v6.1: TTFT = 首个内容 token（回调记 handler._ttft_ms），
+                # 不再用 HTTP header 到达时刻（header 早于 prefill 完成，语义错误）
+                sse_buf = SSELineBuffer(first_token_ttft_cb(handler))
                 pipe_stream_response(handler, resp, sse_buf)
                 return CloudResult(
                     status=200,
                     usage=dict(sse_buf.usage),
-                    ttft_ms=(first_byte_time - start) * 1000,
+                    ttft_ms=getattr(handler, "_ttft_ms", None),
                     duration_ms=(time.monotonic() - start) * 1000,
                 )
             else:
@@ -271,10 +277,12 @@ def forward_to_cloud(handler, data, provider_cfg, cloud_model, protocol="openai"
                 # 双协议归一化（含缓存命中拆分）— CloudResult.usage 携带
                 # prompt_tokens / prompt_tokens_cached / completion_tokens
                 usage = normalize_usage(result.get("usage", {}))
+                # v6.1: 非流式无「首 token」语义（header 到达 ≈ 总耗时），
+                # 保持 ttft None（→ 请求日志 ttft_ms NULL，与本地非流式路径一致）
                 return CloudResult(
                     status=200,
                     usage=usage,
-                    ttft_ms=(first_byte_time - start) * 1000,
+                    ttft_ms=None,
                     duration_ms=(time.monotonic() - start) * 1000,
                 )
         except _HTTPError as e:
@@ -361,7 +369,9 @@ def forward_anthropic_local(handler, pm, data, auth_header, model_obj, original_
             if was_stream:
                 # G-1b: 旁路观察 Anthropic SSE 事件提取 usage（message_start 的
                 # message.usage.input_tokens + message_delta 的 usage.output_tokens）
-                sse_buf = SSELineBuffer()
+                # v6.1: 首 token 回调 — TTFT 记首个 content_block_delta 时刻
+                # （message_start 是 metadata 前言，不算 token）
+                sse_buf = SSELineBuffer(first_token_ttft_cb(handler))
                 pipe_stream_response(handler, resp, sse_buf)
                 handler._usage = dict(sse_buf.usage)
             else:

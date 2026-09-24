@@ -295,3 +295,83 @@ class TestSSELineBufferCacheFields:
         buf.flush()
         assert buf.usage["prompt_tokens"] == 1000
         assert buf.usage["prompt_tokens_cached"] == 800
+
+
+class TestFirstTokenDetection:
+    """v6.1: 首 token 检测（first_token_seen + on_first_token 回调）。
+
+    判据：首个「带内容 delta」事件触发一次 —
+    OpenAI choices[0].delta.content / reasoning_content、
+    Anthropic delta.text / thinking、顶层 delta.content；
+    role-only / message_start / usage-only / [DONE] 均不触发。
+    """
+
+    def test_openai_role_preamble_does_not_trigger(self):
+        """role-only 前言 chunk 不触发（TTFT 不应记在首个 chunk 上）。"""
+        calls = []
+        buf = SSELineBuffer(calls.append)
+        buf.feed(_sse_chunk({"choices": [{"delta": {"role": "assistant"}}]}))
+        assert not buf.first_token_seen
+        assert calls == []
+
+    def test_openai_delta_content_triggers_once(self):
+        """首个 content delta 触发一次；后续 content 不再触发。"""
+        calls = []
+        buf = SSELineBuffer(calls.append)
+        buf.feed(_sse_chunk({"choices": [{"delta": {"role": "assistant"}}]}))
+        buf.feed(_sse_chunk(_content_chunk("hi")))
+        assert buf.first_token_seen
+        assert len(calls) == 1
+        assert isinstance(calls[0], float)
+        buf.feed(_sse_chunk(_content_chunk(" there")))
+        assert len(calls) == 1
+
+    def test_openai_reasoning_content_triggers(self):
+        """reasoning_content（thinking 模型先流式推理）也算首个内容 token。"""
+        calls = []
+        buf = SSELineBuffer(calls.append)
+        buf.feed(_sse_chunk({"choices": [{"delta": {"reasoning_content": "..."}}]}))
+        assert buf.first_token_seen and len(calls) == 1
+
+    def test_top_level_delta_content_triggers(self):
+        """顶层 delta.content（非 choices 包裹形态）也识别。"""
+        calls = []
+        buf = SSELineBuffer(calls.append)
+        buf.feed(b'data: {"delta": {"content": "hi"}}\n\n')
+        assert buf.first_token_seen and len(calls) == 1
+
+    def test_anthropic_text_delta_triggers(self):
+        """Anthropic message_start 是前言；content_block_delta 才触发。"""
+        calls = []
+        buf = SSELineBuffer(calls.append)
+        buf.feed(b"event: message_start\ndata: " + json.dumps({
+            "type": "message_start",
+            "message": {"id": "m", "usage": {"input_tokens": 10}},
+        }).encode() + b"\n\n")
+        assert not buf.first_token_seen
+        buf.feed(b"event: content_block_delta\ndata: " + json.dumps({
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": "hi"},
+        }).encode() + b"\n\n")
+        assert buf.first_token_seen and len(calls) == 1
+
+    def test_usage_only_and_done_do_not_trigger(self):
+        """usage-only 事件（空 delta）+ [DONE] 不触发。"""
+        calls = []
+        buf = SSELineBuffer(calls.append)
+        buf.feed(_sse_chunk(_usage_chunk(10, 20)))
+        buf.feed(_sse_done())
+        buf.flush()
+        assert not buf.first_token_seen
+        assert calls == []
+
+    def test_no_callback_only_tracks_flag(self):
+        """不传回调：仅维护 first_token_seen，usage 行为不变。"""
+        buf = SSELineBuffer()
+        buf.feed(_sse_chunk(_content_chunk("hi")))
+        buf.feed(_sse_chunk(_usage_chunk(15, 7)))
+        buf.feed(_sse_done())
+        buf.flush()
+        assert buf.first_token_seen is True
+        assert buf.usage["prompt_tokens"] == 15
+        assert buf.usage["completion_tokens"] == 7

@@ -63,7 +63,7 @@ def test_tpot_excludes_nonstream_short_and_failed():
 def test_tpot_floor_excludes_near_zero():
     """近零 TPOT（非流式 ttft≈duration → gap 极小）是无意义值：不统计、当空值处理。"""
     agg = _agg_with([
-        _Entry("m", ttft=5000.0, dur=5000.5, tout=300),   # 0.5/299 ≈ 0.0017 < 0.005 → 排除
+        _Entry("m", ttft=5000.0, dur=5000.5, tout=300),   # 0.5/299 ≈ 0.0017 < 1.0 → 排除
         _Entry("m", ttft=1000.0, dur=1030.0, tout=3),     # 30/2 = 15.0 → 保留
     ])
     m = agg.get_metrics("24h")["models"]["m"]
@@ -138,3 +138,61 @@ def test_window_cutoff_unchanged():
     m1h = agg.get_metrics("1h")["models"]["m"]
     assert m1h["requests"] == 1
     assert m1h["ttft_p50"] == 200.0
+
+
+def test_e2e_tps_derivation():
+    """v6.1: E2E 端到端速率 = tokens_out/(duration_ms/1000)，不依赖 ttft（流式/非流式通用）。"""
+    agg = _agg_with([
+        _Entry("m", ttft=1000.0, dur=4000.0, tout=40),   # 40/4s = 10
+        _Entry("m", ttft=None, dur=2000.0, tout=20),     # 无 ttft 也可算：20/2s = 10
+    ])
+    m = agg.get_metrics("24h")["models"]["m"]
+    assert m["e2e_tps_samples"] == 2
+    assert m["e2e_tps_p50"] == 10.0
+    assert m["e2e_tps_p95"] == 10.0
+
+
+def test_e2e_tps_excludes_failed_zero_duration_and_no_tokens():
+    """失败 / 零时长 / 零输出样本不进 E2E 分位。"""
+    agg = _agg_with([
+        _Entry("m", status=500, dur=1000.0, tout=10),   # 失败 → 排除
+        _Entry("m", dur=0.0, tout=10),                   # 零时长 → 排除
+        _Entry("m", dur=1000.0, tout=0),                 # 零输出 → 排除
+        _Entry("m", ttft=100.0, dur=1000.0, tout=10),   # 10/1s = 10 → 保留
+    ])
+    m = agg.get_metrics("24h")["models"]["m"]
+    assert m["e2e_tps_samples"] == 1
+    assert m["e2e_tps_p50"] == 10.0
+
+
+def test_rps_and_avg_out_len():
+    """v6.1: rps = 请求数/窗口秒（24h=86400）；avg_out_len = Σtokens_out/请求数。"""
+    n = 864  # 24h 内 864 请求 → 0.01 req/s
+    agg = _agg_with([_Entry("m", ttft=100.0, dur=1000.0, tout=10) for _ in range(n)])
+    m = agg.get_metrics("24h")["models"]["m"]
+    assert m["requests"] == n
+    assert m["rps"] == 0.01
+    assert m["avg_out_len"] == 10.0
+
+
+def test_rps_zero_padding_and_all_window():
+    """无请求 axis 模型 → rps/avg_out_len 零占位；window="all"（win=inf）→ rps=0.0。"""
+    agg = _agg_with([_Entry("m", ttft=100.0, dur=1000.0, tout=10)])
+    res = agg.get_metrics("24h", axis_models=[("m", "local"), ("beta", "cloud")])
+    beta = res["models"]["beta"]
+    assert beta["rps"] == 0.0
+    assert beta["avg_out_len"] == 0.0
+    assert "e2e_tps_p50" not in beta
+    assert agg.get_metrics("all")["models"]["m"]["rps"] == 0.0
+
+
+def test_tpot_floor_1ms_excludes_artifacts():
+    """v6.1: floor 0.005→1.0 — 历史 0.2–0.3ms/token 伪值（8k–50M t/s 级）被排除，
+    真实 decode（~47ms/token）保留。"""
+    agg = _agg_with([
+        _Entry("m", ttft=4900.0, dur=5000.0, tout=300),   # 100/299 ≈ 0.33 < 1.0 → 伪值排除
+        _Entry("m", ttft=1000.0, dur=15200.0, tout=300),  # 14200/299 ≈ 47.49 → 保留
+    ])
+    m = agg.get_metrics("24h")["models"]["m"]
+    assert m["tpot_samples"] == 1
+    assert m["tpot_p50"] == 47.49
