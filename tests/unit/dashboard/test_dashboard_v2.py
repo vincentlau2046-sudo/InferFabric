@@ -548,9 +548,15 @@ def test_monitor_token_dual_cards():
     # 6. 累积线颜色跨卡一致：Token 累积线显式钉 palette[1] 琥珀（_cumColor），
     #    对齐功耗卡「累计电量」线。回归防护——累积线是第 3 个 series，不钉色时
     #    ECharts 按序取 palette[2]（青），与功耗卡琥珀脱节。
+    #    钉色三处：lineStyle.color（线描边，面积自动继承）+ itemStyle.color（符号点）。
+    #    只钉 itemStyle 会留下「青线 + 琥珀点」——线描边仍走自动 palette[2]。
     assert "_cumColor" in js, "token cumulative line must pin color via _cumColor()"
     assert _re.search(r"p\[1\]\s*\|\|\s*'#b45309'", js), (
         "_cumColor must return palette index 1 (amber #b45309, matches power card)"
+    )
+    assert _re.search(r"lineStyle:\s*\{\s*color:\s*_cumColor\(\)\s*\}", js), (
+        "token cumulative line must pin lineStyle.color (line stroke) — "
+        "itemStyle alone leaves the line stroke on auto palette[2] cyan"
     )
     assert _re.search(r"itemStyle:\s*\{\s*color:\s*_cumColor\(\)\s*\}", js), (
         "token cumulative line series must carry itemStyle.color=_cumColor()"

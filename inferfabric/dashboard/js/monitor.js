@@ -436,7 +436,10 @@
    * 自动取 palette[2]（青），与功耗卡琥珀不一致。此处显式引用 palette[1]，
    * 让「累积/存量」这一语义跨卡（功耗↔Token）用同一色号（锚点=功耗卡累积线）。
    * dark/light 调色板 index 1 同为琥珀 #b45309（主题无关），仍走 palette 取色
-   * 以守「系列色固定为调色板顺序、不硬编码」铁律。 */
+   * 以守「系列色固定为调色板顺序、不硬编码」铁律。
+   * 钉色三处：lineStyle.color（线描边）+ itemStyle.color（符号点）；
+   * areaStyle 仅给 opacity 不设 color → ECharts 自动用 lineStyle.color 填充面积
+   * （实测：设 lineStyle.color 后面积区像素 cyan=0、全琥珀）。 */
   function _cumColor() {
     var pal = IFCharts && IFCharts.palettes;
     var th = (IFCharts && typeof IFCharts.currentTheme === 'function')
@@ -533,7 +536,8 @@
           { type: 'bar', name: 'Completion', stack: 'tok', yAxisIndex: 0,
             data: data.completion, barWidth: '55%', z: 2 },
           { type: 'line', name: sc.cumName, yAxisIndex: 1, data: cumPts, z: 3,
-            itemStyle: { color: _cumColor() },   // 钉琥珀：对齐功耗卡累计线（palette[1]）
+            lineStyle: { color: _cumColor() },   // 线描边钉琥珀（面积自动继承）
+            itemStyle: { color: _cumColor() },   // 符号点钉琥珀：对齐功耗卡累计线（palette[1]）
             areaStyle: { opacity: 0.08 } },
         ],
       }, { dualAxis: true });
