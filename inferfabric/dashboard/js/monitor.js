@@ -431,21 +431,33 @@
     return '¥' + s.replace(/0+$/, '').replace(/\.$/, '');
   }
 
-  /* 右轴「累积」线颜色：对齐功耗卡「累计电量」线 = 调色板 [1] 琥珀。
-   * Token 双卡的累积线是第 3 个 series，不显式钉色时 ECharts 按 series 顺序
-   * 自动取 palette[2]（青），与功耗卡琥珀不一致。此处显式引用 palette[1]，
-   * 让「累积/存量」这一语义跨卡（功耗↔Token）用同一色号（锚点=功耗卡累积线）。
-   * dark/light 调色板 index 1 同为琥珀 #b45309（主题无关），仍走 palette 取色
-   * 以守「系列色固定为调色板顺序、不硬编码」铁律。
-   * 钉色三处：lineStyle.color（线描边）+ itemStyle.color（符号点）；
-   * areaStyle 仅给 opacity 不设 color → ECharts 自动用 lineStyle.color 填充面积
-   * （实测：设 lineStyle.color 后面积区像素 cyan=0、全琥珀）。 */
-  function _cumColor() {
+  /* 调色板取色（house 铁律：系列色固定为调色板顺序、不硬编码）。
+   * dark/light 各 4 色 CVD 调色板（蓝→琥珀→青→紫）；取当前主题第 i 色。
+   *
+   * 统一色系规则（v6.5，跨卡语义→色号映射）：
+   *   「累积/存量」线（功耗卡「累计电量」+ Token 双卡「累计 Token/累计费用」）
+   *     = palette[1] 琥珀，锚点 = 功耗卡累计线（其第 2 个 series，自然顺位）；
+   *     不显式钉色时 ECharts 按 series 顺序自动取色，Token 双卡的累积线是
+   *     第 3 个 series 会被顺位取成青，与功耗卡琥珀不一致，故显式钉 amber。
+   *   「分量/流速」柱（Token 双卡 Prompt/Completion 堆叠柱）
+   *     = palette[2] 青（Prompt）+ palette[3] 紫（Completion）——把琥珀槽位
+   *     让给累计线，避免柱与线同色；青↔紫相邻对 dark/light 均过 CVD 校验
+   *     （ΔE 正常视力 24.5 / deutan 15.0，validate_palette.js ALL PASS）。
+   *   功耗卡「平均功耗」柱 = 第 1 个 series，自然顺位 palette[0] 蓝，不显式钉。 */
+  function _paletteColor(i, fallback) {
     var pal = IFCharts && IFCharts.palettes;
     var th = (IFCharts && typeof IFCharts.currentTheme === 'function')
       ? IFCharts.currentTheme() : 'dark';
     var p = (pal && pal[th]) || (pal && pal.dark) || [];
-    return p[1] || '#b45309';
+    return p[i] || fallback;
+  }
+
+  /* 「累积/存量」线色 = palette[1] 琥珀：跨卡（功耗↔Token）对齐。
+   * 钉色三处：lineStyle.color（线描边）+ itemStyle.color（符号点）；
+   * areaStyle 仅给 opacity 不设 color → ECharts 自动用 lineStyle.color 填充面积
+   * （实测：设 lineStyle.color 后面积区像素 cyan=0、全琥珀）。 */
+  function _cumColor() {
+    return _paletteColor(1, '#b45309');
   }
 
   /* Token 双卡 tooltip：柱 = 每桶 Prompt/Completion（token 量），
@@ -532,9 +544,11 @@
         legend: { data: ['Prompt', 'Completion', sc.cumName] },
         series: [
           { type: 'bar', name: 'Prompt', stack: 'tok', yAxisIndex: 0,
-            data: data.prompt, barWidth: '55%', z: 2 },
+            data: data.prompt, barWidth: '55%', z: 2,
+            itemStyle: { color: _paletteColor(2, '#0891b2') } }, // 分量柱=青[2]：琥珀[1] 让给累计线
           { type: 'bar', name: 'Completion', stack: 'tok', yAxisIndex: 0,
-            data: data.completion, barWidth: '55%', z: 2 },
+            data: data.completion, barWidth: '55%', z: 2,
+            itemStyle: { color: _paletteColor(3, '#7c3aed') } }, // 分量柱=紫[3]
           { type: 'line', name: sc.cumName, yAxisIndex: 1, data: cumPts, z: 3,
             lineStyle: { color: _cumColor() },   // 线描边钉琥珀（面积自动继承）
             itemStyle: { color: _cumColor() },   // 符号点钉琥珀：对齐功耗卡累计线（palette[1]）
