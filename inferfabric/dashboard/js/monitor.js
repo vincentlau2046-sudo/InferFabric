@@ -431,6 +431,20 @@
     return '¥' + s.replace(/0+$/, '').replace(/\.$/, '');
   }
 
+  /* 右轴「累积」线颜色：对齐功耗卡「累计电量」线 = 调色板 [1] 琥珀。
+   * Token 双卡的累积线是第 3 个 series，不显式钉色时 ECharts 按 series 顺序
+   * 自动取 palette[2]（青），与功耗卡琥珀不一致。此处显式引用 palette[1]，
+   * 让「累积/存量」这一语义跨卡（功耗↔Token）用同一色号（锚点=功耗卡累积线）。
+   * dark/light 调色板 index 1 同为琥珀 #b45309（主题无关），仍走 palette 取色
+   * 以守「系列色固定为调色板顺序、不硬编码」铁律。 */
+  function _cumColor() {
+    var pal = IFCharts && IFCharts.palettes;
+    var th = (IFCharts && typeof IFCharts.currentTheme === 'function')
+      ? IFCharts.currentTheme() : 'dark';
+    var p = (pal && pal[th]) || (pal && pal.dark) || [];
+    return p[1] || '#b45309';
+  }
+
   /* Token 双卡 tooltip：柱 = 每桶 Prompt/Completion（token 量），
    * 折线 = 累积（对象式点位需解包 value）；云端累积以 ¥ 显示。 */
   function _tokenTooltip(sc) {
@@ -519,6 +533,7 @@
           { type: 'bar', name: 'Completion', stack: 'tok', yAxisIndex: 0,
             data: data.completion, barWidth: '55%', z: 2 },
           { type: 'line', name: sc.cumName, yAxisIndex: 1, data: cumPts, z: 3,
+            itemStyle: { color: _cumColor() },   // 钉琥珀：对齐功耗卡累计线（palette[1]）
             areaStyle: { opacity: 0.08 } },
         ],
       }, { dualAxis: true });

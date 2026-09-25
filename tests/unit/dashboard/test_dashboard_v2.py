@@ -545,6 +545,16 @@ def test_monitor_token_dual_cards():
     assert js.count("position: 'right'") >= 3, (
         "cumulative right axis (position:'right') must appear on power (2) + token (1)"
     )
+    # 6. 累积线颜色跨卡一致：Token 累积线显式钉 palette[1] 琥珀（_cumColor），
+    #    对齐功耗卡「累计电量」线。回归防护——累积线是第 3 个 series，不钉色时
+    #    ECharts 按序取 palette[2]（青），与功耗卡琥珀脱节。
+    assert "_cumColor" in js, "token cumulative line must pin color via _cumColor()"
+    assert _re.search(r"p\[1\]\s*\|\|\s*'#b45309'", js), (
+        "_cumColor must return palette index 1 (amber #b45309, matches power card)"
+    )
+    assert _re.search(r"itemStyle:\s*\{\s*color:\s*_cumColor\(\)\s*\}", js), (
+        "token cumulative line series must carry itemStyle.color=_cumColor()"
+    )
 
 
 def test_monitor_latency_cards():
