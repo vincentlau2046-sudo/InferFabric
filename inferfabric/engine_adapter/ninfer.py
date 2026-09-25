@@ -148,8 +148,8 @@ class NInferAdapter(EngineAdapter):
         if run_samples:
             r["running_batch"] = round(sum(run_samples[-20:]) / len(run_samples[-20:]), 1)
         # 权威引擎值：NInfer 引擎 GET /metrics（Prometheus 文本）经共享 VllmMetricsCollector
-        # （prefix="ninfer_"）取 KV / running batch / 吞吐（EMA）。有值即覆盖上面的日志兜底；
-        # 旧镜像或 /metrics 不可达时静默回退到日志派生值（KV 缺省，与今日一致）。
+        # （prefix="ninfer_"）取 KV / running batch / 吞吐（EMA）+ 直方图派生的 seq/TTFT/TPOT。
+        # 有值即覆盖上面的日志兜底；旧镜像（无直方图）或 /metrics 不可达时静默回退日志派生值。
         try:
             from urllib.request import urlopen
             from inferfabric.prometheus import VllmMetricsCollector, parse_prometheus_text
@@ -157,7 +157,10 @@ class NInferAdapter(EngineAdapter):
                 text = resp.read().decode("utf-8")
             gauges, counters, histos = parse_prometheus_text(text)
             engine_r = VllmMetricsCollector.compute(cfg.port, gauges, counters, histos, prefix="ninfer_")
-            for k in ("kv_cache_usage_perc", "running_batch", "throughput", "throughput_inst", "throughput_cum_n"):
+            for k in ("kv_cache_usage_perc", "running_batch", "throughput", "throughput_inst",
+                      "throughput_cum_n", "ttft_seconds", "ttft_cum_mean", "ttft_cum_n",
+                      "tpot_seconds", "tpot_cum_mean", "tpot_cum_n", "seq_length", "seq_prompt",
+                      "seq_generation", "seq_count", "prompt_tokens_sum", "generation_tokens_sum"):
                 if engine_r.get(k) is not None:
                     r[k] = engine_r[k]
         except Exception:
