@@ -926,6 +926,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         最新在右 idx=n-1 —— 与图 x 轴「近 X」语义一致，且避免墙钟把间隔 > 窗口宽
         的离散时段合并不连续桶（旧 hour 档即此语义，现推广到全档）。
         Y 轴 = tokens_in + tokens_out 总和；dual-scope {local, cloud}。
+        每桶 cost 字段（¥，4 位小数）：云端请求按价格表（¥/1M tokens，
+        MetricsAggregator.price_config）逐请求累加，未配价模型计 0；本地桶恒 0。
+        数据源 = 监控 TAB Token 双卡的「云端窗口累计费用」折线。
         """
         from urllib.parse import urlparse, parse_qs
 
@@ -948,14 +951,22 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
             n = spec["n"]
             w_s = spec["width_s"]
+            # 价格表（¥/1M tokens）：云端桶 cost 字段数据源（启动时由
+            # ProxyManager._load_price_config 注入 MetricsAggregator，只读视图
+            # 见其 price_config property）。本地桶无价格，cost 恒 0。
+            prices = pm.metrics.price_config
+
             # 每桶含 prompt/completion 拆分（供 Prompt/Completion 堆叠条图表用）；
             # tokens 保留（= prompt+completion，向后兼容已有消费者）；
-            # cached = 缓存命中 token 数（供缓存命中率 = cached/prompt）
+            # cached = 缓存命中 token 数（供缓存命中率 = cached/prompt）；
+            # cost = 桶费用（¥）——云端请求按 (in/1M×价入 + out/1M×价出) 逐请求累加，
+            # 云端卡「窗口累计费用」折线数据源；本地无价格恒 0（本地只花电费，
+            # 电费在 功耗/电费 卡）
             local_b = [{"x": i, "tokens": 0, "prompt": 0,
-                        "completion": 0, "cached": 0, "requests": 0}
+                        "completion": 0, "cached": 0, "requests": 0, "cost": 0.0}
                        for i in range(n)]
             cloud_b = [{"x": i, "tokens": 0, "prompt": 0,
-                        "completion": 0, "cached": 0, "requests": 0}
+                        "completion": 0, "cached": 0, "requests": 0, "cost": 0.0}
                        for i in range(n)]
 
             for r in rows:
@@ -982,6 +993,17 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 target[idx]["completion"] += tokens_out
                 target[idx]["cached"] += cached
                 target[idx]["requests"] += 1
+                # 云端计费：按模型查价格表（与 metrics cost_yuan 同口径）；
+                # 未配价的模型不计费（cost 保持 0，前端显示 ¥0）
+                if r.get("cloud_provider"):
+                    p = prices.get(r.get("model") or "")
+                    if p is not None and (p.price_input or p.price_output):
+                        target[idx]["cost"] += (tokens_in / 1e6) * p.price_input \
+                                               + (tokens_out / 1e6) * p.price_output
+
+            # cost 输出保留 4 位小数（与 metrics cost_yuan 同口径），避免浮点长尾
+            for b in local_b + cloud_b:
+                b["cost"] = round(b["cost"], 4)
 
             self._send_json({
                 "granularity": g,

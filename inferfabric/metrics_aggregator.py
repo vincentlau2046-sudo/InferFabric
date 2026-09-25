@@ -178,6 +178,15 @@ class MetricsAggregator:
             }
             self._samples.append(d)
 
+    @property
+    def price_config(self) -> dict[str, CloudModelPrice]:
+        """云端模型价格表（model_id → CloudModelPrice，¥/1M tokens）。
+
+        启动时由 ProxyManager._load_price_config 经 update_prices 注入
+        （cloud_provider.yaml 的 cloud_models + provider model_specs）。
+        只读视图：/api/token-curve 云端桶 cost 字段以此计费。"""
+        return self._price_config
+
     def update_prices(self, price_config: dict[str, CloudModelPrice]):
         """Update price configuration (called after cloud discovery completes)."""
         with self._lock:

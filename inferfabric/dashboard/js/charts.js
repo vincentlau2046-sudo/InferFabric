@@ -11,7 +11,8 @@
  *
  * 图表规则（spec §7 / dataviz，不可协商）：
  *   单 y 轴（禁 dual-axis；唯一受权例外 update(..., {dualAxis:true})——
- *   功耗/电费卡 功耗W↔累计kWh 流速↔存量因果对，见 _applyRules）、线宽 2px、
+ *   仅限「流速↔存量」积分因果对：功耗/电费卡 功耗W↔累计kWh、Token 双卡
+ *   每桶tokens↔窗口累积（本地token量/云端费用¥），见 _applyRules）、线宽 2px、
  *   网格/坐标轴退隐、crosshair tooltip、≥2 系列必有 legend、系列色固定顺序
  *   不循环、状态色绝不充当系列色、颜色跟随实体不跟随排序。
  *
@@ -169,9 +170,11 @@
    *   - 系列色固定为调色板顺序，不循环；状态色绝不混入（color 被覆盖为 palette）
    *   - line 系列：线宽 2px、symbol 'none'（选择性直接标注由调用方按需加 label/markPoint，不逐点标）
    *   - 单 y 轴：yAxis 数组 >1 时截断为首个并告警（禁 dual-axis）。
-   *     唯一受权例外：opts.dualAxis === true 时放行双 y 轴——仅限
-   *     「功耗/电费」卡（功耗 W 与累计电量 kWh 是流速↔存量因果对，积分关系，
-   *     双轴同图不误导；monitor.js 封装处注明）。其他图表保持铁律。
+   *     唯一受权例外：opts.dualAxis === true 时放行双 y 轴——仅限「流速↔存量」
+   *     积分因果对：①「功耗/电费」卡（功耗 W 与累计电量 kWh 是积分关系）；
+   *     ②「Token 双卡」（每桶 tokens 与窗口累积——本地 token 量 / 云端费用 ¥，
+   *     同为流速对时间的积分）。双轴同图不误导；monitor.js 封装处注明。
+   *     其他图表保持铁律。
    *   - ≥2 系列必有 legend；未显式指定 show 时按系列数自动 */
   function _applyRules(option, theme, opts) {
     var th = theme === 'light' ? 'light' : 'dark';

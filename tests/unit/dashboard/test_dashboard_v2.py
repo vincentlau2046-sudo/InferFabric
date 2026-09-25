@@ -426,11 +426,14 @@ def test_monitor_structure():
         'id="monKpis"',         # 五联 KPI
         'id="monLogTable"',     # 请求日志表
         'id="monHistTable"',    # 切换历史表
-        'id="monCostCard"',     # 费用概览卡
     ):
         assert panel_id in html, "missing monitor panel id: %s" % panel_id
-    # Token 用量双 scope 拆分容器（本地 / 云端两张独立图）
-    assert 'class="mon-token-split"' in html
+    # v6.4: 费用概览卡整体删除（滚动 24h 无参考价值）；Token 改左右双卡 +
+    # 共享粒度控制条（本地累计 token 量 / 云端累计费用 ¥）
+    assert 'id="monCostCard"' not in html, "费用概览卡必须已删除"
+    assert 'id="monTokenLocalTotal"' in html, "本地卡头缺窗口累计 token 读数"
+    assert 'id="monTokenCloudTotal"' in html, "云端卡头缺窗口累计费用读数"
+    assert 'data-seg="gran"' in html, "Token 共享粒度控制条缺失"
     # 窗口/粒度切换按钮 data-win / data-gran 契约（display filter，单位语义统一 v6.3）
     # 功耗/电费 pgran: 小时/天/周（月整体弃用）；Token gran: 分钟/小时/天/周；
     # 延迟 latwin: 分钟/小时/天（数据仅 30d 不做周）
@@ -499,6 +502,49 @@ def test_monitor_token_curve_all_tiers_endpoint():
     # 月整体弃用：monitor.js 不得再出现 month 档位分支
     assert "granularity=month" not in js and "gran === 'month'" not in js, \
         "month tier must be dropped from monitor.js"
+
+
+def test_monitor_token_dual_cards():
+    """Token 用量左右双卡（v6.4，取代单卡上下堆叠 + 费用概览卡）。
+
+    布局：col-12 共享粒度控制条（data-seg=gran，驱动本地/云端双卡同粒度联动）
+    + col-6×2 双卡。每卡双轴图（{dualAxis:true} 受权例外，与功耗/电费卡同构，
+    流速↔存量积分对）：柱 = 每桶 Prompt/Completion 堆叠（左轴 tokens），
+    折线 = 窗口起点累积（右轴）——本地 = 累计 token 量（自己的 GPU 免费跑，
+    量有意义），云端 = 累计费用 ¥（按量付费，钱有意义；桶 cost 由
+    /api/token-curve 服务端按价格表计算）。费用概览卡整体删除。"""
+    import re as _re
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "monitor.js").read_text(encoding="utf-8")
+    html = _html()
+
+    # 1. 费用概览卡彻底移除（渲染函数 + DOM 契约 + 内联 CSS 类）
+    assert "renderCostCard" not in js, "monitor.js 仍含费用概览卡渲染函数"
+    assert "monCostCard" not in html and "monCostBody" not in html
+    assert "mon-cost-total" not in html, "费用卡 CSS 类应随卡删除"
+
+    # 2. 左右双卡 DOM 契约（本地左 / 云端右，各卡头：窗口累计读数 + Cache Hit 徽章）
+    for el in ('id="monTokenLocalChart"', 'id="monTokenCloudChart"',
+               'id="monTokenLocalTotal"', 'id="monTokenCloudTotal"',
+               'id="monTokenLocalCacheHit"', 'id="monTokenCloudCacheHit"'):
+        assert el in html, "missing token dual-card contract id: %s" % el
+    # 旧上下堆叠容器不再存在
+    assert "mon-token-split" not in html, "旧双 scope 上下堆叠容器应已移除"
+
+    # 3. 双轴受权：功耗卡 2 分支 + Token 双卡 1 处（scope 循环单 update 路径，
+    #    空态与正常态同一 yAxis 双轴结构，无需独立空态骨架分支）
+    assert js.count('{ dualAxis: true }') >= 3, (
+        "power card 2 branches + token dual card must sanction dual-axis "
+        "via { dualAxis: true } (>=3 occurrences in monitor.js)"
+    )
+    # 4. 云端累积费用：桶 cost 字段前缀和（cumCost）；本地累积 token（cumTok）
+    assert "cumCost" in js, "cloud cumulative cost prefix-sum missing"
+    assert "cumTok" in js, "local cumulative token prefix-sum missing"
+    assert _re.search(r"b\.cost\s*\|\|\s*0", js), \
+        "cumCost must read bucket cost field (b.cost || 0)"
+    # 5. 右轴 = 累积（position:'right'）：功耗卡 2 处 + Token 卡 1 处
+    assert js.count("position: 'right'") >= 3, (
+        "cumulative right axis (position:'right') must appear on power (2) + token (1)"
+    )
 
 
 def test_monitor_latency_cards():

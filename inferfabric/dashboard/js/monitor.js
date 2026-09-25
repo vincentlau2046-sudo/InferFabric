@@ -3,18 +3,23 @@
  *   - 5 ECharts: 功耗/电费单图双轴（v6.2 取代 GPU vram+util 时间曲线——实时值已在
  *     顶部 GPU KPI 卡；柱=平均功耗 W 左轴 + 折线=累计电量/电费 度=元 右轴：
  *     流速↔存量因果对，charts.js 的 dualAxis 显式放行，见 _applyRules 注释）/
- *     Token prompt+completion 堆叠条 / TTFT/TPOT 双卡趋势折线
+ *     Token 左右双卡双轴（v6.4 取代上下堆叠 + 费用概览卡）：
+ *     共享粒度控制条（分钟/小时/天/周）驱动 col-6×2 双卡，每卡
+ *     柱=每桶 Prompt/Completion 堆叠（左轴 tokens）+ 折线=窗口起点累积（右轴）——
+ *     本地=累计 token 量（自己的 GPU 免费跑，量有意义），
+ *     云端=累计费用 ¥（按量付费，钱有意义；桶 cost 服务端按价格表算）/
+ *     TTFT/TPOT 双卡趋势折线
  *   - 6 KPI（2 行 × 3 列）: KV Cache / Batch Size / Seq Length / TPOT(ms) / TTFT(s) / Throughput
  *     （GET /api/engine_metrics）
  *   - 2 表: 请求日志 + 切换历史（13px 紧凑）
- *   - 1 卡: 费用概览
  *
  * 数据源（全部 GET，只读）：
  *   - store /api/snapshot → metrics_24h request_log history gpu gpu_util active_services
  *     （token_stats 30d 属 overview.js 7 天趋势，Monitor Token 卡四档改走端点）
  *   - GET /api/token-curve?granularity=minute|hour|day|week → Token 用量四档
  *     （服务端分桶 + limit=100000；label=分桶单位：分钟=12×5min/小时=24×1h/
- *      天=30×1d/周=13×7d；local/cloud 双 scope；月整体弃用）
+ *      天=30×1d/周=13×7d；local/cloud 双 scope；月整体弃用；
+ *      每桶 cost 字段（¥，4dp）= 云端费用，未配价模型计 0）
  *   - GET /api/engine_metrics?model=<active> → 6 KPI 原始指标
  *   - GET /api/power?gran=hour|day|week → 功耗/电费分桶（5min TTL；服务端 60s
  *     采样落 SQLite，页面关着历史也连续；小时=近24h/天=近30天/周=近~90天）
@@ -309,13 +314,20 @@
     _pgranRendered = _pgran;
   }
 
-  /* ── 2. Token 用量：prompt/completion 堆叠条 ──
-   * 2 系列（Prompt + Completion），单 y 轴。
-   * 粒度 minute/hour/day/week = display filter，四档统一走端点：
-   *   GET /api/token-curve?granularity=minute|hour|day|week
+  /* ── 2. Token 用量：左右双卡双轴（v6.4 取代上下堆叠 + 费用概览卡）──
+   * 共享粒度控制条（data-seg=gran，分钟/小时/天/周）驱动 col-6×2 双卡同粒度联动。
+   * 每卡双轴（{dualAxis:true} 受权例外，与功耗卡同构——流速↔存量积分对）：
+   *   - 柱（左轴 tokens）= 每桶 Prompt/Completion 堆叠——"哪个时段用了多少"
+   *   - 折线（右轴）= 窗口起点累积（客户端前缀和，后端零改动）：
+   *       本地 = 累计 token 量（自己的 GPU 只花电费，量 = 干了多少活）
+   *       云端 = 累计费用 ¥（桶 cost 由 /api/token-curve 按价格表逐请求算；
+   *               按量付费，钱才是要看的量；未配价模型计 0）
+   * 四档统一走端点：GET /api/token-curve?granularity=minute|hour|day|week
    *（服务端分桶：minute=12×5min / hour=24×1h / day=30×1d / week=13×1周；
    *  token_stats 的 day/月 已弃用 —— 周档只有端点有 90d 数据）。
-   * 响应 {local:[...], cloud:[...]} 双 scope，各桶含 prompt/completion/cached 拆分。 */
+   * 响应 {local:[...], cloud:[...]} 双 scope，各桶含 prompt/completion/cached/cost 拆分。
+   * 空态：同一 update 路径恒给双 yAxis 结构（yAxisIndex:1 不会引用不存在的轴，
+   *  无需功耗卡式独立空态骨架分支——那里左轴需显式 0–600 封顶值）。 */
   // 每档桶数 n 与桶宽（ms），与服务端 spec 字典一一对应
   var _TOKEN_N = { minute: 12, hour: 24, day: 30, week: 13 };
   var _TOKEN_W = { minute: 5 * 60000, hour: 3600000, day: 86400000, week: 7 * 86400000 };
@@ -353,19 +365,25 @@
   }
 
   // 把 token-curve 的 scope 桶数组（idx 0=最旧→n-1=最新）转成图表数据。
-  // 无缓存时返回 n 个零桶（空图 + empty state）。
+  // cumTok/cumCost = 窗口起点累积（前缀和）：本地卡用 cumTok（累计 token 量），
+  // 云端卡用 cumCost（累计费用 ¥，桶 cost 字段；未配价模型 cost=0）。
+  // 无缓存时返回 n 个零桶（空图 + empty state，累积线平 0）。
   function _tokenFromBuckets(gran, buckets, now) {
     var n = _TOKEN_N[gran] || 24;
     var w = _TOKEN_W[gran] || 3600000;
-    var xs = [], prompt = [], comp = [];
+    var xs = [], prompt = [], comp = [], cumTok = [], cumCost = [];
+    var runTok = 0, runCost = 0;
     for (var k = 0; k < n; k++) {
       var end = now - (n - 1 - k) * w;   // 桶结束时刻（最旧桶 = now-(n-1)w，最新桶 = now）
       xs.push(_tokenGranLabel(gran, end));
       var b = (buckets && buckets[k]) || {};
-      prompt.push(b.prompt || 0);
-      comp.push(b.completion || 0);
+      var p = b.prompt || 0, c = b.completion || 0;
+      prompt.push(p);
+      comp.push(c);
+      runTok += p + c;          cumTok.push(runTok);
+      runCost += b.cost || 0;   cumCost.push(runCost);
     }
-    return { xs: xs, prompt: prompt, completion: comp };
+    return { xs: xs, prompt: prompt, completion: comp, cumTok: cumTok, cumCost: cumCost };
   }
 
   // 桶标签：minute → HH:mm（桶结束时刻）；hour → HH:00；day/week → MM-DD
@@ -406,32 +424,104 @@
     }
   }
 
-  /* 本地 / 云端两张图：同一粒度下各渲染一张（prompt/completion 堆叠条）。 */
+  /* 右轴（¥）刻度标签：与功耗卡「度」标签同手法——总量 <¥1 时 2 位小数
+   * 不被 toFixed(1) 压成 ¥0，去尾零（¥0.20 → ¥0.2）。 */
+  function _yuanFmt(v) {
+    var s = (Math.abs(v) >= 1 ? Number(v).toFixed(1) : Number(v).toFixed(2));
+    return '¥' + s.replace(/0+$/, '').replace(/\.$/, '');
+  }
+
+  /* Token 双卡 tooltip：柱 = 每桶 Prompt/Completion（token 量），
+   * 折线 = 累积（对象式点位需解包 value）；云端累积以 ¥ 显示。 */
+  function _tokenTooltip(sc) {
+    return function (params) {
+      if (!params || !params.length) return '';
+      var rows = '';
+      for (var i = 0; i < params.length; i++) {
+        var p = params[i];
+        if (p.seriesName === 'Prompt' || p.seriesName === 'Completion') {
+          rows += '<div>' + p.seriesName + '：' + fmtTok(p.value || 0) + '</div>';
+        } else {
+          var vRaw = p.value;
+          var v = (vRaw && typeof vRaw === 'object') ? vRaw.value : vRaw;
+          rows += '<div>' + p.seriesName + '：' +
+            (sc.scope === 'cloud' ? _yuanFmt(v == null ? 0 : v)
+                                   : fmtTok(v == null ? 0 : v)) + '</div>';
+        }
+      }
+      return '<div><b>' + params[0].axisValue + '</b></div>' + rows;
+    };
+  }
+
+  /* 本地 / 云端双卡（左右）：同一粒度下各渲染一张双轴图。
+   * 柱（左轴）= 每桶 Prompt/Completion 堆叠；折线（右轴）= 窗口起点累积——
+   * 本地 cumTok（token 量）、云端 cumCost（费用 ¥）。 */
   function renderTokenChart() {
     ensureCharts();
     if (!_charts.tokenLocal || !_charts.tokenCloud) return;
     renderCacheHitBadges();
 
     var scopes = [
-      { chart: _charts.tokenLocal, empty: 'monTokenLocalEmpty', scope: 'local' },
-      { chart: _charts.tokenCloud, empty: 'monTokenCloudEmpty', scope: 'cloud' },
+      { chart: _charts.tokenLocal, empty: 'monTokenLocalEmpty', scope: 'local',
+        cumKey: 'cumTok', cumName: '累计 Token', heroId: 'monTokenLocalTotal',
+        totalText: function (v) { return '窗口累计 ' + fmtTok(v); } },
+      { chart: _charts.tokenCloud, empty: 'monTokenCloudEmpty', scope: 'cloud',
+        cumKey: 'cumCost', cumName: '累计费用', heroId: 'monTokenCloudTotal',
+        totalText: function (v) { return '窗口累计 ' + _yuanFmt(v); } },
     ];
     for (var i = 0; i < scopes.length; i++) {
       var sc = scopes[i];
       var data = buildTokenData(_tokenGran, sc.scope);
+      var cum = data[sc.cumKey];
+      var last = cum.length ? cum[cum.length - 1] : 0;
+      // 卡头窗口累计读数（本地 = token 量，云端 = ¥；全 0 时显式给 0/¥0.00）
+      var hero = $(sc.heroId);
+      if (hero) hero.textContent = sc.totalText(last || 0);
+
       var hasData = false;
       for (var j = 0; j < data.prompt.length; j++) {
         if (data.prompt[j] > 0 || data.completion[j] > 0) { hasData = true; break; }
       }
       showEmpty(sc.empty, !hasData);
+
+      // 左轴 tokens：max = 每桶堆叠峰值，_niceCeil 6 等分（与功耗卡右轴同手法——
+      // max/n 恒为 {1,2,5}×10^k 干净步长，fmtTok 出 1.2M/500K 式标签）。
+      // 右轴累积：max = 窗口累计总量，同样 _niceCeil；两轴同 splitNumber:6 + min:0
+      // → 6 等分像素位置重合，右轴只印标签（splitLine 隐藏），一套尺度线（左轴的）。
+      var maxStack = 0;
+      for (var k = 0; k < data.prompt.length; k++) {
+        var s = data.prompt[k] + data.completion[k];
+        if (s > maxStack) maxStack = s;
+      }
+      var leftMax = _niceCeil(maxStack, 6);
+      var rightMax = _niceCeil(last || 0, 6);
+      // 累积线：全部桶逐桶打点（对象式点位，方案 B 与功耗卡一致）——前导空桶
+      // 累积 0 也带点，线从窗口起点连续到末端总量
+      var cumPts = cum.map(function (v) {
+        return { value: v, symbol: 'circle', symbolSize: 5 };
+      });
+
       IFCharts.update(sc.chart, {
         xAxis: { data: data.xs, boundaryGap: true },
-        yAxis: { axisLabel: { formatter: function (v) { return fmtTok(v); } } },
-        series: [
-          { type: 'bar', name: 'Prompt', stack: 'tok', data: data.prompt },
-          { type: 'bar', name: 'Completion', stack: 'tok', data: data.completion },
+        yAxis: [
+          { name: 'tokens', min: 0, max: leftMax, splitNumber: 6, position: 'left',
+            axisLabel: { formatter: function (v) { return fmtTok(v); } } },
+          { name: sc.scope === 'cloud' ? '¥' : '累积', min: 0, max: rightMax, splitNumber: 6,
+            splitLine: { show: false }, position: 'right',
+            axisLabel: { formatter: function (v) {
+              return sc.scope === 'cloud' ? _yuanFmt(v) : fmtTok(v); } } },
         ],
-      });
+        tooltip: { trigger: 'axis', formatter: _tokenTooltip(sc) },
+        legend: { data: ['Prompt', 'Completion', sc.cumName] },
+        series: [
+          { type: 'bar', name: 'Prompt', stack: 'tok', yAxisIndex: 0,
+            data: data.prompt, barWidth: '55%', z: 2 },
+          { type: 'bar', name: 'Completion', stack: 'tok', yAxisIndex: 0,
+            data: data.completion, barWidth: '55%', z: 2 },
+          { type: 'line', name: sc.cumName, yAxisIndex: 1, data: cumPts, z: 3,
+            areaStyle: { opacity: 0.08 } },
+        ],
+      }, { dualAxis: true });
     }
   }
 
@@ -835,40 +925,10 @@
       '</div>';
   }
 
-  /* ── 7. 费用概览卡 ── */
-  function renderCostCard() {
-    var el = $('monCostBody');
-    if (!el) return;
-    var m = store.get('metrics_24h') || {};
-    var total = m.cost_yuan || 0;
-    var models = m.models || {};
-    var rows = '';
-    var entries = [];
-    for (var name in models) {
-      if (models[name] && models[name].cost_yuan > 0) {
-        entries.push({ name: name, cost: models[name].cost_yuan });
-      }
-    }
-    entries.sort(function (a, b) { return b.cost - a.cost; });
-
-    if (!entries.length) {
-      el.innerHTML =
-        '<div class="mon-cost-total"><span class="val">¥' + total.toFixed(4) + '</span></div>' +
-        '<div class="if-empty">暂无费用数据 — 产生用量后在此显示</div>';
-      return;
-    }
-    for (var i = 0; i < entries.length; i++) {
-      rows += '<div class="mon-cost-row">' +
-        '<span class="model" title="' + escHtml(entries[i].name) + '">' +
-          escHtml(shortName(entries[i].name)) + '</span>' +
-        '<span class="amt mono">¥' + entries[i].cost.toFixed(4) + '</span>' +
-      '</div>';
-    }
-    el.innerHTML =
-      '<div class="mon-cost-total"><span class="muted">24h 总计</span>' +
-        '<span class="val mono">¥' + total.toFixed(4) + '</span></div>' +
-      rows;
-  }
+  /* ── 7. （v6.4 删除：费用概览卡）──
+   * 滚动 24h 费用无参考价值（用户 2026-09-25 拍板删除）。费用改由 Token 双卡的
+   * 云端「累计费用 ¥」折线覆盖（随粒度：小时=24h / 天=30d / 周=90d，可看趋势）。
+   * 本地无价格（只花电费，已在 功耗/电费 卡）。 */
 
   /* ── 渲染入口 ── */
   function renderMonitor() {
@@ -881,7 +941,6 @@
     renderKpis();
     renderLogTable();
     renderHistTable();
-    renderCostCard();
   }
   window.tabRenderers['tab-monitor'] = renderMonitor;
 

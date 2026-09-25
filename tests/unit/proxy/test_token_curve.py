@@ -41,14 +41,21 @@ def _make_handler():
     return h, handler_module
 
 
-def _row(ts, tokens_in, tokens_out, cloud_provider=None):
+def _row(ts, tokens_in, tokens_out, cloud_provider=None, model=None):
     """合成 request_log 行（_handle_token_curve 只读这几个字段）。"""
     return {
         "timestamp": ts,
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
         "cloud_provider": cloud_provider,
+        "model": model,
     }
+
+
+def _price(price_input, price_output):
+    """云端模型价格（¥/1M tokens），与 MetricsAggregator.CloudModelPrice 同构。"""
+    from inferfabric.metrics_aggregator import CloudModelPrice
+    return CloudModelPrice(price_input=price_input, price_output=price_output)
 
 
 class TestTokenCurveBucketSplit:
@@ -195,6 +202,7 @@ class TestTokenCurveBucketSplit:
 
         now = time.time()
         pm = MagicMock()
+        pm.metrics.price_config = {}   # 未配价格 → cost 恒 0（字段仍在）
         pm.telemetry.query_request_log.return_value = [
             _row(now, tokens_in=100, tokens_out=200, cloud_provider="openai"),
         ]
@@ -208,6 +216,95 @@ class TestTokenCurveBucketSplit:
         cb = cloud[11]
         assert cb["prompt"] == 100 and cb["completion"] == 200, f"cloud 拆分错误: {cb}"
         assert cb["tokens"] == 300
+
+
+class TestTokenCurveCloudCost:
+    """云端桶 cost 字段（¥，v6.4）：按价格表（¥/1M tokens）逐请求累加。
+
+    数据源 = pm.metrics.price_config（ProxyManager 启动时经
+    _load_price_config 注入 MetricsAggregator）。云端卡「窗口累计费用」
+    折线的前端前缀和即基于此字段；本地桶无价格，cost 恒 0。
+    """
+
+    def _costs(self, payload, scope):
+        return [b["cost"] for b in payload[scope]]
+
+    def test_every_bucket_carries_cost_field(self):
+        """local + cloud 每桶都有 cost 字段（空桶 0.0，schema 对称）。"""
+        h, _ = _make_handler()
+        h.path = "/api/token-curve?granularity=minute"
+        now = time.time()
+        pm = MagicMock()
+        pm.metrics.price_config = {}
+        pm.telemetry.query_request_log.return_value = [
+            _row(now, tokens_in=10, tokens_out=20),
+            _row(now, tokens_in=10, tokens_out=20,
+                 cloud_provider="baidu-qianfan", model="glm-5.1"),
+        ]
+        h._handle_token_curve(pm)
+        payload = h._send_json.call_args.args[0]
+        for b in payload["local"] + payload["cloud"]:
+            assert "cost" in b, f"桶缺 cost: {b}"
+        assert all(c == 0.0 for c in self._costs(payload, "local")), \
+            "本地桶无价格，cost 应恒 0"
+
+    def test_cloud_cost_accumulates_by_price_config(self):
+        """cost = Σ(tokens_in/1M × price_input + tokens_out/1M × price_output)。
+
+        deepseek-v4-flash（¥1 入 / ¥2 出，百度千帆预设价）：
+        请求1：1M 输入 → ¥1.0 + 0.5M 输出 → ¥1.0 = ¥2.0
+        请求2：100K 输入 → ¥0.1 + 100K 输出 → ¥0.2 = ¥0.3
+        该桶 cost = ¥2.3。"""
+        h, _ = _make_handler()
+        h.path = "/api/token-curve?granularity=minute"
+        now = time.time()
+        pm = MagicMock()
+        pm.metrics.price_config = {"deepseek-v4-flash": _price(1.0, 2.0)}
+        pm.telemetry.query_request_log.return_value = [
+            _row(now, tokens_in=1_000_000, tokens_out=500_000,
+                 cloud_provider="baidu-qianfan", model="deepseek-v4-flash"),
+            # 同桶第二条：100K 输入 + 100K 输出 → ¥0.1 + ¥0.2 = ¥0.3
+            _row(now - 60, tokens_in=100_000, tokens_out=100_000,
+                 cloud_provider="baidu-qianfan", model="deepseek-v4-flash"),
+        ]
+        h._handle_token_curve(pm)
+        cloud = h._send_json.call_args.args[0]["cloud"]
+        target = cloud[11]   # now 与 now-60s 同落最新 5min 桶
+        assert target["cost"] == pytest.approx(2.3), \
+            f"cost 应为 2.0 + 0.3 = 2.3，got {target['cost']}"
+
+    def test_cloud_unpriced_model_cost_zero(self):
+        """请求了但未配价格的云端模型 → cost 保持 0（字段仍在，前端显示 ¥0）。"""
+        h, _ = _make_handler()
+        h.path = "/api/token-curve?granularity=hour"
+        now = time.time()
+        pm = MagicMock()
+        pm.metrics.price_config = {"deepseek-v4-flash": _price(1.0, 2.0)}
+        pm.telemetry.query_request_log.return_value = [
+            _row(now, tokens_in=1_000_000, tokens_out=1_000_000,
+                 cloud_provider="openai", model="gpt-5.2"),   # 不在价格表
+        ]
+        h._handle_token_curve(pm)
+        cloud = h._send_json.call_args.args[0]["cloud"]
+        assert cloud[23]["requests"] == 1
+        assert cloud[23]["cost"] == 0.0, "未配价模型不应计费"
+
+    def test_cost_rounded_to_4dp(self):
+        """cost 输出保留 4 位小数（与 metrics cost_yuan 同口径），避免浮点长尾：
+        333333 输入 × ¥0.5/1M = 0.166666… → round(..., 4) = 0.1667。"""
+        h, _ = _make_handler()
+        h.path = "/api/token-curve?granularity=minute"
+        now = time.time()
+        pm = MagicMock()
+        pm.metrics.price_config = {"glm-5.1": _price(0.5, 0.5)}
+        pm.telemetry.query_request_log.return_value = [
+            _row(now, tokens_in=333_333, tokens_out=0,
+                 cloud_provider="baidu-qianfan", model="glm-5.1"),
+        ]
+        h._handle_token_curve(pm)
+        cloud = h._send_json.call_args.args[0]["cloud"]
+        assert cloud[11]["cost"] == 0.1667, \
+            f"cost 应 round(0.16666…, 4) = 0.1667，got {cloud[11]['cost']}"
 
     def test_invalid_granularity_400(self):
         """month 已整体弃用 → 无效档位 400。"""
