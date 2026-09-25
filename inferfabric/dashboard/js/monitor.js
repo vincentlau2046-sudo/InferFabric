@@ -432,18 +432,18 @@
   }
 
   /* 调色板取色（house 铁律：系列色固定为调色板顺序、不硬编码）。
-   * dark/light 各 4 色 CVD 调色板（蓝→琥珀→青→紫）；取当前主题第 i 色。
+   * v7.0 统一调色板 5 槽（蓝→琥珀→青→绿→粉），dark/light 同 hex；取第 i 色。
    *
-   * 统一色系规则（v6.5，跨卡语义→色号映射）：
+   * 统一色系规则（v7.0，跨卡语义→色号映射，后续新图表按此标准取色）：
    *   「累积/存量」线（功耗卡「累计电量」+ Token 双卡「累计 Token/累计费用」）
-   *     = palette[1] 琥珀，锚点 = 功耗卡累计线（其第 2 个 series，自然顺位）；
-   *     不显式钉色时 ECharts 按 series 顺序自动取色，Token 双卡的累积线是
-   *     第 3 个 series 会被顺位取成青，与功耗卡琥珀不一致，故显式钉 amber。
+   *     = palette[1] 琥珀，跨卡锚点；暖色与冷色柱天然分层（线 vs 柱不同 mark type
+   *     + 不同轴 + 暖冷对立，CVD 全对验证无须次级编码即过）。
    *   「分量/流速」柱（Token 双卡 Prompt/Completion 堆叠柱）
-   *     = palette[2] 青（Prompt）+ palette[3] 紫（Completion）——把琥珀槽位
-   *     让给累计线，避免柱与线同色；青↔紫相邻对 dark/light 均过 CVD 校验
-   *     （ΔE 正常视力 24.5 / deutan 15.0，validate_palette.js ALL PASS）。
-   *   功耗卡「平均功耗」柱 = 第 1 个 series，自然顺位 palette[0] 蓝，不显式钉。 */
+   *     = palette[0] 蓝（Prompt）+ palette[2] 青（Completion）——跳过琥珀槽[1]
+   *     避免柱与累计线同色；蓝↔青全对 ΔE 16.3 双主题过 15。
+   *   功耗卡「平均功耗」柱 = 第 1 个 series，自然顺位 palette[0] 蓝，不显式钉。
+   *   趋势卡逐模型折线 = palette[0..4] 按 rank 取（蓝/青/绿/粉 + 第5 走 Other 折叠），
+   *     跳过琥珀[1]（累计线语义槽，不充当数据系列色）。 */
   function _paletteColor(i, fallback) {
     var pal = IFCharts && IFCharts.palettes;
     var th = (IFCharts && typeof IFCharts.currentTheme === 'function')
@@ -458,6 +458,16 @@
    * （实测：设 lineStyle.color 后面积区像素 cyan=0、全琥珀）。 */
   function _cumColor() {
     return _paletteColor(1, '#b45309');
+  }
+
+  /* 趋势卡逐模型 rank→色：v7.0 统一走 PALETTES，跳过琥珀[1]（累计线专用槽）。
+   * 返回 rank 0..3 对应的数据色数组 [蓝, 青, 绿,粉]，长度 4 = 同屏模型上限。 */
+  function _dataColors() {
+    var pal = IFCharts && IFCharts.palettes;
+    var th = (IFCharts && typeof IFCharts.currentTheme === 'function')
+      ? IFCharts.currentTheme() : 'dark';
+    var p = (pal && pal[th]) || (pal && pal.dark) || [];
+    return [p[0], p[2], p[3], p[4]].filter(Boolean);
   }
 
   /* Token 双卡 tooltip：柱 = 每桶 Prompt/Completion（token 量），
@@ -545,10 +555,10 @@
         series: [
           { type: 'bar', name: 'Prompt', stack: 'tok', yAxisIndex: 0,
             data: data.prompt, barWidth: '55%', z: 2,
-            itemStyle: { color: _paletteColor(2, '#0891b2') } }, // 分量柱=青[2]：琥珀[1] 让给累计线
+            itemStyle: { color: _paletteColor(0, '#2563eb') } }, // 分量柱=蓝[0]（跨卡与功耗柱同色）
           { type: 'bar', name: 'Completion', stack: 'tok', yAxisIndex: 0,
             data: data.completion, barWidth: '55%', z: 2,
-            itemStyle: { color: _paletteColor(3, '#7c3aed') } }, // 分量柱=紫[3]
+            itemStyle: { color: _paletteColor(2, '#0891b2') } }, // 分量柱=青[2]：跳过琥珀[1] 让给累计线
           { type: 'line', name: sc.cumName, yAxisIndex: 1, data: cumPts, z: 3,
             lineStyle: { color: _cumColor() },   // 线描边钉琥珀（面积自动继承）
             itemStyle: { color: _cumColor() },   // 符号点钉琥珀：对齐功耗卡累计线（palette[1]）
@@ -560,18 +570,14 @@
 
   /* ── 3. 模型延迟趋势：时间轴 × 逐模型分色折线（v6.0 取代模型条形双卡）──
    * 共享控制条：窗口 分钟/小时/天（latwin，minute/hour/day，数据仅 30d 不做周）
-   * + 分位 P50/P50+P95（latq）+ 模型 chip 选择器（≤5 个在用模型，默认全选中；
+   * + 分位 P50/P50+P95（latq）+ 模型 chip 选择器（≤4 个在用模型，默认全选中；
    * 颜色按 rank 定，chip 与图同色）。
    * 数据源：GET /api/latency?window=（时间分桶 × 逐模型 TTFT/TPOT 分位，只读 display filter）。 */
 
-  /* v6.0: 模型折线 5 色分类调色板（CVD 安全，固定顺序、绝不循环；主题各自校验通过）。
-   * 同屏上限 = 本数组长度（5，CVD 驱动）；改动须重跑 dataviz validate_palette.js 保持 ALL PASS。
-   * 模型 1..5 按请求数降序分色，与 chip 同序 → 同色；dark/light 各自一组（house 惯例）。 */
-  var _MODEL_COLORS = {
-    dark:  ['#3a86e0', '#b57a14', '#12a594', '#8b5cf6', '#e0574a'],
-    light: ['#1f6fd6', '#b45309', '#0e8f7f', '#7c3aed', '#cf4636'],
-  };
-
+  /* v7.0: 趋势卡逐模型 rank→色统一走 PALETTES 数据槽（跳过琥珀[1] 累计线专用槽）。
+   * 同屏上限 = _dataColors() 长度（4，CVD 驱动）；第 5+ 模型折叠为"其他"。
+   * 模型 1..4 按请求数降序分色 [蓝, 青, 绿, 粉]，与 chip 同序 → 同色；
+   * dark/light 同 hex（v7.0 统一），不再各自一组。 */
   var _latWin = 'hour';            // minute | hour | day（数据仅 30d，无周档）
   var _latQ = 'p50';               // 'p50' | 'p50p95'
   var _latSel = null;              // 选中模型名数组（null=默认全部在用模型）
@@ -581,11 +587,9 @@
   var _latWinText = { minute: '近 60min', hour: '近 24h', day: '近 30 天' };   // 副标题窗口文案
 
   function _modelColors() {
-    /* currentTheme 在 IFCharts 命名空间（charts.js 导出）；monitor.js 是 strict IIFE，
-       裸调用会 ReferenceError。守卫模式同 L875 onThemeChange 用法。 */
-    var th = (IFCharts && typeof IFCharts.currentTheme === 'function')
-      ? IFCharts.currentTheme() : 'dark';
-    return _MODEL_COLORS[th] || _MODEL_COLORS.dark;
+    /* v7.0 统一调色板数据槽（跳过琥珀[1]）；_dataColors 已含主题守卫。 */
+    var dc = _dataColors();
+    return dc.length ? dc : ['#2563eb', '#0891b2', '#15803d', '#db2777'];
   }
 
   function getLatSeries(win) {

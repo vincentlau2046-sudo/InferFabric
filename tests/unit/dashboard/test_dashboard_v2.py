@@ -285,21 +285,18 @@ def test_charts_js_present():
 
 
 def test_chart_palette_values():
-    """CVD 验证通过的 8 个系列色 hex（task-4-palette.md）必须逐字出现在 get_html()。
+    """CVD 全对验证通过的统一调色板 v7.0（5 槽）必须逐字出现在 get_html()。
 
-    固定顺序 蓝→琥珀→青→紫；dark/light 两组。改动任一值须重跑
-    specs/dashboard-v2-console/tools/validate_palette.js 保持 ALL PASS。"""
+    固定顺序 蓝→琥珀→青→绿→粉；dark/light 同 hex（v7.0 统一，消除原两套蓝）。
+    语义：[1] 琥珀 = 累计线专用槽；[0]/[2]/[3]/[4] = 数据系列槽。改动任一值须重跑
+    dataviz validate_palette.js --pairs all --mode dark|light 保持 ALL PASS。"""
     html = _html()
-    dark = ['#3b82f6', '#b45309', '#0891b2', '#7c3aed']
-    light = ['#2563eb', '#b45309', '#0891b2', '#7c3aed']
-    # 8 个值（含重复）逐字出现
-    for hexv in dark + light:
-        assert hexv in html, "palette hex missing from charts.js: %s" % hexv
-    # 两组调色板作为连续数组字面量出现（强断言：顺序与分组正确）
-    assert ("dark:  ['#3b82f6', '#b45309', '#0891b2', '#7c3aed']" in html), \
-        "dark palette array literal not inlined verbatim"
-    assert ("light: ['#2563eb', '#b45309', '#0891b2', '#7c3aed']" in html), \
-        "light palette array literal not inlined verbatim"
+    palette = ['#2563eb', '#b45309', '#0891b2', '#15803d', '#db2777']
+    for hexv in palette:
+        assert html.count(hexv) >= 2, "palette hex %s must appear in both dark & light arrays" % hexv
+    # 两组调色板作为连续数组字面量出现（强断言：顺序、5 槽、dark/light 同值）
+    expected = "['#2563eb', '#b45309', '#0891b2', '#15803d', '#db2777']"
+    assert html.count(expected) >= 2, "v7.0 5-slot palette literal must appear for both dark & light"
 
 
 def test_charts_js_node_syntax():
@@ -545,32 +542,36 @@ def test_monitor_token_dual_cards():
     assert js.count("position: 'right'") >= 3, (
         "cumulative right axis (position:'right') must appear on power (2) + token (1)"
     )
-    # 6. 统一色系（v6.5）：语义→色号映射跨卡一致，五处显式钉色。
-    #    「累积/存量」线（功耗卡累计电量 + Token 双卡累计 Token/费用）= palette[1] 琥珀，
-    #    锚点 = 功耗卡累计线（其第 2 个 series 自然顺位）。回归防护——Token 累积线是
-    #    第 3 个 series，不钉色时 ECharts 按序取 palette[2]（青），与功耗卡琥珀脱节；
-    #    只钉 itemStyle 会留下「青线 + 琥珀点」，故 lineStyle + itemStyle 双钉。
-    #    「分量/流速」柱 = palette[2] 青（Prompt）+ palette[3] 紫（Completion）——
-    #    把琥珀槽位让给累计线，避免 Completion 柱与累计线同色（v6.5 前 Completion 柱
-    #    自动顺位 amber，与钉死的累计线撞色）；青↔紫相邻对 dark/light 均过 CVD 校验
-    #    （validate_palette.js ALL PASS，ΔE 正常视力 24.5 / deutan 15.0）。
+    # 6. 统一色系（v7.0）：语义→色号映射跨卡一致，柱 Prompt 蓝[0] / Completion 青[2]
+    #    / 累计线 琥珀[1]。「累积/存量」线 = palette[1] 琥珀（跨卡锚点，暖色与冷色柱
+    #    天然分层）；「分量/流速」柱跳过琥珀[1] 避免与累计线同色。蓝↔青全对 ΔE 16.3
+    #    双主题过 15。趋势卡逐模型色走 _dataColors()（跳过琥珀，[蓝,青,绿,粉]）。
     assert "_cumColor" in js, "token cumulative line must pin color via _cumColor()"
     assert _re.search(r"_paletteColor\(1,\s*'#b45309'\)", js), (
         "_cumColor must resolve palette index 1 (amber #b45309, matches power card)"
     )
     assert _re.search(r"lineStyle:\s*\{\s*color:\s*_cumColor\(\)\s*\}", js), (
         "token cumulative line must pin lineStyle.color (line stroke) — "
-        "itemStyle alone leaves the line stroke on auto palette[2] cyan"
+        "itemStyle alone leaves the line stroke on auto palette"
     )
     assert _re.search(r"itemStyle:\s*\{\s*color:\s*_cumColor\(\)\s*\}", js), (
         "token cumulative line series must carry itemStyle.color=_cumColor()"
     )
-    assert _re.search(r"itemStyle:\s*\{\s*color:\s*_paletteColor\(2,\s*'#0891b2'\)\s*\}", js), (
-        "token Prompt bar must pin itemStyle.color to palette[2] cyan — "
-        "auto order would give amber[1] which collides with the pinned cumulative line"
+    assert _re.search(r"itemStyle:\s*\{\s*color:\s*_paletteColor\(0,\s*'#2563eb'\)\s*\}", js), (
+        "token Prompt bar must pin itemStyle.color to palette[0] blue — "
+        "cross-card consistent with power card bar (both auto/pinned blue[0])"
     )
-    assert _re.search(r"itemStyle:\s*\{\s*color:\s*_paletteColor\(3,\s*'#7c3aed'\)\s*\}", js), (
-        "token Completion bar must pin itemStyle.color to palette[3] purple"
+    assert _re.search(r"itemStyle:\s*\{\s*color:\s*_paletteColor\(2,\s*'#0891b2'\)\s*\}", js), (
+        "token Completion bar must pin itemStyle.color to palette[2] cyan — "
+        "skips amber[1] reserved for the cumulative line"
+    )
+    # v7.0: 趋势卡色源统一走 PALETTES（_dataColors 跳过琥珀[1]），_MODEL_COLORS 已废弃删除
+    assert "_MODEL_COLORS" not in js, (
+        "v7.0: _MODEL_COLORS must be removed — trend card colors now via _dataColors()/PALETTES"
+    )
+    assert "_dataColors" in js, "v7.0: _dataColors() must supply trend card rank colors"
+    assert _re.search(r"\[p\[0\],\s*p\[2\],\s*p\[3\],\s*p\[4\]\]", js), (
+        "_dataColors must return [blue, cyan, green, pink] — skipping amber[1]"
     )
 
 
@@ -675,19 +676,19 @@ def test_monitor_latency_series_colors_survive_apply_rules():
         + "\n"
         + r"""
         var c = window.IFCharts.create('c1');
-        // 模型趋势卡形态：3 模型 × (P50 实线 + P95 虚线)，逐模型显式颜色（5 色模型调色板前 3 色）；
+        // 模型趋势卡形态：3 模型 × (P50 实线 + P95 虚线)，逐模型显式颜色（v7.0 数据槽前 3 色 蓝/青/绿）；
         // m1 首点 = 低置信点（0<n<30）：_lowPt 产物 { value, symbol:'circle', symbolSize:6, itemStyle:{color,opacity:.45} }
         window.IFCharts.update(c, {
           xAxis: { type: 'category', data: ['00:00', '01:00'], boundaryGap: false },
           yAxis: { type: 'value' },
           series: [
-            { name: 'm1', type: 'line', data: [{ value: 1, symbol: 'circle', symbolSize: 6, itemStyle: { color: '#3a86e0', opacity: 0.45 } }, 2], lineStyle: { color: '#3a86e0', width: 2 }, itemStyle: { color: '#3a86e0' } },
-            { name: 'm2', type: 'line', data: [3, 4], lineStyle: { color: '#b57a14', width: 2 }, itemStyle: { color: '#b57a14' } },
-            { name: 'm3', type: 'line', data: [5, 6], lineStyle: { color: '#12a594', width: 2 }, itemStyle: { color: '#12a594' } },
-            { name: 'm1 P95', type: 'line', data: [10, 12], lineStyle: { color: '#3a86e0', width: 1, type: 'dashed' }, itemStyle: { color: '#3a86e0' } },
+            { name: 'm1', type: 'line', data: [{ value: 1, symbol: 'circle', symbolSize: 6, itemStyle: { color: '#2563eb', opacity: 0.45 } }, 2], lineStyle: { color: '#2563eb', width: 2 }, itemStyle: { color: '#2563eb' } },
+            { name: 'm2', type: 'line', data: [3, 4], lineStyle: { color: '#0891b2', width: 2 }, itemStyle: { color: '#0891b2' } },
+            { name: 'm3', type: 'line', data: [5, 6], lineStyle: { color: '#15803d', width: 2 }, itemStyle: { color: '#15803d' } },
+            { name: 'm1 P95', type: 'line', data: [10, 12], lineStyle: { color: '#2563eb', width: 1, type: 'dashed' }, itemStyle: { color: '#2563eb' } },
           ],
         });
-        var expected = ['#3a86e0', '#b57a14', '#12a594', '#3a86e0'];
+        var expected = ['#2563eb', '#0891b2', '#15803d', '#2563eb'];
         var ok = _lastOpt.series.length === 4;
         for (var i = 0; ok && i < _lastOpt.series.length; i++) {
           var s = _lastOpt.series[i];
@@ -699,7 +700,7 @@ def test_monitor_latency_series_colors_survive_apply_rules():
         // 不触碰 data 数组 → 逐点显式 symbol 必须原样存活（否则低置信点不可见）
         var low = _lastOpt.series[0] && _lastOpt.series[0].data && _lastOpt.series[0].data[0];
         if (!low || low.symbol !== 'circle' || low.symbolSize !== 6 ||
-            !low.itemStyle || low.itemStyle.color !== '#3a86e0' || low.itemStyle.opacity !== 0.45) {
+            !low.itemStyle || low.itemStyle.color !== '#2563eb' || low.itemStyle.opacity !== 0.45) {
           ok = false;
         }
         console.log(ok ? 'PASS' : 'FAIL: ' + JSON.stringify({
@@ -775,14 +776,14 @@ def test_monitor_latency_replace_series_no_ghosts():
         var c = window.IFCharts.create('c1');
         window.IFCharts.update(c, {
           xAxis: { type: 'category', data: ['00:00', '01:00'], boundaryGap: false },
-          series: [mk('m1', [1, 2], '#3a86e0'), mk('m2', [3, 4], '#b57a14'),
-                   mk('m3', [5, 6], '#12a594'), mk('m4', [7, 8], '#8b5cf6')],
+          series: [mk('m1', [1, 2], '#2563eb'), mk('m2', [3, 4], '#0891b2'),
+                   mk('m3', [5, 6], '#15803d'), mk('m4', [7, 8], '#db2777')],
         }, { replaceSeries: true });
         var last = _log[_log.length - 1];
         if (last.opt.series.length !== 4) ok = false;
         window.IFCharts.update(c, {
           xAxis: { type: 'category', data: ['09:00', '10:00'], boundaryGap: false },
-          series: [mk('m1', [10, 11], '#3a86e0'), mk('m2', [12, 13], '#b57a14')],
+          series: [mk('m1', [10, 11], '#2563eb'), mk('m2', [12, 13], '#0891b2')],
         }, { replaceSeries: true });
         last = _log[_log.length - 1];
         var names = last.opt.series.map(function (s) { return s.name; });
@@ -790,8 +791,8 @@ def test_monitor_latency_replace_series_no_ghosts():
         if (JSON.stringify(last.sopt && last.sopt.replaceMerge) !== JSON.stringify(['series'])) ok = false;
         // 2) 不传 opts 的既有调用方：累积合并语义字节级不变（尾部保留、无 replaceMerge）
         var d = window.IFCharts.create('c2');
-        window.IFCharts.update(d, { series: [mk('a', [1], '#3a86e0'), mk('b', [2], '#b57a14'), mk('c', [3], '#12a594')] });
-        window.IFCharts.update(d, { series: [mk('a', [4], '#3a86e0')] });
+        window.IFCharts.update(d, { series: [mk('a', [1], '#2563eb'), mk('b', [2], '#0891b2'), mk('c', [3], '#15803d')] });
+        window.IFCharts.update(d, { series: [mk('a', [4], '#2563eb')] });
         var dlast = _log[_log.length - 1];
         if (dlast.opt.series.length !== 3) ok = false;
         if (dlast.sopt && 'replaceMerge' in dlast.sopt) ok = false;

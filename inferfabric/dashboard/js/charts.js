@@ -6,7 +6,7 @@
  *     series 尾部（series 数收缩时残留幽灵 series）；series 数动态变化的调用方传
  *     { replaceSeries: true }（包装层整替 + ECharts ≥5.4 replaceMerge，vendor 已含）
  *   - dispose(target)              → 销毁实例（TAB 卸载用）
- *   - palettes = { dark:[4], light:[4] }  CVD 验证通过，固定顺序 蓝→琥珀→青→紫
+ *   - palettes = { dark:[5], light:[5] }  CVD 全对验证通过，固定顺序 蓝→琥珀→青→绿→粉
  *   - onThemeChange(cb)            → 注册主题变更回调；主题切换时 dispose+重建实例（spec §7）
  *
  * 图表规则（spec §7 / dataviz，不可协商）：
@@ -22,14 +22,18 @@
 (function () {
   'use strict';
 
-  /* ── CVD 验证通过的系列调色板（task-4-palette.md）──────────────
-   * 固定顺序：蓝 → 琥珀 → 青 → 紫。不循环；第 5+ 系列折叠为"其他"。
-   * dark 组 surface #161c24 / light 组 surface #ffffff。
+  /* ── CVD 全对验证通过的统一调色板 v7.0 ──────────────
+   * 固定顺序：蓝 → 琥珀 → 青 → 绿 → 粉。不循环；第 6+ 系列折叠为"其他"。
+   * dark/light 同 hex（消除原 dark #3b82f6 vs light #2563eb 两套蓝；dark 蓝对齐
+   *   light 深蓝后，蓝↔青正常视力 ΔE 16.3，双主题全对过 15）。
+   * 语义分层：[1] 琥珀 = 累计/存量线专用槽（功耗电量 + Token 累计，跨卡锚点，
+   *   暖色与冷色柱天然分层）；[0]/[2]/[3]/[4] = 数据系列槽（柱 + 趋势折线）。
+   * 放弃红（与琥珀暖色撞 ΔE 6.8）与紫（与蓝 deutan ΔE 0.4 同色）——物理不可用。
    * 状态色（ok/warn/crit/info）与系列色严格分离，不混用——切勿把状态色写进这里。
-   * 改动任一值必须重跑 specs/dashboard-v2-console/tools/validate_palette.js 保持 ALL PASS。 */
+   * 改动任一值必须重跑 dataviz validate_palette.js --pairs all --mode dark|light 保持 ALL PASS。 */
   var PALETTES = {
-    dark:  ['#3b82f6', '#b45309', '#0891b2', '#7c3aed'],
-    light: ['#2563eb', '#b45309', '#0891b2', '#7c3aed'],
+    dark:  ['#2563eb', '#b45309', '#0891b2', '#15803d', '#db2777'],
+    light: ['#2563eb', '#b45309', '#0891b2', '#15803d', '#db2777'],
   };
 
   var _instances = {};          // id → { id, chart, containerId, theme, userOption }
