@@ -104,7 +104,7 @@ class NInferAdapter(EngineAdapter):
         with open(log_path) as f:
             if chunk < size: f.seek(size - chunk); f.readline()
             lines = f.readlines()
-        cap = None; reqs = []; tput = None; run_samples = []; saw_running = False
+        reqs = []; tput = None; run_samples = []; saw_running = False
         for line in lines:
             line = line.strip()
             # live running batch：throughput 行每 5s 打印 `running N`（在途并发数，非累计）。
@@ -117,8 +117,6 @@ class NInferAdapter(EngineAdapter):
                     saw_running = True
                     if v > 0:
                         run_samples.append(v)
-            m = _re.search(r"capacity.*?pages\s+([\d,]+)/([\d,]+)", line)
-            if m: cap = (int(m.group(1).replace(",","")), int(m.group(2).replace(",",""))); continue
             m = _re.search(r"throughput.*?decode\s+([\d.]+)(k?)\s+tok", line)
             if m: tput = float(m.group(1)) * 1000 if m.group(2)=="k" else float(m.group(1)); continue
             m = _re.search(r"req#\d+\s+done.+?prompt\s+([\d,]+)\s*\|.+?output\s+([\d,]+).+?TTFT\s+([\d.]+)\s*(ms|s).+?decode\s+([\d.]+)k?\s*", line)
@@ -131,7 +129,6 @@ class NInferAdapter(EngineAdapter):
                 dt = float(ds)*1000 if av.lstrip().startswith("k") else float(ds)
                 reqs.append({"prompt":p,"output":o,"ttft_s":t,"tpot_s":1.0/dt if dt>0 else 0})
         r = {"sleep_state": 0}
-        if cap: r["kv_cache_usage_perc"] = round(cap[0]/cap[1]*100, 1)
         rec = reqs[-50:] if len(reqs)>50 else reqs
         if rec:
             r["seq_length"] = int(sum(x["prompt"]+x["output"] for x in rec)/len(rec))
@@ -144,15 +141,31 @@ class NInferAdapter(EngineAdapter):
             ps = sorted(x["tpot_s"] for x in rec)
             r["tpot_cum_mean"] = round(sum(ps)/len(ps),4); r["tpot_cum_n"] = len(ps)
             r["tpot_seconds"] = {"p50":round(ps[len(ps)//2],4),"p95":round(ps[int(len(ps)*0.95)],4),"mean":round(sum(ps)/len(ps),4),"count":len(ps)}
+        # 日志派生兜底值（引擎 /metrics 不可用时的旧行为）。
         if tput: r["throughput"] = str(round(tput,1)); r["throughput_inst"] = str(round(tput,1))
         if rec: r["throughput_cum_n"] = sum(x["output"] for x in rec)
-        # Batch Size：当前在途并发请求数（live running batch，0..max_concurrency），
-        # 非 seq_count 累计完成数。取最近 20 条非零采样的平均 —— 用 live 值但跳过
-        # idle 间隙的 0 采样，避免单点跌 0 / 被零值拉低。全程 idle（无非零采样）不设键。
+        # 日志 running_batch 兜底：取最近 20 条非零采样的平均（引擎 /metrics 不可用时保留）。
         if run_samples:
             r["running_batch"] = round(sum(run_samples[-20:]) / len(run_samples[-20:]), 1)
+        # 权威引擎值：NInfer 引擎 GET /metrics（Prometheus 文本）经共享 VllmMetricsCollector
+        # （prefix="ninfer_"）取 KV / running batch / 吞吐（EMA）。有值即覆盖上面的日志兜底；
+        # 旧镜像或 /metrics 不可达时静默回退到日志派生值（KV 缺省，与今日一致）。
+        try:
+            from urllib.request import urlopen
+            from inferfabric.prometheus import VllmMetricsCollector, parse_prometheus_text
+            with urlopen(f"http://127.0.0.1:{cfg.port}/metrics", timeout=10) as resp:
+                text = resp.read().decode("utf-8")
+            gauges, counters, histos = parse_prometheus_text(text)
+            engine_r = VllmMetricsCollector.compute(cfg.port, gauges, counters, histos, prefix="ninfer_")
+            for k in ("kv_cache_usage_perc", "running_batch", "throughput", "throughput_inst", "throughput_cum_n"):
+                if engine_r.get(k) is not None:
+                    r[k] = engine_r[k]
+        except Exception:
+            pass  # 旧镜像 / 无 /metrics → 保持日志派生值
         r["max_batch"] = cfg.max_concurrency
-        return r if r.get("kv_cache_usage_perc") or rec or saw_running else {"sleep_state": 0}
+        has_value = (r.get("kv_cache_usage_perc") is not None or bool(rec) or saw_running
+                    or tput is not None)
+        return r if has_value else {"sleep_state": 0}
 
 
 register("ninfer", NInferAdapter)
