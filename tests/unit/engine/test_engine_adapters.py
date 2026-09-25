@@ -735,6 +735,16 @@ class TestNInferEngineMetricsRunningBatch:
     `running N`；running_batch 取「最近 20 条非零 running 采样的平均值」——用 live 值
     但跳过 idle 间隙的 0 采样，避免单点跌 0 / 被零值拉低。max_batch 来自 cfg.max_concurrency。"""
 
+    @pytest.fixture(autouse=True)
+    def _no_engine_metrics(self, monkeypatch):
+        """本类仅验证日志派生兜底（旧镜像 / 无 /metrics 场景）。测试默认端口 8007 在部署机
+        上有真实的 keyless GET /metrics → 封禁引擎抓取，否则真实 gauge 会覆盖日志断言。"""
+
+        def _block(*a, **k):
+            raise ConnectionError("engine /metrics unavailable (test stub)")
+
+        monkeypatch.setattr("urllib.request.urlopen", _block)
+
     def _make_model(self, log_file, max_concurrency=4):
         from inferfabric.config import ModelConfig, NInferConfig
         cfg = NInferConfig(
