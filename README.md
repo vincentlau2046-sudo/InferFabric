@@ -325,6 +325,51 @@ ollama_daemon:
 
 ---
 
+## 场景预设调优（iff tune）
+
+为模型定义「场景」——命名的一组引擎参数预设，运行时一条命令（或 Dashboard 一次点击）切换。三层架构保证**模型 YAML 永不被改**：
+
+```
+models.d/<model>.yaml              ← 第 1 层：启动真相（default = 此值；对 tune 只读）
+models.d/scenarios.yaml            ← 第 2 层：场景定义侧车（单一真相源，进 git）
+~/.inferfabric/active_scenarios.yaml ← 第 3 层：应用层（机器本地，只由 tune 写入，带文件锁）
+```
+
+- **default 一等化**：default ≡ 模型 YAML 当前值。无应用条目 = default；`iff tune <model> default` 无条目且模型未运行 = no-op；有漂移（手改 YAML 后）= 清条目 + 重启使新值进容器。
+- **启动即读**：`switch()` 部署非活跃模型前重读磁盘「YAML + 应用层」——长驻代理的内存不会启动旧场景。
+- **展示读磁盘**：CLI / Dashboard / API 的「当前场景」一律直读应用层文件（`status().scenario_active`），不读代理内存。
+- **单写者 + 文件锁**：应用层只由 `tune.apply` 写入（`fcntl.flock` 排他锁覆盖写文件 + 重启临界区），并发写者串行化；其余工具链只读。
+- **kv_capacity 不是场景字段**：它是模型的固定物理 KV 池（Qwen38-27B-TXT=600000 / NI-Qwen38-27B-VL=410000）。场景 C×W 池顶超出即「超卖」——预期行为（满载由引擎 preempt 兜底），`iff tune` 仅 ⚠ 提示、不阻塞。
+- **draft>1 自动冒烟**：`draft_tokens > 1` 的场景应用后自动跑一条短请求冒烟，失败自动还原上一次配置。
+
+### 当前场景定义（NInfer 双模型，2026-09-26 统一调整）
+
+| 场景（使用档位） | Qwen38-27B-TXT（kv 池 600K） | NI-Qwen38-27B-VL（kv 池 410K） |
+|------|------|------|
+| **short-ctx** 低延迟 | C6 · 131072 · MTP draft=2 · 超卖 23.7% | C5 · 131072 · MTP draft=2 · 超卖 37.4% |
+| **small-batch** 顶窗批处理 | C3 · 262144 · MTP draft=3 · 超卖 23.7% | C2 · 262144 · MTP draft=3 · 超卖 21.8% |
+| **big-batch** 长窗批处理 | C4 · 204800 · MTP draft=2 · 超卖 26.8% | C3 · 204800 · MTP draft=2 · 超卖 33.3% |
+
+> 场景名 = 使用档位（并发/用途），**不代表窗口大小**（small-batch 反而是顶窗长档）。
+> default = 模型 YAML 当前值：TXT C6 · 204800 · draft=1；VL C4 · 204800 · draft=1。
+> 场景字段白名单：`max_concurrency / max_context / default_max_tokens / prefill_chunk / enable_mtp / draft_tokens`（越界自动钳制）。
+
+### 用法
+
+```bash
+./iff tune                            # 列出所有模型及其场景
+./iff tune Qwen38-27B-TXT             # 该模型场景清单 + 当前 live 值
+./iff tune Qwen38-27B-TXT short-ctx   # 预览 diff → 确认 → 自动重启（~3-6s，在途请求 503 + Retry-After）
+./iff tune Qwen38-27B-TXT big-batch --dry   # 只预览（不写盘、不重启）
+./iff tune Qwen38-27B-TXT default     # 回到 YAML 基线（有漂移则重启生效）
+```
+
+Dashboard 推理页模型卡有 **⚙ 场景** 按钮：三阶段模态框（选场景 → diff/告警预览 → 应用），全走 `POST /admin/tune`（进程内，与 CLI 同一临界区），不直接改文件。
+
+> ⚠️ VL 模型（NI-Qwen38-27B-VL）的场景切换不会主动执行——按约定需先申请、由用户切换（见 `CLAUDE.md`）。
+
+---
+
 ## Cloud Provider Presets
 
 9 pre-configured cloud providers with one-click setup:
@@ -367,6 +412,7 @@ A macOS-inspired sidebar dashboard for model management, monitoring, and multi-e
 - Monitor 三卡：功耗/电费（上）、Token 用量 = 本地/云端双 scope 并排 + Cache Hit Rate 徽标（统一走 `/api/token-curve`）、模型延迟趋势 = TTFT/TPOT 逐桶分位（P50 / P50+P95）双卡，桶内空 → connectNulls
 - **Engine-agnostic token stats**: DB-sourced instead of engine Prometheus counters — works across vLLM / sglang / ninfer; `/api/engine_metrics` route exposes per-model KV cache, batch size, sequence length, latency & throughput
 - **Two-scope token charts**: local engine vs. cloud provider consumption split side-by-side
+- Inference model card **⚙ 场景** control: three-phase modal — pick scenario (`GET /admin/tune/scenarios`) → diff/warning preview (`/admin/tune/preview`) → apply (`POST /admin/tune`, in-process + file lock); card badge shows the live scenario read straight from the applied-layer file
 - Cloud provider management: CRUD, auto-discover, connection test, API key masked-then-expanded forwarding
 - Anomaly detection: top-N anomalies with severity classification
 - Dual-protocol routing: local vLLM/sglang + cloud OpenAI-compatible, unified via YAML engine-type aliases
@@ -480,6 +526,9 @@ python3 -m inferfabric.proxy.handler --async
 | `POST` | `/pull` | Pull a remote model |
 | `POST` | `/admin/cache/toggle` | Toggle response cache on/off |
 | `POST` | `/admin/gpu-clear` | Clear GPU CUDA state |
+| `GET` | `/admin/tune/preview` | Scenario preset diff preview `?model=&preset=` |
+| `POST` | `/admin/tune` | Apply scenario preset `{"model","preset","restart"}` (in-process, file-locked) |
+| `GET` | `/admin/tune/scenarios` | Model scenario list + current active `?model=` (reads applied layer) |
 
 ### Cloud Admin (admin)
 
@@ -551,6 +600,7 @@ python3 -m inferfabric.proxy.handler --async
 ./iff list-downloaded     # List downloaded models
 ./iff sleep <model>       # L2 sleep: discard weights, wake in ~3-6s
 ./iff wake <model>        # Wake a sleeping model
+./iff tune [model] [preset]   # Scenario preset tuning: list / preview / apply (auto-restart)
 ```
 
 ---
@@ -579,6 +629,7 @@ bash scripts/iff-recovery.sh --full  # Nuclear: SIGKILL all + nvidia-smi -gpu-re
 | **v5.8.0** | **2026-09** | **PR-19: Production-grade aiohttp async edge (`--async`)** — hybrid executor model, 7 stream routes with incremental SSE pump, 30+ buffered routes with full header propagation, chunked request body support, 100MB client_max_size, EADDRINUSE retry, systemd sd_notify, C extension wheel rebuild (2.7x perf), dead route cleanup, **path normalization fix**: `/v1/completions`/`/api/chat`/`/api/generate` aliased to `/v1/chat/completions` (engine-type-driven via YAML). |
 | **v6.0.0** | **2026-09** | **Dashboard data-chain engine-agnostic + two-scope** — token stats DB-sourced (no longer vLLM Prometheus-only, works across vLLM/sglang/ninfer); local vs. cloud two-scope token charts; `/api/engine_metrics` route (KV cache / batch size / seq length / TPOT / TTFT / throughput); **6-KPI 2×3 panel** with Batch Size + unified TPOT(ms, 2dp)/TTFT(s, 2dp) units; 30-day standardized bar charts; live snapshot freshness (ETag/304 + TTL single-flight cache); AnomalyCollector tab. |
 | **v6.0.1** | **2026-09** | **统一 Monitor 三卡时间档位单位语义（分钟/小时/天/周，整体弃用 月）** — 功耗/电费 小时/天/周（周 = 近 90 天 · 7 天周桶，双轴单网格 W 0–600 + 温度 nice 刻度）；Token 用量 分钟/小时/天/周（60min·12×5min / 24h·24×1h / 30d·30×1d / 90d·13×1周，双 scope + Cache Hit Rate）；模型延迟趋势 分钟/小时/天（相对年龄对齐、严格 12/24/30 桶）；`/api/token-curve` 档位重定义，`/api/latency`、`/api/power` 端点就位。 |
+| **v6.1.0** | **2026-09** | **场景预设调优（iff tune）** — 三层架构（模型 YAML 只读 / `scenarios.yaml` 侧车 / 机器本地应用层），default 一等化、启动即读、展示读磁盘、`fcntl.flock` 文件锁；NInfer 双模型统一 3 场景（short-ctx / small-batch / big-batch，MTP draft 按档位启用 2/3，应用后自动冒烟）；Dashboard 场景控件（三阶段模态框）；`/admin/tune*` 端点。 |
 
 ---
 
