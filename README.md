@@ -352,7 +352,7 @@ models.d/scenarios.yaml            ← 第 2 层：场景定义侧车（单一�
 | **big-batch** 长窗批处理 | C5 · 204800 · MTP draft=2 · 超卖 41.4% | C3 · 204800 · MTP draft=2 · 超卖 33.3% |
 
 > 场景名 = 使用档位（并发/用途），**不代表窗口大小**（small-batch 反而是顶窗长档）。
-> default = 模型 YAML 当前值：TXT C6 · 204800 · draft=1；VL C4 · 204800 · draft=1。
+> default = 模型 YAML 当前值：TXT C5 · 204800 · draft=1（池顶 1024000，超卖 41.4%）；VL C4 · 204800 · draft=1。
 > 场景字段白名单：`max_concurrency / max_context / default_max_tokens / prefill_chunk / enable_mtp / draft_tokens`（越界自动钳制）。
 
 ### 用法

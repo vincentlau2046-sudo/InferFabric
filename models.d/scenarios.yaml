@@ -36,9 +36,9 @@
 
 Qwen38-27B-TXT:
   # 固定 kv_capacity = 600000（在模型 YAML ninfer: 块，此处只列场景）
-  # 2026-09-26 统一调整：default 窗口 262144→204800（模型 YAML 同步）；
+  # 2026-09-26 统一调整：default 窗口 262144→204800、并发 6→5（模型 YAML 同步）；
   # 场景改名（使用档位命名）；draft_tokens 按档位启用 2/3（应用后自动冒烟）。
-  # 超卖% = (池顶 − 600000) / 池顶：short-ctx 23.7% / small-batch 23.7% / big-batch 41.4%
+  # 超卖% = (池顶 − 600000) / 池顶：default 41.4% / short-ctx 23.7% / small-batch 23.7% / big-batch 41.4%
   short-ctx:      # 低延迟档：聊天/agent 主力（C 高 + 短窗 + MTP draft=2，池顶 786432）
     max_concurrency: 6
     max_context: 131072
