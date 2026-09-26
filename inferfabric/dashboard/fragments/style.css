@@ -969,6 +969,40 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
   color: var(--ink);
 }
 
+/* 场景徽标（D5：default = 模型 YAML 当前值，灰显；非 default 场景琥珀色） */
+.inf-scenario { color: var(--ink-3); }
+.inf-scenario.warn { color: var(--warn); }
+
+/* 场景预设弹窗（inference.js openScenarioModal）：选择行 + 差异预览 */
+.scn-modal { width: min(560px, 92vw); }
+.scn-select-row {
+  display: flex;
+  gap: var(--sp-1);
+  align-items: center;
+  margin: var(--sp-2) 0;
+}
+.scn-select-row .if-field-select { flex: 1; min-width: 0; }
+.scn-preview {
+  margin: 0 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-table);
+  max-height: 40vh;
+  overflow: auto;
+}
+.scn-diff-row {
+  display: flex;
+  gap: var(--sp-1);
+  padding: 2px 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.scn-diff-k { width: 160px; flex-shrink: 0; color: var(--ink-3); }
+.scn-diff-row.unchanged { color: var(--ink-3); }
+.scn-issue { margin: 4px 0 0; }
+.scn-warn { margin-top: var(--sp-1); color: var(--warn); }
+
 /* 网关控制卡：行式布局 */
 .gw-row {
   display: flex;

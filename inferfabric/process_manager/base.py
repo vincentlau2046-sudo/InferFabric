@@ -24,6 +24,12 @@ class BaseProcessManager:
     The ProcessManager facade also extends it for force_kill_all etc.
     """
 
+    # 可选回引用：ModelManager 构造时回填（proc.mgr = manager），供
+    # 状态机感知的适配器钩子（NInferAdapter.restart 走 stop_service→switch、
+    # 在途请求收 503 Switch Guard）使用。未注入时为 None → 适配器退回基类
+    # stop+start。不要在此 __init__ 里硬依赖它。
+    mgr: object | None = None
+
     def __init__(self, state, log_dir: Path):
         self._state = state
         self._log_dir = log_dir

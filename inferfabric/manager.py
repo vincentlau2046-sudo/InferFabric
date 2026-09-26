@@ -75,6 +75,12 @@ class ModelManager:
         self.state = state if state is not None else StateDB(Path(state_db_path))
         self._lock = lock if lock is not None else GPULock()
         self._proc = proc if proc is not None else ProcessManager(self.state)
+        # 状态机感知重启钩子（NInferAdapter.restart）依赖 proc.mgr 回引用；
+        # 缺失时适配器会静默退回基类 stop+start（绕过 503 守卫/历史/状态同步）。
+        try:
+            self._proc.mgr = self
+        except (AttributeError, TypeError):
+            pass  # 测试桩/受限 IProcessManager 不接受回引用 → 保持基类回退
         self._health = health if health is not None else DefaultHealthChecker()
         self._models = load_models(self.models_dir)
         # 计算属性: gpu_mode 从 active_services 实时推导
@@ -283,6 +289,17 @@ class ModelManager:
             return self._lifecycle._switch_to_idle()
 
         # ── Model lookup & already-running check ──────────────────────
+        # D1 启动即读：非活跃模型的部署参数一律取「YAML + 应用层」磁盘当前值
+        # （长驻代理进程的内存注册表可能落后于 CLI/别处的 tune apply）。
+        # 活跃模型不重读——其配置漂移由下方 vLLM drift 检查负责。
+        if target not in self.active_services:
+            try:
+                self._models = load_models(self.models_dir)
+            except Exception as e:
+                # D1 降级：磁盘读失败时沿用内存注册表（核心 switch 不因此阻塞），
+                # 但可能部署旧场景 → error 级可见，便于排查 D1 保证失效
+                log.error("switch(%s): 重读模型配置失败（D1 降级：沿用内存注册表，可能部署旧场景）: %s",
+                          target, e)
         model = self._models.get(target)
         if not model:
             return {"status": "error", "message": f"Unknown model: {target}. Available: {list(self._models.keys())}"}
@@ -460,11 +477,21 @@ class ModelManager:
 
         active_services = [s for s in active if s not in dead_services]
 
+        # D5: 每模型当前场景（直读应用层文件，≡ 容器实际/下次部署意图；
+        # 无条目 = "default" = 模型 YAML 当前值）——Dashboard 模型卡徽标用。
+        from inferfabric.config import read_applied_scenarios
+        applied = read_applied_scenarios()
+        scenario_active = {
+            m.name: str((applied.get(m.name) or {}).get("active_preset") or "default")
+            for m in self._models.values()
+        }
+
         return {
             "gpu_mode": self.gpu_mode,
             "active_services": active_services,
             "services_health": services_status,
             "services_info": services_info,
+            "scenario_active": scenario_active,
             "sleep_states": sleep_states,
             "switch_target": self.state.get("switching_target") or None,
             "gpu_used_mb": gpu_used_mb(),

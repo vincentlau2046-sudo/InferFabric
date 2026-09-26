@@ -14,6 +14,12 @@
  *   - POST /switch | /stop | /sleep | /wake  — 模型生命周期操作（admin header）
  *   - POST /admin/cache/toggle               — LRU 缓存开关（admin header）
  *   - POST /admin/auto-switch/toggle         — 自动切换开关（admin header，立即生效）
+ *   - GET  /admin/tune/scenarios?model=      — 场景选择集 + 当前生效（D5：后端直读应用层文件）
+ *   - GET  /admin/tune/preview?model=&preset=— 场景差异预览（diff + 超卖/MTP 告警）
+ *   - POST /admin/tune {model,preset,restart}— 应用场景并重启（失败自动回滚）
+ *       场景徽标（卡内「场景」stat）数据源 = snapshot.status.scenario_active
+ *       （manager.status() 直读应用层文件，所有模型卡可见，≡ 容器实际值）；
+ *       应用后本地立即刷新该字段，服务端 15s snapshot TTL 内同步且值一致
  *
  * 设计纪律：
  *   - 事件委托（无 inline onclick）；数字等宽 tabular-nums；零 emoji（SVG 图标）
@@ -91,12 +97,17 @@
   }
 
   /* ── 单张模型卡 ── */
-  function modelCard(m, info, sleepState) {
+  function modelCard(m, info, sleepState, scenarioActive) {
     var name = m.name || '';
     var type = (info && info.type) || m.type || '';
     var port = info && info.port ? info.port : null;
     var sleeping = !!sleepState;
     var active = !!m.active && !sleeping;
+
+    // 场景徽标（D5：数据源 = snapshot.status.scenario_active，直读应用层文件 ≡ 容器值）
+    // default（= 模型 YAML 当前值）灰显；非 default 场景琥珀色
+    var scn = scenarioActive || 'default';
+    var scnCls = scn === 'default' ? '' : ' warn';
 
     // 客户端 uptime
     var now = Date.now();
@@ -132,6 +143,10 @@
       actions += '<button type="button" class="btn btn-pri btn-sm" data-action="switch" data-model="' + nm + '">' +
         UI.icon('play', 14) + '启动</button>';
     }
+    // 场景控件：所有卡可见（default 也是合法目标——手改 YAML 后重启生效；
+    // 无预设的模型打开弹窗只有 default 一项，引擎不支持时预览会明确报错）
+    actions += '<button type="button" class="btn btn-sec btn-sm" data-action="scenario" data-model="' + nm + '">' +
+      UI.icon('gear', 14) + '场景</button>';
 
     var quant = m.quantization ? escHtml(m.quantization) : '';
     var portHtml = (port != null && active)
@@ -150,6 +165,9 @@
             portHtml +
             '<div class="inf-stat"><dt>uptime</dt><dd class="mono">' + (active ? UI.fmtDur(upSecs) : '—') + '</dd></div>' +
             (quant ? '<div class="inf-stat"><dt>精度</dt><dd class="mono">' + quant + '</dd></div>' : '') +
+            '<div class="inf-stat"><dt>场景</dt><dd class="mono inf-scenario' + scnCls + '" title="' +
+              escHtml(scn === 'default' ? 'default（= 模型 YAML 当前值）' : '已应用场景 ' + scn) + '">' +
+              escHtml(scn) + '</dd></div>' +
           '</dl>' +
         '</div>' +
         '<div class="if-card-actions">' + actions + '</div>' +
@@ -157,7 +175,7 @@
   }
 
   /* ── 渲染一个分组 ── */
-  function renderGroup(groupEl, countEl, listEl, models, sleepStates, servicesInfo) {
+  function renderGroup(groupEl, countEl, listEl, models, sleepStates, servicesInfo, scenarioActive) {
     if (!groupEl || !listEl || !countEl) return;
 
     if (models === undefined) {
@@ -183,7 +201,8 @@
       var m = models[i];
       var info = (servicesInfo && servicesInfo[m.name]) || null;
       var sleep = (sleepStates && sleepStates[m.name]) || null;
-      html += modelCard(m, info, sleep);
+      var scn = scenarioActive && scenarioActive[m.name];
+      html += modelCard(m, info, sleep, scn || 'default');
     }
     listEl.innerHTML = html;
   }
@@ -257,17 +276,20 @@
     var models = store.get('models');
     var sleepStates = store.get('sleep_states') || {};
     var servicesInfo = store.get('services_info') || {};
+    // D5：场景徽标数据源 = snapshot.status.scenario_active（后端直读应用层文件）
+    var status = store.get('status') || {};
+    var scenarioActive = status.scenario_active || {};
 
     pruneUptime(models);
 
     var g = groupModels(models);
 
     renderGroup($('infExclGroup'), $('infExclCount'), $('infExclList'),
-                g.exclusive, sleepStates, servicesInfo);
+                g.exclusive, sleepStates, servicesInfo, scenarioActive);
     renderGroup($('infShrdGroup'), $('infShrdCount'), $('infShrdList'),
-                g.shared, sleepStates, servicesInfo);
+                g.shared, sleepStates, servicesInfo, scenarioActive);
     renderGroup($('infFreeGroup'), $('infFreeCount'), $('infFreeList'),
-                g.none, sleepStates, servicesInfo);
+                g.none, sleepStates, servicesInfo, scenarioActive);
 
     renderGateway();
   }
@@ -398,6 +420,175 @@
     }
   }
 
+  /* ── 场景控件：选择 → 差异预览 → 应用并重启（POST /admin/tune） ──
+   * D4：场景变更走进程内 API（写应用层 + 触发重启由 proxy 编排），CLI 侧
+   * 写同一应用层文件、经文件锁互斥。应用后直接刷新本地 scenario_active
+   *（服务端 snapshot 15s TTL 内同步，值一致无闪烁）。
+   * D5：选择集/当前值来自 /admin/tune/scenarios（后端直读应用层文件）。
+   */
+  function fmtVal(v) {
+    if (v === true) return 'on';
+    if (v === false) return 'off';
+    return v == null ? '—' : String(v);
+  }
+
+  function openScenarioModal(name) {
+    var host = document.createElement('div');
+    host.className = 'scn-modal-host';
+    host.innerHTML =
+      '<div class="if-modal-backdrop">' +
+        '<div class="if-modal scn-modal" role="dialog" aria-modal="true">' +
+          '<div class="if-modal-title"></div>' +
+          '<div class="scn-select-row">' +
+            '<select class="if-field-select scn-select" disabled></select>' +
+            '<button type="button" class="btn btn-pri btn-sm scn-preview-btn" disabled>预览差异</button>' +
+          '</div>' +
+          '<div class="scn-preview" hidden></div>' +
+          '<div class="if-modal-actions">' +
+            '<button type="button" class="btn btn-sec btn-sm scn-cancel">取消</button>' +
+            '<button type="button" class="btn btn-pri btn-sm scn-apply" hidden>应用并重启</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(host);
+
+    var sel = host.querySelector('.scn-select');
+    var previewBtn = host.querySelector('.scn-preview-btn');
+    var previewBox = host.querySelector('.scn-preview');
+    var applyBtn = host.querySelector('.scn-apply');
+    host.querySelector('.if-modal-title').textContent = '场景预设 · ' + name;
+
+    function close() {
+      document.removeEventListener('keydown', onKey);
+      host.remove();
+    }
+    function onKey(ev) { if (ev.key === 'Escape') close(); }
+
+    function adminGet(url) {
+      return fetch(url, { headers: UI.adminHeaders() })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); });
+    }
+
+    /* 阶段 1：场景选择集 + 当前生效（D5：后端直读应用层文件） */
+    adminGet('/admin/tune/scenarios?model=' + encodeURIComponent(name))
+      .then(function (res) {
+        if (!res.ok) {
+          UI.toast('获取场景列表失败: ' + (res.j && res.j.error ? res.j.error : 'HTTP ' + res.status), 'error');
+          close();
+          return;
+        }
+        var j = res.j || {};
+        var choices = j.choices || [];
+        sel.innerHTML = choices.map(function (c) {
+          var label = c === 'default' ? 'default (= model.yaml)' : c;
+          return '<option value="' + escAttr(c) + '"' + (c === j.active ? ' selected' : '') + '>' +
+            escHtml(label) + '</option>';
+        }).join('');
+        sel.disabled = false;
+        previewBtn.disabled = false;
+      })
+      .catch(function (e) {
+        UI.toast('获取场景列表失败: ' + (e && e.message ? e.message : e), 'error');
+        close();
+      });
+
+    /* 阶段 2：差异预览（diff + 超卖/MTP 告警） */
+    function showPreview() {
+      var preset = sel.value;
+      if (!preset) return;
+      previewBox.innerHTML = '<div class="scn-issue">加载预览中…</div>';
+      previewBox.hidden = false;
+      applyBtn.hidden = true;
+      adminGet('/admin/tune/preview?model=' + encodeURIComponent(name) +
+               '&preset=' + encodeURIComponent(preset))
+        .then(function (res) {
+          if (!res.ok) {
+            previewBox.innerHTML = '<div class="scn-issue">预览失败: ' +
+              escHtml(res.j && res.j.error ? res.j.error : 'HTTP ' + res.status) + '</div>';
+            return;
+          }
+          var p = res.j || {};
+          var html = '';
+          var after = p.after || {};
+          var before = p.before || {};
+          for (var k in after) {
+            var b = before[k], a = after[k];
+            var changed = String(b) !== String(a);
+            html += '<div class="scn-diff-row' + (changed ? '' : ' unchanged') + '">' +
+              '<span class="scn-diff-k">' + escHtml(k) + '</span>' +
+              '<span>' + escHtml(fmtVal(b)) + (changed ? ' → ' + escHtml(fmtVal(a)) : '') + '</span>' +
+            '</div>';
+          }
+          (p.issues || []).forEach(function (i) {
+            html += '<div class="scn-issue">' + escHtml(i) + '</div>';
+          });
+          (p.clamp_notes || []).forEach(function (n) {
+            html += '<div class="scn-issue">⚙ ' + escHtml(n) + '</div>';
+          });
+          html += '<div class="scn-warn">应用将重启 ' + escHtml(name) + '（NInfer 约 3-6s），' +
+            '在途请求短暂 503；启动失败自动回滚到上一状态。</div>';
+          previewBox.innerHTML = html;
+          applyBtn.hidden = false;
+        })
+        .catch(function (e) {
+          previewBox.innerHTML = '<div class="scn-issue">预览失败: ' + escHtml(e && e.message ? e.message : e) + '</div>';
+        });
+    }
+
+    /* 阶段 3：应用并重启（POST /admin/tune，失败自动回滚由后端完成） */
+    function applyScenario() {
+      var preset = sel.value;
+      if (!preset) return;
+      applyBtn.disabled = true;
+      fetch('/admin/tune', {
+        method: 'POST',
+        headers: UI.adminHeaders(),
+        body: JSON.stringify({ model: name, preset: preset, restart: true }),
+      })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); })
+        .then(function (res) {
+          var j = res.j || {};
+          if (res.ok) {
+            // 本地徽标立即刷新（响应含最终 active_preset；服务端 15s 内同步且值一致）
+            var st = store.get('status') || {};
+            st.scenario_active = st.scenario_active || {};
+            st.scenario_active[name] = j.active_preset || 'default';
+            store.set('status', st);
+            var msgs = {
+              applied: name + ' 场景 ' + preset + ' 已应用并重启',
+              restarted: name + ' 已重启到 default（= 模型 YAML 当前值）',
+              rolled_back: name + ' 已回滚到 default（= 模型 YAML 值）',
+              already_default: '当前已在 default（= 模型 YAML 值），无需操作',
+              applied_restart_pending: '场景 ' + preset + ' 已写入应用层，重启后生效',
+              rolled_back_pending: '已回滚到模型 YAML 值，重启后生效',
+              failed_rolled_back: '重启失败，已回滚到上一状态' + (j.error ? '：' + j.error : ''),
+              failed_rollback_failed: '重启失败且回滚也失败，请人工检查' + (j.error ? '：' + j.error : ''),
+              failed_rollback_error: '回滚出错' + (j.error ? '：' + j.error : ''),
+            };
+            var bad = /^failed/.test(j.status);
+            UI.toast(msgs[j.status] || ('未知状态: ' + j.status), bad ? 'error' : (j.status === 'already_default' ? 'info' : 'ok'));
+            close();
+            store.forceRefresh();
+          } else {
+            UI.toast('应用失败: ' + (j.error ? j.error : 'HTTP ' + res.status), 'error');
+            applyBtn.disabled = false;
+          }
+        })
+        .catch(function (e) {
+          UI.toast('应用失败: ' + (e && e.message ? e.message : e), 'error');
+          applyBtn.disabled = false;
+        });
+    }
+
+    previewBtn.addEventListener('click', showPreview);
+    applyBtn.addEventListener('click', applyScenario);
+    host.querySelector('.scn-cancel').addEventListener('click', close);
+    host.querySelector('.if-modal-backdrop').addEventListener('click', function (ev) {
+      if (ev.target === ev.currentTarget) close();
+    });
+    document.addEventListener('keydown', onKey);
+  }
+
   /* ── 事件委托（无 inline onclick） ── */
   var root = $('tab-inference');
   if (root) {
@@ -416,6 +607,12 @@
       }
       if (act === 'goto-deploy') {
         store.switchTab('tab-deploy');
+        return;
+      }
+      // 场景控件：所有模型卡可见（default 也是合法目标）
+      if (act === 'scenario') {
+        var scnModel = btn.getAttribute('data-model');
+        if (scnModel) openScenarioModal(scnModel);
         return;
       }
       // 模型操作：switch / stop / sleep / wake

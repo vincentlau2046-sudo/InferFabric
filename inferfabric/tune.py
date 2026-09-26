@@ -24,7 +24,7 @@ from pathlib import Path
 
 import yaml
 
-from .config import APPLIED_SCENARIOS_FILE, load_models
+from .config import APPLIED_SCENARIOS_FILE, load_models, read_applied_scenarios
 
 log = logging.getLogger("inferfabric.tune")
 
@@ -116,24 +116,41 @@ def _coerce(v):
 
 # ── 应用层（唯一状态文件，tune 只写它）─────────────────────────
 
-def _load_applied() -> dict:
-    if not APPLIED_FILE.exists():
-        return {}
-    try:
-        raw = yaml.safe_load(APPLIED_FILE.read_text()) or {}
-        return raw if isinstance(raw, dict) else {}
-    except Exception as e:
-        log.warning("读取应用层 %s 失败: %s", APPLIED_FILE, e)
-        return {}
+def _applied_lock():
+    """应用层写锁（P0-4）：CLI 与 dashboard/API 并发改同一模型时保证「谁赢」确定。
+
+    临界区 = 写条目 + 触发重启；锁文件与应用层同目录（跟随 APPLIED_FILE 的
+    monkeypatch），flock 随 fd 关闭自动释放。
+    """
+    import fcntl
+    lock_path = APPLIED_FILE.parent / (APPLIED_FILE.name + ".lock")
+
+    class _Ctx:
+        def __enter__(self):
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            self.f = open(lock_path, "a+")
+            fcntl.flock(self.f.fileno(), fcntl.LOCK_EX)
+            return self.f
+
+        def __exit__(self, *exc):
+            try:
+                fcntl.flock(self.f.fileno(), fcntl.LOCK_UN)
+            finally:
+                self.f.close()
+
+    return _Ctx()
 
 
 def _applied_entry(model) -> dict | None:
-    return _load_applied().get(model.name)
+    return read_applied_scenarios().get(model.name)
 
 
 def _save_applied_entry(model, entry: dict | None):
-    """写该模型的应用层条目（entry=None → 删除）。整文件原子重写。"""
-    data = _load_applied()
+    """写该模型的应用层条目（entry=None → 删除）。整文件原子重写。
+
+    调用方须在 _applied_lock() 临界区内读-改-写。
+    """
+    data = read_applied_scenarios()
     if entry is None:
         data.pop(model.name, None)
     else:
@@ -142,6 +159,22 @@ def _save_applied_entry(model, entry: dict | None):
     tmp = APPLIED_FILE.with_suffix(".yaml.tmp")
     tmp.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
     os.replace(tmp, APPLIED_FILE)
+
+
+def current_active(model_name: str) -> str:
+    """D5：直读应用层文件（≡ 容器实际值）；无条目 = "default"。"""
+    from .config import current_active_preset
+    return current_active_preset(model_name)
+
+
+def has_applied_entry(model) -> bool:
+    """该模型是否已有应用层条目（default 是否需要「清除」动作）。"""
+    return _applied_entry(model) is not None
+
+
+def scenario_choices(model) -> list[str]:
+    """场景全集：default（= 模型 YAML 当前值，永远存在）+ 已定义场景。"""
+    return ["default"] + list_presets(model)
 
 
 def _yaml_only_values(model) -> dict:
@@ -158,10 +191,8 @@ def _yaml_only_values(model) -> dict:
 # ── 预览（diff,不落盘）──────────────────────────────────────────
 
 def _target_values(model, preset: str) -> dict:
-    """preset 的目标字段值（default = 回退纯 YAML 值）。只取白名单内字段。"""
+    """preset 的目标字段值（default = 模型 YAML 当前值，一等场景）。只取白名单内字段。"""
     if preset == "default":
-        if not _applied_entry(model):
-            raise TuneError(f"{model.name}: 未应用过场景（无应用层），无需回滚")
         return _yaml_only_values(model)
     pv = (model.presets or {}).get(preset)
     if pv is None:
@@ -272,65 +303,87 @@ def apply(model, preset: str, dry: bool = False, restart: bool = True, mgr=None)
         return {"status": "preview", **p}
 
     is_default = preset == "default"
-    # 1) 应用层：快照旧条目（失败回滚用），写新条目 / 清空
-    prev_entry = _applied_entry(model)
-    _save_applied_entry(
-        model, None if is_default else
-        {"active_preset": preset, "overrides": p["after"]})
 
-    # 2) 内存（本次重启的启动参数来源）
-    cfg = _engine_cfg(model)
-    for k, v in p["after"].items():
-        setattr(cfg, k, v if not isinstance(v, bool) else bool(v))
-    model.active_preset = "" if is_default else preset
+    # ── 写锁临界区：default 判定 + 读旧条目 → 写新条目/清空 → 重启
+    #    （P0-4：并发下谁赢确定；default 判定也放锁内，否则判定与写入之间
+    #    并发写入可钻空子 → TOCTOU 误判"已在 default"）
+    with _applied_lock():
+        # 0) default 一等化（P0-2/3）：default = 模型 YAML 当前值。
+        #    无条目（本来就在 default）→ no-op，不写盘不重启；除非模型正在运行且
+        #    要求重启（= 用户手改 YAML 后想让新值进容器的可执行路径）
+        prev_entry = _applied_entry(model)
+        if is_default and not prev_entry and not (restart and mgr is not None
+                                                  and model.name in getattr(mgr, "active_services", ())):
+            return {"status": "already_default", "model": model.name, "preset": "default",
+                    "active_preset": "", "diff": p,
+                    "message": "当前已在 default（= 模型 YAML 值），无需操作"}
+        # 1) 应用层：写新条目 / 清空（prev_entry 已快照，失败回滚用）
+        _save_applied_entry(
+            model, None if is_default else
+            {"active_preset": preset, "overrides": p["after"]})
 
-    # 写盘完成即视为"已应用待重启"（restart=False 或无法重启时停留在该状态）
-    result = {"status": "rolled_back_pending" if is_default else "applied_restart_pending",
-              "model": model.name, "preset": preset,
-              "active_preset": model.active_preset, "diff": p, "restart": None}
+        # 2) 内存（本次重启的启动参数来源）
+        cfg = _engine_cfg(model)
+        for k, v in p["after"].items():
+            setattr(cfg, k, v if not isinstance(v, bool) else bool(v))
+        model.active_preset = "" if is_default else preset
 
-    if not restart:
+        # 写盘完成即视为"已应用待重启"（restart=False 或无法重启时停留在该状态）
+        result = {"status": "rolled_back_pending" if is_default else "applied_restart_pending",
+                  "model": model.name, "preset": preset,
+                  "active_preset": model.active_preset, "diff": p, "restart": None}
+
+        if not restart:
+            return result
+
+        if mgr is None:
+            result["restart"] = {"status": "skipped", "message": "未提供 mgr，仅写入应用层，重启后生效"}
+            return result
+
+        adapter = _adapter(model)
+        # 确保适配器持有与 mgr 配套的进程管理器（重启走 GPU 状态机）
+        proc = getattr(mgr, "_proc", None) or mgr
+        try:
+            adapter.set_process_manager(proc)
+        except Exception as e:
+            log.warning("[tune] set_process_manager 失败(重启将走基类 stop+start): %s", e)
+        try:
+            restarted = adapter.restart(model)
+        except Exception as e:
+            # 非 TuneError 异常（RuntimeError/OSError…）也走统一回滚路径：
+            # 应用层文件已写入新条目，不还原会与容器实际状态永久不一致
+            log.error("[tune] 重启抛异常 %s: %s → 回滚", type(e).__name__, e)
+            restarted = {"status": "error", "message": f"{type(e).__name__}: {e}"}
+        result["restart"] = restarted
+
+        if restarted.get("status") in ("switched", "ok", "started"):
+            result["status"] = "restarted" if (is_default and prev_entry is None) else \
+                ("rolled_back" if is_default else "applied")
+            # MTP>1 场景: 自动冒烟,失败还原上一次应用层
+            if not is_default and p["after"].get("draft_tokens", 0) and p["after"]["draft_tokens"] > 1:
+                ok = _mtp_smoke(model)
+                result["mtp_smoke"] = ok
+                if not ok:
+                    log.warning("[tune] MTP 冒烟失败 → 还原上一次应用层")
+                    roll = _restore_previous(model, prev_entry, adapter, proc)
+                    result["rollback_restart"] = roll
+                    result["status"] = "rolled_back"
+                    result["error"] = "MTP 冒烟失败，已回滚"
+            return result
+
+        # 启动失败: 还原上一次应用层 + 内存值,重启旧配置
+        log.error("[tune] 重启失败 %s → 回滚", restarted.get("message"))
+        try:
+            roll = _restore_previous(model, prev_entry, adapter, proc)
+        except Exception as e:
+            # _restore_previous 已先还原文件层与内存值，此处只记录"回滚重启未完成"
+            result["status"] = "failed_rollback_error"
+            result["error"] = f"{type(e).__name__}: {e}"
+            return result
+        result["rollback_restart"] = roll
+        result["error"] = f"重启失败: {restarted.get('message')}"
+        result["status"] = ("failed_rolled_back"
+                            if roll.get("status") in ("switched", "ok", "started")
+                            else "failed_rollback_failed")
         return result
 
-    if mgr is None:
-        result["restart"] = {"status": "skipped", "message": "未提供 mgr，仅写入应用层，重启后生效"}
-        return result
-
-    adapter = _adapter(model)
-    # 确保适配器持有与 mgr 配套的进程管理器（重启走 GPU 状态机）
-    proc = getattr(mgr, "_proc", None) or mgr
-    try:
-        adapter.set_process_manager(proc)
-    except Exception as e:
-        log.warning("[tune] set_process_manager 失败(重启将走基类 stop+start): %s", e)
-    restarted = adapter.restart(model)
-    result["restart"] = restarted
-
-    if restarted.get("status") in ("switched", "ok", "started"):
-        result["status"] = "rolled_back" if is_default else "applied"
-        # MTP>1 场景: 自动冒烟,失败还原上一次应用层
-        if not is_default and p["after"].get("draft_tokens", 0) and p["after"]["draft_tokens"] > 1:
-            ok = _mtp_smoke(model)
-            result["mtp_smoke"] = ok
-            if not ok:
-                log.warning("[tune] MTP 冒烟失败 → 还原上一次应用层")
-                roll = _restore_previous(model, prev_entry, adapter, proc)
-                result["rollback_restart"] = roll
-                result["status"] = "rolled_back"
-                result["error"] = "MTP 冒烟失败，已回滚"
-        return result
-
-    # 启动失败: 还原上一次应用层 + 内存值,重启旧配置
-    log.error("[tune] 重启失败 %s → 回滚", restarted.get("message"))
-    try:
-        roll = _restore_previous(model, prev_entry, adapter, proc)
-    except TuneError as e:
-        result["status"] = "failed_rollback_error"
-        result["error"] = str(e)
-        return result
-    result["rollback_restart"] = roll
-    result["error"] = f"重启失败: {restarted.get('message')}"
-    result["status"] = ("failed_rolled_back"
-                        if roll.get("status") in ("switched", "ok", "started")
-                        else "failed_rollback_failed")
-    return result

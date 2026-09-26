@@ -208,6 +208,7 @@ _GET_ROUTES = {
     "/admin/cloud/providers":   _admin(lambda h, pm: h._handle_cloud_providers(pm)),
     "/admin/cloud/presets":     _admin(lambda h, pm: h._handle_cloud_presets(pm)),
     "/admin/tune/preview":      _admin(lambda h, pm: h._handle_tune_preview(pm)),
+    "/admin/tune/scenarios":    _admin(lambda h, pm: h._handle_tune_scenarios(pm)),
     "/api/openapi.json":        _serve_api_spec,
 }
 
@@ -825,6 +826,22 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             log.error("engine_metrics failed for %s: %s", name, e)
             self._send_json({"error": str(e)}, 502)
 
+    def _tune_model(self, pm, name: str):
+        """tune 处理器共用的模型查找（D1：磁盘为启动参数真相源）。
+
+        长驻代理的内存注册表可能落后于别处（CLI/另一标签页）的 tune apply，
+        所以每次 tune 请求前重读「YAML + 应用层」并同步内存注册表；
+        重读失败（或测试桩无 models_dir）时回退内存注册表。
+        """
+        models_dir = getattr(pm.mgr, "models_dir", None)
+        if models_dir:
+            from inferfabric.config import load_models
+            try:
+                pm.mgr._models = load_models(models_dir)
+            except Exception as e:
+                log.warning("tune: 重读模型注册表失败（沿用内存）: %s", e)
+        return pm.mgr._models.get(name)
+
     def _handle_tune_preview(self, pm):
         """GET /admin/tune/preview?model=X&preset=Y — 场景 diff 预览（不写盘）。"""
         from urllib.parse import urlparse, parse_qs
@@ -835,7 +852,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if not name or not preset:
             self._send_json({"error": "Missing model/preset"}, 400)
             return
-        model = pm.mgr._models.get(name)
+        model = self._tune_model(pm, name)
         if model is None:
             self._send_json({"error": f"unknown model: {name}"}, 404)
             return
@@ -843,6 +860,29 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(tune.preview(model, preset), 200)
         except tune.TuneError as e:
             self._send_json({"error": str(e)}, 400)
+
+    def _handle_tune_scenarios(self, pm):
+        """GET /admin/tune/scenarios?model=X — 场景选择集 + 当前生效场景。
+
+        D5：active 直读应用层文件（≡ 容器实际值），不读代理内存；
+        choices = ["default"] + 已定义场景（default = 模型 YAML 当前值，永远存在）。
+        """
+        from urllib.parse import urlparse, parse_qs
+        from inferfabric import tune
+        qs = parse_qs(urlparse(self.path).query)
+        name = (qs.get("model") or [None])[0]
+        if not name:
+            self._send_json({"error": "Missing model"}, 400)
+            return
+        model = self._tune_model(pm, name)
+        if model is None:
+            self._send_json({"error": f"unknown model: {name}"}, 404)
+            return
+        self._send_json({
+            "model": name,
+            "choices": tune.scenario_choices(model),
+            "active": tune.current_active(name),
+        }, 200)
 
     def _handle_tune(self, pm):
         """POST /admin/tune {model, preset, restart?} — 应用场景并重启（默认）。"""
@@ -855,15 +895,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if not name or not preset:
             self._send_json({"error": "Missing model/preset"}, 400)
             return
-        model = pm.mgr._models.get(name)
+        model = self._tune_model(pm, name)
         if model is None:
             self._send_json({"error": f"unknown model: {name}"}, 404)
             return
         restart = data.get("restart", True)
         try:
             r = tune.apply(model, preset, dry=False, restart=restart, mgr=pm.mgr)
-            code = 200 if r["status"].startswith(("applied", "rolled")) else 500
-            self._send_json(r, code)
+            ok = r["status"].startswith(("applied", "rolled")) or \
+                r["status"] in ("already_default", "restarted")
+            self._send_json(r, 200 if ok else 500)
         except tune.TuneError as e:
             self._send_json({"error": str(e)}, 400)
 

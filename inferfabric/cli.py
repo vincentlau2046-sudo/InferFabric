@@ -416,7 +416,7 @@ def _fmt_k(v):
 
 
 def _print_diff(p):
-    print(f"\n{p['model']}  [{p['type']}]  active: {p['active_preset'] or '(无)'}")
+    print(f"\n{p['model']}  [{p['type']}]  active: {p['active_preset'] or 'default'}")
     print(f"  场景 {p['preset']}")
     for k in p["after"]:
         b, a = p["before"].get(k), p["after"].get(k)
@@ -432,6 +432,10 @@ def _print_tune_result(r, no_restart):
     st = r["status"]
     if st == "applied":
         print(f"✓ 已应用 {r['preset']} 并重启")
+    elif st == "restarted":
+        print("✓ 已重启到 default（= 模型 YAML 当前值；此前无应用条目，本次重启使手改的 YAML 生效）")
+    elif st == "already_default":
+        print(f"✓ {r.get('message', '当前已在 default，无需操作')}")
     elif st == "applied_restart_pending":
         print(f"✓ 已写应用层（{r['preset']}），重启后生效（当前未重启）")
     elif st == "rolled_back":
@@ -461,9 +465,8 @@ def cmd_tune(args):
             presets = tune.list_presets(m)
             if not presets:
                 continue
-            active = tune.get_active(m)
-            tag = f" active: {active}" if active else " active: (无)"
-            print(f"{name:24s} [{m.type}]  场景: {', '.join(presets)}{tag}")
+            active = tune.get_active(m) or "default"
+            print(f"{name:24s} [{m.type}]  场景: {', '.join(presets)}  active: {active}")
         if not any(tune.list_presets(m) for m in mgr._models.values()):
             print("（没有任何模型定义场景预设——编辑 models.d/scenarios.yaml 侧车文件后生效）")
         return
@@ -480,9 +483,9 @@ def cmd_tune(args):
         if not presets:
             print(f"{model.name}: 未定义场景预设（编辑 models.d/scenarios.yaml）")
             sys.exit(1)
-        print(f"{model.name}  [{model.type}]  active: {tune.get_active(model) or '(无)'}")
+        print(f"{model.name}  [{model.type}]  active: {tune.get_active(model) or 'default'}")
         print(f"  场景: {', '.join(presets)}")
-        print(f"  当前 live 值（{tune.get_active(model) or '基线'}）:")
+        print(f"  当前 live 值（{tune.get_active(model) or 'default (= model.yaml)'}）:")
         cur = tune._current_values(model)
         for k, v in cur.items():
             print(f"    {k:16s} {_fmt_k(v)}")
@@ -503,8 +506,13 @@ def cmd_tune(args):
         print("\n[--dry 预览] 未写盘、未重启")
         return
 
-    # 确认（非交互环境需要 --yes）
-    if not (yes or no_restart or preset == "default"):
+    # 确认（非交互环境需要 --yes）：仅在「将重启容器」时确认。
+    # default 无条目且模型未运行 = 纯 no-op（不写盘不重启）→ 免确认；
+    # default 有条目（清除）或模型运行中（手改 YAML 重启生效）→ 会重启 → 确认。
+    default_noop = (preset == "default"
+                    and not tune.has_applied_entry(model)
+                    and model.name not in mgr.active_services)
+    if not (yes or no_restart or default_noop):
         print("\n应用后自动重启（NInfer ~3-6s），在途请求短暂 503；失败自动回滚。")
         try:
             ans = input("确认应用？[y/N] ")

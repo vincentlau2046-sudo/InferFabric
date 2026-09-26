@@ -275,8 +275,56 @@ def test_apply_default_rollback(model, tmp_path):
 
 
 def test_apply_default_without_applied_entry(model, tmp_path):
-    with pytest.raises(tune.TuneError, match="未应用"):
-        tune.apply(model, "default", restart=False)
+    """无条目 + 模型未运行 → 纯 no-op（不写盘不重启，P0-2）：不报错。"""
+    yaml_bytes_before = Path(model.yaml_path).read_bytes()
+    r = tune.apply(model, "default", restart=False)
+    assert r["status"] == "already_default"
+    assert r["active_preset"] == ""
+    assert "message" in r
+    # 模型 YAML 原样；应用层无条目（no-op 不写盘）
+    assert Path(model.yaml_path).read_bytes() == yaml_bytes_before
+    assert _applied_yaml(tmp_path) == {}
+
+
+def test_apply_default_drift_restarts_active_model(model, tmp_path):
+    """无条目 + 模型运行中 → 重启使手改 YAML 进容器（P0-3）。"""
+    class ActiveMgr(FakeMgr):
+        active_services = ("Qwen38-27B-TXT",)
+
+    mgr = ActiveMgr()
+    r = tune.apply(model, "default", restart=True, mgr=mgr)
+    assert r["status"] == "restarted"
+    assert r["restart"]["status"] == "switched"
+    assert _applied_yaml(tmp_path) == {}, "本来无条目，无需清除"
+    assert ("switch", "Qwen38-27B-TXT") in mgr.calls
+
+
+def test_applied_lock_excludes_concurrent_writer(model, tmp_path):
+    """P0-4：写锁临界区内，另一 fd 的非阻塞加锁必须失败（flock 互斥）。"""
+    import fcntl
+    lock_path = Path(tune.APPLIED_FILE).parent / (tune.APPLIED_FILE.name + ".lock")
+    with tune._applied_lock():
+        f = lock_path.open("r+")
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            raise AssertionError("锁被持有时不应能再次非阻塞获取")
+        except (BlockingIOError, PermissionError, OSError):
+            pass  # 预期：第一个持有者独占
+        finally:
+            f.close()
+
+
+def test_applied_lock_released_after_apply(model, tmp_path):
+    """apply 结束（无论重启与否）后锁必须释放，否则后续 tune 永久卡死。"""
+    import fcntl
+    tune.apply(model, "short-parallel", restart=False)
+    lock_path = Path(tune.APPLIED_FILE).parent / (tune.APPLIED_FILE.name + ".lock")
+    f = lock_path.open("r+")
+    try:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)  # 应能立即拿到
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    finally:
+        f.close()
 
 
 def test_apply_oversell_not_blocked(model, tmp_path):
@@ -307,6 +355,41 @@ def test_apply_restart_rollback_on_failure(model, tmp_path):
     assert model.active_preset == ""
     # 还原后确实用旧配置重启过一次
     assert ("switch", "Qwen38-27B-TXT") in mgr.calls
+
+
+def test_apply_restart_exception_rolls_back(model, tmp_path):
+    """restart 抛非 TuneError 异常（状态机崩溃等）→ 统一回滚路径：
+    文件层还原 + 内存还原 + 旧配置重启；apply() 不外抛异常（cross-review BUG-1）。"""
+    class BoomMgr(FakeMgr):
+        def switch(self, name):
+            self.calls.append(("switch", name))
+            if len([c for c in self.calls if c[0] == "switch"]) == 1:
+                raise RuntimeError("GPU state machine exploded")
+            return {"status": "switched"}
+
+    mgr = BoomMgr()
+    yaml_bytes_before = Path(model.yaml_path).read_bytes()
+    r = tune.apply(model, "short-parallel", restart=True, mgr=mgr)  # 不得外抛
+    assert r["status"] == "failed_rolled_back"
+    assert "RuntimeError" in (r["error"] or "")
+    # 文件层已还原（此前无条目）；内存回 YAML 值；模型 YAML 全程未动
+    assert _applied_yaml(tmp_path) == {}
+    assert model.ninfer.max_concurrency == 6
+    assert model.active_preset == ""
+    assert Path(model.yaml_path).read_bytes() == yaml_bytes_before
+
+
+def test_apply_default_with_entry_restarts_inactive_model(model, tmp_path):
+    """D3：有条目（漂移）+ 模型未运行 → 清条目 + 重启（部署 YAML 当前值）。"""
+    tune.apply(model, "short-parallel", restart=False)
+    assert _applied_yaml(tmp_path).get("Qwen38-27B-TXT", {}).get("active_preset") == "short-parallel"
+    mgr = FakeMgr()
+    r = tune.apply(model, "default", restart=True, mgr=mgr)
+    assert r["status"] == "rolled_back"
+    assert r["restart"]["status"] == "switched"
+    assert _applied_yaml(tmp_path) == {}, "条目已清除"
+    assert model.ninfer.max_concurrency == 6
+    assert model.active_preset == ""
 
 
 # ── 引擎无感知（stub 引擎全流程）────────────────────────────────

@@ -145,7 +145,8 @@ def test_create_server_non_eaddrinuse_immediate_raise(monkeypatch):
 # 3. Occupancy guard port cross-check
 # ═══════════════════════════════════════════════════════════════
 
-def _make_mgr(monkeypatch):
+def _make_mgr(monkeypatch, tmp_path):
+    import inferfabric.config as cfgmod
     import inferfabric.manager as manager_mod
     from inferfabric.state import GPUMode
 
@@ -173,16 +174,28 @@ def _make_mgr(monkeypatch):
     mgr._lifecycle._deploy_model.return_value = {
         "status": "switched", "model": "qwen38-27b-abliterated"
     }
+    # D1 启动即读：switch() 对非活跃模型部署前重读「YAML + 应用层」→
+    # models_dir 必须是真实路径（MagicMock 会流进 load_models→_merge_scenarios→
+    # yaml.safe_load(mock)，PyYAML Reader 死循环 + mock_calls 无界增长 → OOM）。
+    models_dir = tmp_path / "models.d"
+    models_dir.mkdir()
+    (models_dir / "qwen38-27b-abliterated.yaml").write_text(
+        "name: qwen38-27b-abliterated\ntype: vllm\ngpu_role: exclusive\n")
+    (models_dir / "gemma4-31b-vl.yaml").write_text(
+        "name: gemma4-31b-vl\ntype: vllm\ngpu_role: exclusive\n")
+    mgr.models_dir = models_dir
+    # 隔离应用层（load_models 默认 include_applied=True 会读它）
+    monkeypatch.setattr(cfgmod, "APPLIED_SCENARIOS_FILE", tmp_path / "active_scenarios.yaml")
     # gpu_used_mb is a module-level function in manager.py (imported from .health),
     # so patch the module attribute (not a ModelManager class attribute).
     monkeypatch.setattr(manager_mod, "gpu_used_mb", lambda: 25074)
     return mgr
 
 
-def test_occupancy_guard_blocks_on_port_owner(monkeypatch):
+def test_occupancy_guard_blocks_on_port_owner(monkeypatch, tmp_path):
     """DB says idle, but gemma4's port is owned → switch must be blocked."""
     from inferfabric.manager import ModelManager
-    mgr = _make_mgr(monkeypatch)
+    mgr = _make_mgr(monkeypatch, tmp_path)
 
     result = ModelManager.switch(mgr, "qwen38-27b-abliterated")
     assert result["status"] == "error"
@@ -193,10 +206,10 @@ def test_occupancy_guard_blocks_on_port_owner(monkeypatch):
     mgr._lifecycle._switch_exclusive.assert_not_called()
 
 
-def test_switch_proceeds_when_port_free(monkeypatch):
+def test_switch_proceeds_when_port_free(monkeypatch, tmp_path):
     """No port owner + idle DB → normal deploy proceeds."""
     from inferfabric.manager import ModelManager
-    mgr = _make_mgr(monkeypatch)
+    mgr = _make_mgr(monkeypatch, tmp_path)
     mgr._gpu_state._scan_port_owners.return_value = {}
 
     result = ModelManager.switch(mgr, "qwen38-27b-abliterated")

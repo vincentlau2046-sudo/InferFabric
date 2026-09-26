@@ -673,6 +673,9 @@ def load_models(models_dir: Path = MODELS_DIR, include_applied: bool = True) -> 
     Returns dict keyed by model name.
     """
     result: dict[str, ModelConfig] = {}
+    # 规范化为 Path（接受 str/PathLike；非法输入 → 空结果，永不挂起——
+    # MagicMock 等非真实路径的 exists()/glob() 会静默通过，但 PyYAML 读 mock 流会死循环）。
+    models_dir = Path(models_dir)
     if not models_dir.exists():
         return result
 
@@ -910,6 +913,32 @@ def load_models(models_dir: Path = MODELS_DIR, include_applied: bool = True) -> 
     return result
 
 
+def read_applied_scenarios() -> dict:
+    """只读应用层文件（D5：展示层/合并共用的磁盘真相源）。
+
+    返回 {model_name: {active_preset, overrides}}；文件缺失/损坏 → {}（静默回退）。
+    只由 tune 写入（带文件锁），这里永不写。
+    """
+    path = APPLIED_SCENARIOS_FILE
+    if not path.exists():
+        return {}
+    try:
+        raw = yaml.safe_load(path.read_text()) or {}
+    except Exception as e:
+        log.warning("读取应用层 %s 失败: %s", path, e)
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def current_active_preset(model_name: str) -> str:
+    """某模型当前生效场景（D5：直读应用层文件，≡ 容器实际值）。
+
+    空条目/无条目 = "default"（default 一等化：default = 模型 YAML 当前值）。
+    """
+    entry = read_applied_scenarios().get(model_name) or {}
+    return str(entry.get("active_preset") or "default")
+
+
 def _merge_applied_layers(models: dict[str, "ModelConfig"]) -> None:
     """应用层 overlay：APPLIED_SCENARIOS_FILE（~/.inferfabric/active_scenarios.yaml）。
 
@@ -918,17 +947,7 @@ def _merge_applied_layers(models: dict[str, "ModelConfig"]) -> None:
     overrides 只设置引擎配置块上已存在的字段（未知字段忽略，防坏数据污染）。
     文件缺失/损坏 → 静默跳过（回退纯 YAML 值）。
     """
-    path = APPLIED_SCENARIOS_FILE
-    if not path.exists():
-        return
-    try:
-        raw = yaml.safe_load(path.read_text()) or {}
-    except Exception as e:
-        log.warning("读取应用层 %s 失败: %s", path, e)
-        return
-    if not isinstance(raw, dict):
-        log.warning("应用层 %s 顶层不是映射，忽略", path)
-        return
+    raw = read_applied_scenarios()
     for mname, data in raw.items():
         model = models.get(mname)
         if model is None or not isinstance(data, dict):

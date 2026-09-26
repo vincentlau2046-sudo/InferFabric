@@ -1074,14 +1074,17 @@ def test_inference_no_new_api():
     inference.js 的 fetch 调用必须仅指向既有端点：
     /switch /stop /sleep /wake /admin/cache/toggle，
     以及 R-AS 有意新增的 /admin/auto-switch/toggle（自动切换开关，
-    用户明确要求置于推理 tab，非冻结违规）。
+    用户明确要求置于推理 tab，非冻结违规），
+    以及场景控件（任务：iff tune Dashboard 落地，用户批准）有意新增的
+    /admin/tune（POST 应用场景并重启；同族 GET /admin/tune/scenarios 与
+    /admin/tune/preview 经 adminGet 拼接 query 调用，非字面 fetch，不受本断言约束）。
     不得出现 /api/cache-hits /api/rate-limit 等未授权新端点。"""
     js = (ROOT / "inferfabric" / "dashboard" / "js" / "inference.js").read_text(encoding="utf-8")
     import re
     # 提取所有 fetch 调用的 URL
     urls = re.findall(r"fetch\(\s*['\"]([^'\"]+)['\"]", js)
     allowed = {'/switch', '/stop', '/sleep', '/wake', '/admin/cache/toggle',
-               '/admin/auto-switch/toggle'}
+               '/admin/auto-switch/toggle', '/admin/tune'}
     for u in urls:
         assert u in allowed, (
             "inference.js fetches non-allowed endpoint %r (API must stay frozen)" % u
