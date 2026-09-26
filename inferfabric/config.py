@@ -943,7 +943,7 @@ def _merge_applied_layers(models: dict[str, "ModelConfig"]) -> None:
     """应用层 overlay：APPLIED_SCENARIOS_FILE（~/.inferfabric/active_scenarios.yaml）。
 
     机器本地状态，只由 tune 写入，其余工具链只读。格式:
-        {model_name: {active_preset: "short", overrides: {字段: 值}}}
+        {model_name: {active_preset: "short-ctx", overrides: {字段: 值}}}
     overrides 只设置引擎配置块上已存在的字段（未知字段忽略，防坏数据污染）。
     文件缺失/损坏 → 静默跳过（回退纯 YAML 值）。
     """
