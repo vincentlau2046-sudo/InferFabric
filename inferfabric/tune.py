@@ -17,7 +17,9 @@ validate_scenario / restart），**不 import 任何具体引擎**——未来 v
 """
 from __future__ import annotations
 
+import json
 import logging
+import math
 import os
 import time
 from pathlib import Path
@@ -286,6 +288,48 @@ def _restore_previous(model, prev_entry, adapter, proc) -> dict:
 
 # ── 应用 ────────────────────────────────────────────────────────
 
+def _emit_apply_event(model, preset: str, prev_entry: dict | None, result: dict) -> None:
+    """场景变更结构化事件（单行 JSON，`[tune-event]` 前缀）——供「场景关键参数 ×
+    指标/请求日志」按时间戳 join 做关联分析（本地模型部署参数持续优化）。
+
+    CLI 跑走 stdout；Dashboard /admin/tune 走 systemd journal。
+    只在状态实际变更的路径发（写应用层/重启）；already_default no-op 与 dry 不发。
+    params/pool_top/oversell 取最终 live 值（失败路径 = 已还原的前值）。
+    """
+    try:
+        fields = _fields(model)
+        cfg = model.engine_config
+        params = {f: getattr(cfg, f, None) for f in fields} if cfg else {}
+        r = result.get("restart")
+        ev = {
+            "event": "tune.apply",
+            "model": model.name,
+            "engine": model.type,
+            "preset": preset,                                # 本次请求的场景
+            "from_preset": str((prev_entry or {}).get("active_preset") or "default"),
+            "to_preset": model.active_preset or "default",   # 最终 live（失败路径回滚后 = from）
+            "params": params,
+            "status": result.get("status"),
+            "restart": r.get("status") if isinstance(r, dict) else r,
+        }
+        if result.get("mtp_smoke") is not None:
+            ev["mtp_smoke"] = result["mtp_smoke"]
+        if result.get("error"):
+            ev["error"] = result["error"]
+        # 池顶/超卖（引擎语义 C×⌈W/64⌉×64；C/W 齐备才计算）
+        c, w = params.get("max_concurrency"), params.get("max_context")
+        if isinstance(c, int) and isinstance(w, int) and c > 0 and w > 0:
+            pool_top = c * math.ceil(w / 64) * 64
+            ev["pool_top"] = pool_top
+            kv = getattr(cfg, "kv_capacity", None) if cfg else None
+            if isinstance(kv, int) and kv > 0:
+                ev["kv_capacity"] = kv
+                ev["oversell_pct"] = round((pool_top - kv) / pool_top * 100, 1) if pool_top > kv else 0.0
+        log.info("[tune-event] %s", json.dumps(ev, ensure_ascii=False))
+    except Exception as e:
+        log.debug("场景事件发射失败（不影响调优结果）: %s", e)
+
+
 def apply(model, preset: str, dry: bool = False, restart: bool = True, mgr=None) -> dict:
     """应用场景（或 default 回滚）。CLI 与 /admin/tune 共用。
 
@@ -334,10 +378,12 @@ def apply(model, preset: str, dry: bool = False, restart: bool = True, mgr=None)
                   "active_preset": model.active_preset, "diff": p, "restart": None}
 
         if not restart:
+            _emit_apply_event(model, preset, prev_entry, result)
             return result
 
         if mgr is None:
             result["restart"] = {"status": "skipped", "message": "未提供 mgr，仅写入应用层，重启后生效"}
+            _emit_apply_event(model, preset, prev_entry, result)
             return result
 
         adapter = _adapter(model)
@@ -369,6 +415,7 @@ def apply(model, preset: str, dry: bool = False, restart: bool = True, mgr=None)
                     result["rollback_restart"] = roll
                     result["status"] = "rolled_back"
                     result["error"] = "MTP 冒烟失败，已回滚"
+            _emit_apply_event(model, preset, prev_entry, result)
             return result
 
         # 启动失败: 还原上一次应用层 + 内存值,重启旧配置
@@ -379,11 +426,13 @@ def apply(model, preset: str, dry: bool = False, restart: bool = True, mgr=None)
             # _restore_previous 已先还原文件层与内存值，此处只记录"回滚重启未完成"
             result["status"] = "failed_rollback_error"
             result["error"] = f"{type(e).__name__}: {e}"
+            _emit_apply_event(model, preset, prev_entry, result)
             return result
         result["rollback_restart"] = roll
         result["error"] = f"重启失败: {restarted.get('message')}"
         result["status"] = ("failed_rolled_back"
                             if roll.get("status") in ("switched", "ok", "started")
                             else "failed_rollback_failed")
+        _emit_apply_event(model, preset, prev_entry, result)
         return result
 

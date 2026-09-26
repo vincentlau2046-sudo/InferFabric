@@ -379,6 +379,39 @@ def test_apply_restart_exception_rolls_back(model, tmp_path):
     assert Path(model.yaml_path).read_bytes() == yaml_bytes_before
 
 
+def test_apply_emits_structured_event(model, tmp_path, caplog):
+    """场景变更结构化事件：状态变更路径发一行 JSON（参数/池顶/超卖/from→to），
+    供后续与指标/请求日志按时间戳做关联分析。"""
+    import json
+    import logging
+    caplog.set_level(logging.INFO, logger="inferfabric.tune")
+    tune.apply(model, "short-parallel", restart=False)
+    evs = [json.loads(r.getMessage().split("[tune-event] ", 1)[1])
+           for r in caplog.records if "[tune-event]" in r.getMessage()]
+    assert len(evs) == 1
+    ev = evs[0]
+    assert ev["model"] == "Qwen38-27B-TXT" and ev["engine"] == "ninfer"
+    assert ev["preset"] == "short-parallel"
+    assert ev["from_preset"] == "default" and ev["to_preset"] == "short-parallel"
+    assert ev["status"] == "applied_restart_pending" and ev["restart"] is None
+    # 关键参数 = 最终 live 值
+    assert ev["params"]["max_concurrency"] == 8
+    assert ev["params"]["max_context"] == 98304
+    # 池顶/超卖数值化（= 8×⌈98304/64⌉×64；(786432−600000)/786432 = 23.7%）
+    assert ev["pool_top"] == 786432
+    assert ev["kv_capacity"] == 600000
+    assert ev["oversell_pct"] == 23.7
+
+
+def test_apply_already_default_emits_no_event(model, tmp_path, caplog):
+    """already_default no-op（不写盘不重启）不发事件——无状态变更，无关联分析价值。"""
+    import logging
+    caplog.set_level(logging.INFO, logger="inferfabric.tune")
+    r = tune.apply(model, "default", restart=False)
+    assert r["status"] == "already_default"
+    assert not [rec for rec in caplog.records if "[tune-event]" in rec.getMessage()]
+
+
 def test_apply_default_with_entry_restarts_inactive_model(model, tmp_path):
     """D3：有条目（漂移）+ 模型未运行 → 清条目 + 重启（部署 YAML 当前值）。"""
     tune.apply(model, "short-parallel", restart=False)
