@@ -7,6 +7,8 @@
 #   三级键   = 引擎字段目标值
 #
 # 规则：
+#   • 本文件只定义场景；应用状态由 tune 写入 ~/.inferfabric/active_scenarios.yaml
+#     （机器本地，不进 git）。模型 YAML 对 tune 工具链只读，永不被工具链改写。
 #   • 场景字段只能是该引擎的白名单，白名单外字段自动忽略（不会污染配置）。
 #     NInfer 白名单: max_concurrency / max_context / default_max_tokens /
 #     prefill_chunk / enable_mtp / draft_tokens
@@ -19,7 +21,7 @@
 #       max_concurrency [1,8]、draft_tokens [1,5]、
 #       prefill_chunk 须 128 倍数、max_context ≤ 262144
 #   • draft_tokens > 1 未经实测（此模型仅 1 层 MTP；vLLM 下曾崩 6 次）——
-#     保持 1；若改了，iff tune 应用后自动冒烟，失败自动回滚基线。
+#     保持 1；若改了，iff tune 应用后自动冒烟，失败自动还原。
 #
 # 用法：
 #   iff tune                        列出所有模型及其场景

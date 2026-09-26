@@ -433,9 +433,11 @@ def _print_tune_result(r, no_restart):
     if st == "applied":
         print(f"✓ 已应用 {r['preset']} 并重启")
     elif st == "applied_restart_pending":
-        print(f"✓ 已写配置（{r['preset']}），重启后生效（当前未重启）")
+        print(f"✓ 已写应用层（{r['preset']}），重启后生效（当前未重启）")
     elif st == "rolled_back":
-        print(f"⚠ 应用后冒烟失败 → 已回滚到基线")
+        print(f"✓ 已回滚到模型 YAML 值（{r.get('preset', 'default')}）")
+    elif st == "rolled_back_pending":
+        print("✓ 已回滚到模型 YAML 值（重启后生效，当前未重启）")
     elif st in ("failed_rolled_back", "failed_rollback_failed", "failed_rollback_error"):
         print(f"⚠ {r.get('error')}")
         print(f"  状态: {st}")

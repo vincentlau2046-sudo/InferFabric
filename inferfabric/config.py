@@ -34,6 +34,9 @@ IFF_DATA_DIR = Path.home() / ".inferfabric"
 DEFAULT_STATE_DB = IFF_DATA_DIR / "state.db"
 DEFAULT_REQUEST_LOG_DB = IFF_DATA_DIR / "request_log.db"
 DEFAULT_LOG_DIR = IFF_DATA_DIR / "logs"
+# 场景调优应用层（iff tune 写入，机器本地状态，不进 git）：
+# {model: {active_preset, overrides}} → load_models overlay 合并进引擎块
+APPLIED_SCENARIOS_FILE = IFF_DATA_DIR / "active_scenarios.yaml"
 GPU_LOCK_PATH = Path("/tmp/inferfabric_gpu.lock")
 MODEL_BASE = Path.home() / "models"
 CONDA_ENVS = Path.home() / "miniconda3" / "envs"
@@ -452,14 +455,14 @@ class ModelConfig:
     # R7: 多副本端口列表（如 [8002, 8003]；为空时使用 type 对应 config 的 port）
     replicas: list[int] = field(default_factory=list)
 
-    # 场景预设调优（iff tune）: 命名场景定义来自模型的专属文件
-    # models.d/scenarios.yaml（顶层键=模型名；模型 YAML 内联 `presets:` 仍支持，
-    # 侧车同名场景覆盖内联）。`active_preset:` 标记当前应用的场景（写入模型 YAML，
-    # 空 = 未应用）。三者对启动行为无直接影响，只有通过 tune.apply 把 preset 字段
-    # 写进引擎 config 块 + 重启后才生效。
+    # 场景预设调优（iff tune），三层分离：
+    # 1) 场景定义 models.d/scenarios.yaml（侧车，手动配置；同名场景覆盖模型 YAML 内联 `presets:`）
+    # 2) 应用层 APPLIED_SCENARIOS_FILE（机器本地，只由 tune 写入，
+    #    {model: {active_preset, overrides}}，load_models overlay 合并进引擎块）
+    # 3) 模型 YAML 对 tune 工具链只读（启动真相源，注释永不被工具链破坏）
     presets: dict = field(default_factory=dict)
-    active_preset: str = ""
-    yaml_path: str = ""  # 源 YAML 绝对路径（load_models 填充），供 tune 写回与基线快照
+    active_preset: str = ""  # 当前应用场景（由应用层 overlay 填充，空 = 未应用）
+    yaml_path: str = ""  # 源 YAML 绝对路径（load_models 填充），供读"纯 YAML 值"
     # 注：物理 KV 池上限不是独立字段——就是各模型 YAML 引擎块里的固定
     # kv_capacity（TXT=600000 / VL=410000），tune 超卖% 以它为参照，不按场景改。
 
@@ -661,10 +664,12 @@ class ModelConfig:
 
 # ─── Model Loading ───────────────────────────────────────────────
 
-def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
+def load_models(models_dir: Path = MODELS_DIR, include_applied: bool = True) -> dict[str, ModelConfig]:
     """Load model configs from models.d/ directory.
 
     Each YAML file defines one model. The 'name' field must match the filename stem.
+    include_applied=True（默认）额外 overlay 应用层 APPLIED_SCENARIOS_FILE
+    （iff tune 写入的已应用场景；测试读纯 YAML 值时传 False）。
     Returns dict keyed by model name.
     """
     result: dict[str, ModelConfig] = {}
@@ -889,9 +894,9 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             replicas=raw.get("replicas", []),
             deployment=raw.get("deployment", ""),
         )
-        # 场景预设（iff tune）: 顶层 presets/active_preset + 源 YAML 路径
+        # 场景预设（iff tune）: 顶层 presets（内联兜底）+ 源 YAML 路径。
+        # active_preset 不从 YAML 读——应用层（APPLIED_SCENARIOS_FILE）是单一来源。
         result[model_name].presets = dict(raw.get("presets") or {})
-        result[model_name].active_preset = raw.get("active_preset", "") or ""
         result[model_name].yaml_path = str(yaml_file)
 
     # 场景预设侧车文件 models.d/scenarios.yaml（手动配置的单一真相源）：
@@ -899,7 +904,43 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
     # 物理 KV 池上限不是侧车字段——它就是各模型 YAML 引擎块里的固定 kv_capacity。
     _merge_scenarios(models_dir, result)
 
+    if include_applied:
+        _merge_applied_layers(result)
+
     return result
+
+
+def _merge_applied_layers(models: dict[str, "ModelConfig"]) -> None:
+    """应用层 overlay：APPLIED_SCENARIOS_FILE（~/.inferfabric/active_scenarios.yaml）。
+
+    机器本地状态，只由 tune 写入，其余工具链只读。格式:
+        {model_name: {active_preset: "short", overrides: {字段: 值}}}
+    overrides 只设置引擎配置块上已存在的字段（未知字段忽略，防坏数据污染）。
+    文件缺失/损坏 → 静默跳过（回退纯 YAML 值）。
+    """
+    path = APPLIED_SCENARIOS_FILE
+    if not path.exists():
+        return
+    try:
+        raw = yaml.safe_load(path.read_text()) or {}
+    except Exception as e:
+        log.warning("读取应用层 %s 失败: %s", path, e)
+        return
+    if not isinstance(raw, dict):
+        log.warning("应用层 %s 顶层不是映射，忽略", path)
+        return
+    for mname, data in raw.items():
+        model = models.get(mname)
+        if model is None or not isinstance(data, dict):
+            continue
+        model.active_preset = str(data.get("active_preset") or "")
+        overrides = data.get("overrides") or {}
+        cfg = model.engine_config
+        if not isinstance(overrides, dict) or cfg is None:
+            continue
+        for k, v in overrides.items():
+            if hasattr(cfg, k):
+                setattr(cfg, k, v)
 
 
 def _merge_scenarios(models_dir: Path, models: dict[str, "ModelConfig"]) -> None:

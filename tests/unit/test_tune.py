@@ -16,6 +16,7 @@ if _deps.is_dir():
     sys.path.insert(0, str(_deps))
 
 from inferfabric import tune
+from inferfabric import config as cfgmod
 from inferfabric.config import load_models, ModelConfig
 from inferfabric.engine_adapter import get_adapter, register
 from inferfabric.engine_adapter.base import EngineAdapter
@@ -99,10 +100,18 @@ def model(tmp_path, monkeypatch):
     y = tmp_path / "Qwen38-27B-TXT.yaml"
     y.write_text(FIXTURE)
     (tmp_path / "scenarios.yaml").write_text(SIDECAR)
-    monkeypatch.setattr(tune, "BASELINE_FILE", tmp_path / "tune_baselines.yaml")
-    monkeypatch.setattr(tune, "IFF_DATA_DIR", tmp_path)
+    applied = tmp_path / "active_scenarios.yaml"
+    monkeypatch.setattr(tune, "APPLIED_FILE", applied)
+    monkeypatch.setattr(cfgmod, "APPLIED_SCENARIOS_FILE", applied)
     models = load_models(tmp_path)
     return models["Qwen38-27B-TXT"]
+
+
+def _applied_yaml(tmp_path):
+    """应用层文件当前内容（YAML dict；不存在为 {}）。"""
+    import yaml as _y
+    f = tmp_path / "active_scenarios.yaml"
+    return _y.safe_load(f.read_text()) if f.exists() else {}
 
 
 class FakeState:
@@ -220,24 +229,23 @@ def test_apply_dry_no_write(model, tmp_path):
     assert r["status"] == "preview"
     assert path.read_bytes() == before_bytes, "dry 不应写盘"
     assert model.active_preset == ""
-    assert not (tmp_path / "tune_baselines.yaml").exists(), "dry 不应建基线"
+    assert _applied_yaml(tmp_path) == {}, "dry 不应写应用层"
 
 
-def test_apply_no_restart_writes_yaml_and_baseline(model, tmp_path):
+def test_apply_no_restart_writes_applied_layer(model, tmp_path):
+    """应用 = 写应用层 + 内存；模型 YAML 逐字节不动（工具链只读）。"""
+    yaml_bytes_before = Path(model.yaml_path).read_bytes()
     r = tune.apply(model, "short-parallel", restart=False)
     assert r["status"] == "applied_restart_pending"
     assert model.active_preset == "short-parallel"
     assert model.ninfer.max_concurrency == 8
-    # YAML 写回（只写场景字段；固定 kv_capacity 保持原值）
-    import yaml as _y
-    raw = _y.safe_load(Path(model.yaml_path).read_text())
-    assert raw["ninfer"]["max_concurrency"] == 8
-    assert raw["ninfer"]["kv_capacity"] == 600000, "固定物理池不被场景写回"
-    assert raw["active_preset"] == "short-parallel"
-    # 基线快照 = 应用前 live 值（只含场景字段）
-    bl = _y.safe_load((tmp_path / "tune_baselines.yaml").read_text())
-    assert bl["Qwen38-27B-TXT"]["max_concurrency"] == 6
-    assert "kv_capacity" not in bl["Qwen38-27B-TXT"], "kv 不是场景字段，不进基线"
+    # 模型 YAML 原样未动
+    assert Path(model.yaml_path).read_bytes() == yaml_bytes_before, "模型 YAML 必须保持只读"
+    # 应用层条目 = 场景目标值（含 active_preset 标记）
+    ap = _applied_yaml(tmp_path)
+    assert ap["Qwen38-27B-TXT"]["active_preset"] == "short-parallel"
+    assert ap["Qwen38-27B-TXT"]["overrides"]["max_concurrency"] == 8
+    assert ap["Qwen38-27B-TXT"]["overrides"]["max_context"] == 98304
 
 
 def test_apply_restart_goes_through_gpu_state_machine(model, tmp_path):
@@ -251,21 +259,23 @@ def test_apply_restart_goes_through_gpu_state_machine(model, tmp_path):
 
 
 def test_apply_default_rollback(model, tmp_path):
+    """default = 清应用层条目 → 值落回纯模型 YAML（YAML 自始至终未被写过）。"""
+    yaml_bytes_before = Path(model.yaml_path).read_bytes()
     tune.apply(model, "short-parallel", restart=False)
     assert model.ninfer.max_concurrency == 8
     r = tune.apply(model, "default", restart=False)
+    assert r["status"] == "rolled_back_pending"
     assert r["preset"] == "default"
     assert model.active_preset == ""
     assert model.ninfer.max_concurrency == 6
     assert model.ninfer.kv_capacity == 600000
-    import yaml as _y
-    raw = _y.safe_load(Path(model.yaml_path).read_text())
-    assert raw["ninfer"]["max_concurrency"] == 6
-    assert "active_preset" not in raw
+    # YAML 全程未动；应用层条目已清除
+    assert Path(model.yaml_path).read_bytes() == yaml_bytes_before
+    assert _applied_yaml(tmp_path) == {}
 
 
-def test_apply_default_without_baseline(model, tmp_path):
-    with pytest.raises(tune.TuneError, match="基线"):
+def test_apply_default_without_applied_entry(model, tmp_path):
+    with pytest.raises(tune.TuneError, match="未应用"):
         tune.apply(model, "default", restart=False)
 
 
@@ -277,19 +287,26 @@ def test_apply_oversell_not_blocked(model, tmp_path):
 
 
 def test_apply_restart_rollback_on_failure(model, tmp_path):
-    """启动失败 → 还原 YAML + 重启旧配置。"""
+    """启动失败 → 还原应用层（此前无条目）+ 内存旧值 + 重启旧配置。"""
     class FailMgr(FakeMgr):
+        """第一次 switch 失败（场景配置起不来），回滚重启（第二次）成功。"""
         def switch(self, name):
-            self.calls.append(("switch-fail", name))
-            return {"status": "error", "message": "container crashed"}
+            self.calls.append(("switch", name))
+            if len([c for c in self.calls if c[0] == "switch"]) == 1:
+                return {"status": "error", "message": "container crashed"}
+            return {"status": "switched"}
 
     mgr = FailMgr()
+    yaml_bytes_before = Path(model.yaml_path).read_bytes()
     r = tune.apply(model, "short-parallel", restart=True, mgr=mgr)
-    assert r["status"] in ("failed_rolled_back", "failed_rollback_failed")
-    # YAML 已被还原
-    import yaml as _y
-    raw = _y.safe_load(Path(model.yaml_path).read_text())
-    assert raw["ninfer"]["max_concurrency"] == 6, "失败后应还原原配置"
+    assert r["status"] == "failed_rolled_back"
+    # 模型 YAML 从未被写；应用层已还原（prev=无条目）；内存回到 YAML 值
+    assert Path(model.yaml_path).read_bytes() == yaml_bytes_before
+    assert _applied_yaml(tmp_path) == {}
+    assert model.ninfer.max_concurrency == 6
+    assert model.active_preset == ""
+    # 还原后确实用旧配置重启过一次
+    assert ("switch", "Qwen38-27B-TXT") in mgr.calls
 
 
 # ── 引擎无感知（stub 引擎全流程）────────────────────────────────
@@ -351,7 +368,8 @@ def test_stub_engine_drives_tune_without_importing_ninfer(monkeypatch, tmp_path)
     m.presets = _y.safe_load(y.read_text())["presets"]
     m.yaml_path = str(y)
 
-    monkeypatch.setattr(tune, "BASELINE_FILE", tmp_path / "bl.yaml")
+    applied = tmp_path / "applied.yaml"
+    monkeypatch.setattr(tune, "APPLIED_FILE", applied)
     p = tune.preview(m, "p1")
     assert p["after"]["max_batch"] == 4          # 引擎 caps 钳制
     assert p["after"]["gpu_mem_mib"] == 32768
@@ -359,7 +377,42 @@ def test_stub_engine_drives_tune_without_importing_ninfer(monkeypatch, tmp_path)
 
     r = tune.apply(m, "p1", restart=False)
     assert r["status"] == "applied_restart_pending"
-    raw = _y.safe_load(y.read_text())
-    assert raw["tune-stub"]["max_batch"] == 4    # YAML 顶层写回用的是 model.type 块
-    assert raw["active_preset"] == "p1"
+    # 模型 YAML（stub.yaml）原样未动；状态全在应用层
+    assert _y.safe_load(y.read_text())["presets"]["p1"]["max_batch"] == 9
+    ap = _y.safe_load(applied.read_text())
+    assert ap["stub"]["active_preset"] == "p1"
+    assert ap["stub"]["overrides"]["max_batch"] == 4
     assert m.mycfg.max_batch == 4
+
+
+# ── 应用层 overlay（load_models 启动路径）────────────────────────
+
+def test_load_models_applied_overlay(tmp_path, monkeypatch):
+    """load_models 默认合并应用层（启动 = YAML + overlay）；include_applied=False = 纯 YAML。"""
+    y = tmp_path / "M.yaml"
+    y.write_text("name: M\ntype: ninfer\nninfer:\n  port: 8007\n  kv_capacity: 600000\n  max_concurrency: 6\n")
+    applied = tmp_path / "active_scenarios.yaml"
+    applied.write_text("M:\n  active_preset: short\n  overrides:\n    max_concurrency: 8\n    max_context: 98304\n")
+    monkeypatch.setattr(cfgmod, "APPLIED_SCENARIOS_FILE", applied)
+
+    m = load_models(tmp_path)["M"]
+    assert m.ninfer.max_concurrency == 8          # 被 overlay
+    assert m.ninfer.max_context == 98304
+    assert m.active_preset == "short"
+    assert m.ninfer.kv_capacity == 600000          # 未在 overrides 的 YAML 字段原样
+
+    m2 = load_models(tmp_path, include_applied=False)["M"]
+    assert m2.ninfer.max_concurrency == 6          # 纯 YAML
+    assert m2.active_preset == ""
+
+
+def test_applied_layer_bad_entry_ignored(tmp_path, monkeypatch):
+    """应用层坏条目不阻塞启动——静默回退纯 YAML 值。"""
+    y = tmp_path / "M.yaml"
+    y.write_text("name: M\ntype: ninfer\nninfer:\n  port: 8007\n  max_concurrency: 6\n")
+    applied = tmp_path / "active_scenarios.yaml"
+    applied.write_text("M: not-a-dict\n")
+    monkeypatch.setattr(cfgmod, "APPLIED_SCENARIOS_FILE", applied)
+    m = load_models(tmp_path)["M"]
+    assert m.ninfer.max_concurrency == 6
+    assert m.active_preset == ""

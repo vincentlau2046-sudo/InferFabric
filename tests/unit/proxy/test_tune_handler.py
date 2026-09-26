@@ -93,11 +93,13 @@ def test_tune_preview_unknown_model():
 def test_tune_apply_ok(monkeypatch):
     import tempfile
     from inferfabric import tune
+    from inferfabric import config as cfgmod
     d = Path(tempfile.mkdtemp())
     y = d / "M.yaml"
     y.write_text("name: M\ntype: ninfer\nninfer:\n  port: 8007\n  kv_capacity: 600000\npresets:\n  p1:\n    max_concurrency: 8\n")
-    monkeypatch.setattr(tune, "BASELINE_FILE", d / "tune_baselines.yaml")
-    monkeypatch.setattr(tune, "IFF_DATA_DIR", d)
+    applied = d / "active_scenarios.yaml"
+    monkeypatch.setattr(tune, "APPLIED_FILE", applied)
+    monkeypatch.setattr(cfgmod, "APPLIED_SCENARIOS_FILE", applied)
     from inferfabric.config import load_models
     m = load_models(d)["M"]
     h, pm, sent, GET, POST = _make_handler_and_pm(model=m)
@@ -108,8 +110,14 @@ def test_tune_apply_ok(monkeypatch):
     assert sent["data"]["status"] in ("applied", "applied_restart_pending")
     assert sent["data"]["active_preset"] == "p1"
     assert m.active_preset == "p1"
+    # 模型 YAML 字节级未动；状态全在应用层
     import yaml
-    assert yaml.safe_load(y.read_text())["active_preset"] == "p1"
+    raw = yaml.safe_load(y.read_text())
+    assert "active_preset" not in raw
+    assert "max_concurrency" not in raw["ninfer"], "场景值不得写进模型 YAML"
+    ap = yaml.safe_load(applied.read_text())
+    assert ap["M"]["active_preset"] == "p1"
+    assert ap["M"]["overrides"]["max_concurrency"] == 8
 
 
 def test_tune_apply_missing_fields():
