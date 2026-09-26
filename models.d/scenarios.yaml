@@ -16,7 +16,7 @@
 #   • 场景名 = 使用档位（并发/用途），不代表窗口大小（如 small-batch 反而
 #     是 262144 顶窗长档）——勿按名字推 max_context。
 #   • kv_capacity 是模型的固定物理 KV 池，不是场景字段（不按场景改、不写回）：
-#       Qwen38-27B-TXT = 600000    NI-Qwen38-27B-VL = 410000
+#       Qwen38-27B-TXT = 632000    NI-Qwen38-27B-VL = 410000
 #     场景按 C×W 配出的窗口池顶（C×⌈W/64⌉×64）超出固定 kv 即为「超卖」，
 #     满载时超出部分由引擎 preempt 兜底——超卖是刻意设计，iff tune 仅 ⚠ 提示。
 #   • 引擎硬限（越界自动钳制并在预览里注明）:
@@ -35,10 +35,11 @@
 # ─────────────────────────────────────────────────────────────────────────
 
 Qwen38-27B-TXT:
-  # 固定 kv_capacity = 600000（在模型 YAML ninfer: 块，此处只列场景）
+  # 固定 kv_capacity = 632000（在模型 YAML ninfer: 块，此处只列场景）
   # 2026-09-26 统一调整：default 窗口 262144→204800、并发 6→5（模型 YAML 同步）；
+  # 2026-09-27 用户手动调 kv_capacity 600000→632000（+32000，已重启生效）；
   # 场景改名（使用档位命名）；draft_tokens 按档位启用 2/3（应用后自动冒烟）。
-  # 超卖% = (池顶 − 600000) / 池顶：default 41.4% / short-ctx 23.7% / small-batch 23.7% / big-batch 41.4%
+  # 超卖% = (池顶 − 632000) / 池顶：default 38.3% / short-ctx 19.6% / small-batch 19.6% / big-batch 38.3%
   short-ctx:      # 低延迟档：聊天/agent 主力（C 高 + 短窗 + MTP draft=2，池顶 786432）
     max_concurrency: 6
     max_context: 131072
