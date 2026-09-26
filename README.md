@@ -349,7 +349,7 @@ models.d/scenarios.yaml            ← 第 2 层：场景定义侧车（单一�
 |------|------|------|
 | **short-ctx** 低延迟 | C6 · 131072 · MTP draft=2 · 超卖 23.7% | C5 · 131072 · MTP draft=2 · 超卖 37.4% |
 | **small-batch** 顶窗批处理 | C3 · 262144 · MTP draft=3 · 超卖 23.7% | C2 · 262144 · MTP draft=3 · 超卖 21.8% |
-| **big-batch** 长窗批处理 | C4 · 204800 · MTP draft=2 · 超卖 26.8% | C3 · 204800 · MTP draft=2 · 超卖 33.3% |
+| **big-batch** 长窗批处理 | C5 · 204800 · MTP draft=2 · 超卖 41.4% | C3 · 204800 · MTP draft=2 · 超卖 33.3% |
 
 > 场景名 = 使用档位（并发/用途），**不代表窗口大小**（small-batch 反而是顶窗长档）。
 > default = 模型 YAML 当前值：TXT C6 · 204800 · draft=1；VL C4 · 204800 · draft=1。
