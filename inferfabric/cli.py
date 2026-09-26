@@ -13,6 +13,11 @@ Usage:
   iff reset               Force reset to idle
   iff reconcile           Fix DB vs actual state inconsistencies
   iff gpu-clear           Clear GPU CUDA state (fix fragmentation after ComfyUI)
+  iff tune [model] [preset] [--dry|--no-restart|--yes]  场景预设调优（应用/预览/回滚）
+  iff tune                List models and their scenarios
+  iff tune <model>        Show scenarios + current live values for a model
+  iff tune <model> <preset>  Apply a preset (prints diff, confirms, restarts)
+  iff tune <model> default   Roll back to pre-preset baseline
 """
 
 import sys
@@ -396,6 +401,125 @@ def cmd_list_downloaded(args):
             print(f"  {d}/")
 
 
+def _fmt_k(v):
+    if v is None:
+        return "?"
+    if isinstance(v, bool):
+        return "on" if v else "off"
+    if isinstance(v, int) and v >= 1000:
+        if v % 1000 == 0:
+            return f"{v // 1000}K"    # 十进制 K（kv_capacity 锁值 768000→768K）
+        if v % 1024 == 0:
+            return f"{v // 1024}K"    # 二进制 K（max_context 32768→32K）
+        return str(v)
+    return str(v)
+
+
+def _print_diff(p):
+    print(f"\n{p['model']}  [{p['type']}]  active: {p['active_preset'] or '(无)'}")
+    print(f"  场景 {p['preset']}")
+    for k in p["after"]:
+        b, a = p["before"].get(k), p["after"].get(k)
+        arrow = "→" if b != a else "＝"
+        print(f"    {k:16s} {_fmt_k(b):8s} {arrow}  {_fmt_k(a)}")
+    for i in p["issues"]:
+        print(f"    {i}")
+    for n in p["clamp_notes"]:
+        print(f"    ⚙ {n}")
+
+
+def _print_tune_result(r, no_restart):
+    st = r["status"]
+    if st == "applied":
+        print(f"✓ 已应用 {r['preset']} 并重启")
+    elif st == "applied_restart_pending":
+        print(f"✓ 已写配置（{r['preset']}），重启后生效（当前未重启）")
+    elif st == "rolled_back":
+        print(f"⚠ 应用后冒烟失败 → 已回滚到基线")
+    elif st in ("failed_rolled_back", "failed_rollback_failed", "failed_rollback_error"):
+        print(f"⚠ {r.get('error')}")
+        print(f"  状态: {st}")
+    else:
+        print(f"  状态: {st}")
+    rr = r.get("restart")
+    if rr:
+        print(f"  重启: {rr.get('status')} {rr.get('message')}")
+    if r.get("mtp_smoke") is not None:
+        print(f"  MTP 冒烟: {'通过' if r['mtp_smoke'] else '失败'}")
+
+
+def cmd_tune(args):
+    """iff tune [model] [preset] [--dry|--no-restart|--yes] — 场景预设调优。"""
+    from inferfabric import tune
+    mgr = ModelManager()
+
+    # 无参数: 列出所有模型及其场景
+    if not args:
+        for name, m in mgr._models.items():
+            presets = tune.list_presets(m)
+            if not presets:
+                continue
+            active = tune.get_active(m)
+            tag = f" active: {active}" if active else " active: (无)"
+            print(f"{name:24s} [{m.type}]  场景: {', '.join(presets)}{tag}")
+        if not any(tune.list_presets(m) for m in mgr._models.values()):
+            print("（没有任何模型定义场景预设——编辑 models.d/scenarios.yaml 侧车文件后生效）")
+        return
+
+    target = args[0]
+    if target not in mgr._models:
+        print(f"Unknown model: {target}")
+        sys.exit(1)
+    model = mgr._models[target]
+
+    # 只给模型名: 列出该模型的场景 + 当前 live 值
+    if len(args) == 1:
+        presets = tune.list_presets(model)
+        if not presets:
+            print(f"{model.name}: 未定义场景预设（编辑 models.d/scenarios.yaml）")
+            sys.exit(1)
+        print(f"{model.name}  [{model.type}]  active: {tune.get_active(model) or '(无)'}")
+        print(f"  场景: {', '.join(presets)}")
+        print(f"  当前 live 值（{tune.get_active(model) or '基线'}）:")
+        cur = tune._current_values(model)
+        for k, v in cur.items():
+            print(f"    {k:16s} {_fmt_k(v)}")
+        return
+
+    preset = args[1]
+    dry = "--dry" in args
+    no_restart = "--no-restart" in args
+    yes = "--yes" in args
+
+    if preset != "default" and preset not in tuple(tune.list_presets(model)):
+        print(f"未知场景 {preset!r}，可选: {', '.join(tune.list_presets(model)) or '(无)'}")
+        sys.exit(1)
+
+    p = tune.preview(model, preset)
+    _print_diff(p)
+    if dry:
+        print("\n[--dry 预览] 未写盘、未重启")
+        return
+
+    # 确认（非交互环境需要 --yes）
+    if not (yes or no_restart or preset == "default"):
+        print("\n应用后自动重启（NInfer ~3-6s），在途请求短暂 503；失败自动回滚。")
+        try:
+            ans = input("确认应用？[y/N] ")
+        except EOFError:
+            ans = "n"
+        if ans.lower() not in ("y", "yes"):
+            print("已取消")
+            sys.exit(0)
+
+    try:
+        r = tune.apply(model, preset, dry=False, restart=not no_restart, mgr=mgr)
+    except tune.TuneError as e:
+        print(f"✗ {e}")
+        sys.exit(1)
+    _print_tune_result(r, no_restart)
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__.strip())
@@ -428,9 +552,11 @@ def main():
         cmd_list_downloaded(rest)
     elif cmd in ("gpu-clear", "gpu_clear"):
         cmd_gpu_clear(rest)
+    elif cmd == "tune":
+        cmd_tune(rest)
     else:
         print(f"Unknown command: {cmd}")
-        print("Available: status, models, switch, stop, pull, list-downloaded, sleep, wake, history, reset, reconcile, gpu-clear")
+        print("Available: status, models, switch, stop, pull, list-downloaded, sleep, wake, history, reset, reconcile, gpu-clear, tune")
         sys.exit(1)
 
 

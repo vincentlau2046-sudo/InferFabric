@@ -91,7 +91,87 @@ class NInferAdapter(EngineAdapter):
     def get_pid_state_key(self) -> str | None:
         return 'ninfer_pid'
 
-    
+    # ── 场景预设调优（iff tune）钩子 ──────────────────────────────
+    # 注意：kv_capacity 是模型的固定物理 KV 池（TXT=600K / VL=410K），
+    # 不是场景可调字段——场景只调 C/W 等，池顶超卖由引擎 preempt 兜底。
+    _SCENARIO_FIELDS = [
+        "max_concurrency", "max_context", "default_max_tokens",
+        "prefill_chunk", "enable_mtp", "draft_tokens",
+    ]
+
+    def scenario_fields(self, model: ModelConfig) -> list[str]:
+        """NInfer 可被场景预设修改的字段白名单（不含固定 kv_capacity）。"""
+        return list(self._SCENARIO_FIELDS)
+
+    def engine_caps(self, model: ModelConfig) -> dict[str, dict]:
+        """引擎 C++ 硬限（engine.cpp/serve_options/speculative_options 核实）:
+        max_concurrency [1,8]、draft_tokens [1,5]、prefill_chunk 128 倍数、
+        max_context ≤ 256K。"""
+        return {
+            "max_concurrency": {"min": 1, "max": 8},
+            "draft_tokens": {"min": 1, "max": 5},
+            "prefill_chunk": {"step": 128},
+            "max_context": {"min": 16, "max": 262144},
+            "default_max_tokens": {"min": 1},
+            "enable_mtp": {},
+        }
+
+    def validate_scenario(self, model: ModelConfig, values: dict) -> list[str]:
+        """超卖 / 满载余量 / MTP 保护。values 为已钳制的场景目标值。
+
+        kv_capacity 是模型固定值（model.ninfer.kv_capacity），不参与场景变更。
+        池顶 = C × ⌈window/64⌉ × 64（池按 64-token 页分配）。
+        - 池顶 > kv：超卖 (池顶−kv)/池顶 —— 满载时超出物理池的部分靠 preempt 兜底，
+          是刻意设计（场景按需求配 C/W，池不够就换小场景），仅 ⚠ 不阻塞。
+        - 池顶 < kv：满载余量 (1−池顶/kv) —— 池没吃满，可加大 C/W。
+        """
+        issues: list[str] = []
+        c = values.get("max_concurrency")
+        w = values.get("max_context")
+        kv = model.ninfer.kv_capacity if model.ninfer else 0
+        if c and w and kv:
+            import math
+            pool_top = c * math.ceil(w / 64) * 64
+            if pool_top > kv:
+                oversell = (pool_top - kv) / pool_top * 100
+                issues.append(
+                    f"⚠超卖 {oversell:.1f}%：池顶 {pool_top}（= {c}×⌈{w}/64⌉×64）"
+                    f" > 固定 kv_capacity {kv}（满载超出部分由 preempt 兜底，预期行为）")
+            elif pool_top < kv:
+                slack = (1 - pool_top / kv) * 100
+                issues.append(
+                    f"⚠满载余量 {slack:.1f}%：池顶 {pool_top} < kv_capacity {kv}"
+                    f"（池未吃满，可加大并发/窗口）")
+        dt = values.get("draft_tokens")
+        if dt is not None and dt > 1:
+            issues.append(
+                "⚠draft_tokens>1：此模型仅 1 层 MTP，draft>1 未经实测"
+                "（vLLM 下曾崩 6 次），失败可一键 `iff tune default` 回滚")
+        return issues
+
+    def restart(self, model: ModelConfig) -> dict:
+        """停→启，走完整 GPU 状态机编排（与 Dashboard「stop→start」同构）。
+
+        stop_service 更新状态/释放 GPU → clear_manual_stop → switch 重新部署。
+        switch 期间 profile_state=SWITCHING → 在途请求收 503+Retry-After。
+        无 mgr（未注入 ProcessManager）时退回基类 stop+start。
+        """
+        mgr = getattr(self._proc, "mgr", None)
+        if mgr is None:
+            return super().restart(model)
+        name = model.name
+        r = mgr.stop_service(name)
+        if r.get("status") not in ("stopped", "already_stopped"):
+            # already_stopped 也继续（可能本来就没在跑，switch 会直接部署）
+            if r.get("status") == "error":
+                return {"status": "error", "message": f"stop 失败: {r.get('message')}",
+                        "step": "stop", "detail": r}
+        mgr.state.clear_manual_stop(name)
+        sw = mgr.switch(name)
+        mgr.state.set("switching_target", "")
+        return {"status": sw.get("status", "error"),
+                "message": f"restart: {sw.get('message')}", "detail": sw}
+
     def fetch_engine_metrics(self, model: ModelConfig) -> dict | None:
         if not model.ninfer: return None
         import re as _re

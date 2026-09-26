@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────────────────────────────────
+# models.d/scenarios.yaml — 场景预设侧车（手动配置单一真相源，供 `iff tune`）
+#
+# 结构：
+#   顶层键   = 模型名（对应 models.d/<name>.yaml 的 name: 字段）
+#   二级键   = 场景名（任意多个，自行增删改）
+#   三级键   = 引擎字段目标值
+#
+# 规则：
+#   • 场景字段只能是该引擎的白名单，白名单外字段自动忽略（不会污染配置）。
+#     NInfer 白名单: max_concurrency / max_context / default_max_tokens /
+#     prefill_chunk / enable_mtp / draft_tokens
+#   • 同名场景：本侧车覆盖模型 YAML 内联 `presets:`（侧车优先）。
+#   • kv_capacity 是模型的固定物理 KV 池，不是场景字段（不按场景改、不写回）：
+#       Qwen38-27B-TXT = 600000    NI-Qwen38-27B-VL = 410000
+#     场景按 C×W 配出的窗口池顶（C×⌈W/64⌉×64）超出固定 kv 即为「超卖」，
+#     满载时超出部分由引擎 preempt 兜底——超卖是刻意设计，iff tune 仅 ⚠ 提示。
+#   • 引擎硬限（越界自动钳制并在预览里注明）:
+#       max_concurrency [1,8]、draft_tokens [1,5]、
+#       prefill_chunk 须 128 倍数、max_context ≤ 262144
+#   • draft_tokens > 1 未经实测（此模型仅 1 层 MTP；vLLM 下曾崩 6 次）——
+#     保持 1；若改了，iff tune 应用后自动冒烟，失败自动回滚基线。
+#
+# 用法：
+#   iff tune                        列出所有模型及其场景
+#   iff tune Qwen38-27B-TXT         该模型场景清单 + 当前 live 值
+#   iff tune Qwen38-27B-TXT short   预览 diff → 确认 → 自动重启（~3-6s，
+#                                   在途请求短暂 503 + Retry-After）
+#   iff tune Qwen38-27B-TXT default 回滚到应用预设前的基线
+# ─────────────────────────────────────────────────────────────────────────
+
+Qwen38-27B-TXT:
+  # 固定 kv_capacity = 600000（在模型 YAML ninfer: 块，此处只列场景）
+  # 超卖% = (池顶 − 600000) / 池顶：short 23.7% / small 26.8% / big 41.4%
+  short:          # 短上下文高并发（聊天/agent 主力，池顶 786432）
+    max_concurrency: 8
+    max_context: 98304
+    default_max_tokens: 16384
+    prefill_chunk: 2048
+    enable_mtp: true
+    draft_tokens: 1
+  small:          # 中等窗口低并发（池顶 819200）
+    max_concurrency: 4
+    max_context: 204800
+    default_max_tokens: 32768
+    prefill_chunk: 2048
+    enable_mtp: true
+    draft_tokens: 1
+  big:            # 长窗口批处理（池顶 1024000，超卖 41.4%，preempt 兜底）
+    max_concurrency: 5
+    max_context: 204800
+    default_max_tokens: 32768
+    prefill_chunk: 2048
+    enable_mtp: true
+    draft_tokens: 1
+
+NI-Qwen38-27B-VL:
+  # 固定 kv_capacity = 410000（在模型 YAML ninfer: 块）
+  # 超卖% = (池顶 − 410000) / 池顶：short 16.6% / small 21.8% / big 33.3%
+  # 注意（见 CLAUDE.md）：不要主动切到/使用 VL 模型，需要时先申请、由用户切换。
+  short:          # 视觉短对话（池顶 491520）
+    max_concurrency: 6
+    max_context: 81920
+    default_max_tokens: 16384
+    prefill_chunk: 2048
+    enable_mtp: true
+    draft_tokens: 1
+  small:          # 视觉长文档/多轮（池顶 524288）
+    max_concurrency: 2
+    max_context: 262144
+    default_max_tokens: 32768
+    prefill_chunk: 2048
+    enable_mtp: true
+    draft_tokens: 1
+  big:            # 视觉批处理（池顶 614400）
+    max_concurrency: 3
+    max_context: 204800
+    default_max_tokens: 32768
+    prefill_chunk: 2048
+    enable_mtp: true
+    draft_tokens: 1

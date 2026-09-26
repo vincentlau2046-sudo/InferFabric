@@ -452,8 +452,20 @@ class ModelConfig:
     # R7: 多副本端口列表（如 [8002, 8003]；为空时使用 type 对应 config 的 port）
     replicas: list[int] = field(default_factory=list)
 
+    # 场景预设调优（iff tune）: 命名场景定义来自模型的专属文件
+    # models.d/scenarios.yaml（顶层键=模型名；模型 YAML 内联 `presets:` 仍支持，
+    # 侧车同名场景覆盖内联）。`active_preset:` 标记当前应用的场景（写入模型 YAML，
+    # 空 = 未应用）。三者对启动行为无直接影响，只有通过 tune.apply 把 preset 字段
+    # 写进引擎 config 块 + 重启后才生效。
+    presets: dict = field(default_factory=dict)
+    active_preset: str = ""
+    yaml_path: str = ""  # 源 YAML 绝对路径（load_models 填充），供 tune 写回与基线快照
+    # 注：物理 KV 池上限不是独立字段——就是各模型 YAML 引擎块里的固定
+    # kv_capacity（TXT=600000 / VL=410000），tune 超卖% 以它为参照，不按场景改。
+
     # Fields excluded from config hash (runtime / non-startup)
-    _HASH_EXCLUDE_FIELDS = frozenset({"typical_vram_pct", "peak_vram_mb", "startup_timeout"})
+    _HASH_EXCLUDE_FIELDS = frozenset({"typical_vram_pct", "peak_vram_mb", "startup_timeout",
+                                      "presets", "active_preset", "yaml_path"})
 
     def config_hash(self) -> str:
         """Deterministic hash of all config fields that affect startup behavior.
@@ -517,6 +529,22 @@ class ModelConfig:
         if self.ninfer:
             return self.ninfer.served_name or self.name
         return self.name
+
+    # type → ModelConfig 字段名（tts_server/asr_server 例外，字段是 tts/asr）
+    _ENGINE_ATTR = {
+        "vllm": "vllm", "sglang": "sglang", "comfyui": "comfyui",
+        "ollama": "ollama", "ollama_cpp": "ollama_cpp", "ollama_daemon": "ollama_daemon",
+        "ninfer": "ninfer", "tts_server": "tts", "asr_server": "asr",
+    }
+
+    @property
+    def engine_config(self) -> Optional[object]:
+        """引擎配置块（type 对应的嵌套 dataclass），无则 None。
+
+        tune 通过它读写场景字段——不关心是哪个引擎，字段名就是 config 的键。
+        """
+        attr = self._ENGINE_ATTR.get(self.type)
+        return getattr(self, attr, None) if attr else None
 
     @property
     def container_name(self) -> Optional[str]:
@@ -861,8 +889,43 @@ def load_models(models_dir: Path = MODELS_DIR) -> dict[str, ModelConfig]:
             replicas=raw.get("replicas", []),
             deployment=raw.get("deployment", ""),
         )
+        # 场景预设（iff tune）: 顶层 presets/active_preset + 源 YAML 路径
+        result[model_name].presets = dict(raw.get("presets") or {})
+        result[model_name].active_preset = raw.get("active_preset", "") or ""
+        result[model_name].yaml_path = str(yaml_file)
+
+    # 场景预设侧车文件 models.d/scenarios.yaml（手动配置的单一真相源）：
+    # 顶层键 = 模型名；场景字典合并进 model.presets（同名覆盖模型 YAML 内联）。
+    # 物理 KV 池上限不是侧车字段——它就是各模型 YAML 引擎块里的固定 kv_capacity。
+    _merge_scenarios(models_dir, result)
 
     return result
+
+
+def _merge_scenarios(models_dir: Path, models: dict[str, "ModelConfig"]) -> None:
+    scn_path = models_dir / "scenarios.yaml"
+    if not scn_path.exists():
+        return
+    try:
+        scn = yaml.safe_load(scn_path.read_text()) or {}
+    except Exception as e:
+        log.warning("读取场景预设 %s 失败: %s", scn_path, e)
+        return
+    if not isinstance(scn, dict):
+        log.warning("场景预设 %s 顶层不是映射，忽略", scn_path)
+        return
+    for mname, data in scn.items():
+        model = models.get(mname)
+        if model is None:
+            log.warning("scenarios.yaml 引用未知模型 %s，忽略", mname)
+            continue
+        if not isinstance(data, dict):
+            continue
+        for k, v in data.items():
+            if isinstance(v, dict):
+                model.presets[k] = dict(v)  # 侧车场景覆盖模型 YAML 内联
+            else:
+                log.debug("scenarios.yaml %s 的 %s 非场景映射，忽略", mname, k)
 
 
 # ─── Retry Constants (CCR-style) ─────────────────────────────────

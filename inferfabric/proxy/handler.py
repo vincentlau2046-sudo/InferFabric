@@ -207,6 +207,7 @@ _GET_ROUTES = {
     "/watchdog_status":         lambda h, pm: _handle_watchdog_status(h),
     "/admin/cloud/providers":   _admin(lambda h, pm: h._handle_cloud_providers(pm)),
     "/admin/cloud/presets":     _admin(lambda h, pm: h._handle_cloud_presets(pm)),
+    "/admin/tune/preview":      _admin(lambda h, pm: h._handle_tune_preview(pm)),
     "/api/openapi.json":        _serve_api_spec,
 }
 
@@ -235,6 +236,7 @@ _POST_ROUTES = {
     "/admin/cloud/test":        _admin(lambda h, pm: h._handle_cloud_test(pm)),
     "/admin/cloud/providers":   _admin(lambda h, pm: h._handle_cloud_providers(pm)),
     "/admin/cloud/provider-models": _admin(lambda h, pm: h._handle_cloud_provider_models(pm)),
+    "/admin/tune":              _admin(lambda h, pm: h._handle_tune(pm)),
     "/v1/embeddings":           lambda h, pm: h._handle_embeddings(pm),
     "/v1/rerank":               lambda h, pm: h._handle_rerank(pm),
 }
@@ -822,6 +824,48 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             log.error("engine_metrics failed for %s: %s", name, e)
             self._send_json({"error": str(e)}, 502)
+
+    def _handle_tune_preview(self, pm):
+        """GET /admin/tune/preview?model=X&preset=Y — 场景 diff 预览（不写盘）。"""
+        from urllib.parse import urlparse, parse_qs
+        from inferfabric import tune
+        qs = parse_qs(urlparse(self.path).query)
+        name = (qs.get("model") or [None])[0]
+        preset = (qs.get("preset") or [None])[0]
+        if not name or not preset:
+            self._send_json({"error": "Missing model/preset"}, 400)
+            return
+        model = pm.mgr._models.get(name)
+        if model is None:
+            self._send_json({"error": f"unknown model: {name}"}, 404)
+            return
+        try:
+            self._send_json(tune.preview(model, preset), 200)
+        except tune.TuneError as e:
+            self._send_json({"error": str(e)}, 400)
+
+    def _handle_tune(self, pm):
+        """POST /admin/tune {model, preset, restart?} — 应用场景并重启（默认）。"""
+        from inferfabric import tune
+        data = self._read_body()
+        if data is None:
+            return
+        name = data.get("model")
+        preset = data.get("preset")
+        if not name or not preset:
+            self._send_json({"error": "Missing model/preset"}, 400)
+            return
+        model = pm.mgr._models.get(name)
+        if model is None:
+            self._send_json({"error": f"unknown model: {name}"}, 404)
+            return
+        restart = data.get("restart", True)
+        try:
+            r = tune.apply(model, preset, dry=False, restart=restart, mgr=pm.mgr)
+            code = 200 if r["status"].startswith(("applied", "rolled")) else 500
+            self._send_json(r, code)
+        except tune.TuneError as e:
+            self._send_json({"error": str(e)}, 400)
 
     def _handle_request_log(self, pm):
         """返回最近请求日志 (D-1)"""
