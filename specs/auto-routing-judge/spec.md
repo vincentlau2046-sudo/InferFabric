@@ -1,24 +1,25 @@
 # IFF 自动调度裁判（auto-routing judge）— 功能规格与设计文档
 
-> 重大功能升级 · 设计阶段（P0 Intake → P2 Design）
-> 状态：**DRAFT — 待用户审阅**
+> 重大功能升级 · 设计阶段
+> 状态：**设计冻结（Scope A 已拍板）——判官作用域 = 活跃模型的场景切换**
 > 关联：iff tune（场景预设调优）、request_log_db、[tune-event]、prometheus 指标、GPU 状态机
 
 ## 1. 问题陈述
 
-当前「切哪个模型 / 切哪个场景 / 何时切」完全由用户人工判断：
+当前「切哪个场景档位 / 何时切」完全由用户人工判断（**判定对象 = 当前已加载的活跃模型的场景**，跨模型切换属未来 routing 层，见 §2.2）：
 - 用户守着 Dashboard 指标（TTFT / 吞吐 / KV 水位）凭经验 `iff tune` 切档；
 - 切换有 3-6s 停机代价 + 在途请求 503，用户不敢频繁试，导致负载模式与档位长期错配；
 - 观测数据已齐（request_log_db、prometheus 指标、[tune-event] 场景变更事件），但**数据是死的**——没有一层机制把「指标 → 建议 → 决策 → 执行 → 复盘」串成闭环。
 
-目标：加一层**自动调度裁判**——周期性读取性能统计，产出「该不该切、切到哪个场景/模型」的建议（最终形态可由 Laya 决策模型打分），经安全闸门后一键执行或低风险自动执行，全部留痕供复盘与后续模型训练。
+目标：加一层**自动调度裁判**——周期性读取活跃模型的性能统计，产出「该不该切、切到哪个场景档位」的建议（最终形态可由 Laya 决策模型打分），经安全闸门后一键执行或低风险自动执行，全部留痕供复盘与后续模型训练。
 
 ## 2. 目标（Non-goals 明确划线）
 
 ### 2.1 做
 | 能力 | 说明 |
 |---|---|
-| 观测窗口聚合 | 每 60s 把近 10min 指标聚合成标准化 `StateSnapshot`（判官输入） |
+| **作用域** | 判官只评估**当前活跃（active）模型**的场景档位（`stay` / `switch_preset`）；一次只对一个模型生效，模型切换不在本期 |
+| 观测窗口聚合 | 每 60s 把近 10min 指标聚合成标准化 `StateSnapshot`（判官输入，仅活跃模型有数据） |
 | **基线校准** | 每模型×每场景实测基线画像（baselines.yaml）；规则判断基于**相对基线的偏离系数**，不凭空定绝对阈值 |
 | 规则裁判（RuleJudge） | 阈值 + 联合条件，先于一切产出建议（P0） |
 | 建议与执行分离 | 裁判只产 `Recommendation`，执行永远走 `tune.apply` 既有安全路径 |
@@ -27,6 +28,7 @@
 | Laya 决策模型（P1） | `laya-typed-decisions` 打分裁判，与规则裁判可切换/对拍 |
 
 ### 2.2 不做（本期明确排除）
+- ❌ **判官作用域 =「活跃模型的场景切换」单点**：本期只对**当前加载（active）的模型**做场景档位建议（`stay` / `switch_preset`）；**跨模型切换（`switch_model`）、多模型并行调度、模型负载均衡不属于 Phase 1**——那是未来 routing 层的独立设计（需冷模型信号/请求类别特征/跨模型代价模型），spec 仅保留 §4.3 枚举字段作为前瞻占位，**不产出任何模型级建议**
 - ❌ 不改变 GPU 状态机、switch/stop 语义、场景五不变量、模型 YAML 只读原则
 - ❌ 不进入请求热路径：判官是旁路异步任务，任何情况下不阻塞请求转发
 - ❌ 不做「全自动无人值守」开关默认开启——默认建议模式，auto 需显式开启
@@ -37,10 +39,10 @@
 ## 3. 用户视角设计
 
 ### 3.1 形态
-判官以「建议中心」出现，不做成侵略性自动机：
+判官以「建议中心」出现，不做成侵略性自动机。**只对当前活跃模型出建议**——`iff advise` 不带 model 参数时默认评估活跃模型；传非活跃模型名 → 提示「该模型未加载，判官只评估活跃模型」：
 
 ```
-iff advise                          # 每 60s 评估一次，有建议才输出
+iff advise [model]                  # 每 60s 评估一次；默认活跃模型，有建议才输出
 ┌─────────────────────────────────────────────┐
 │ ⚙ 建议 · Qwen38-27B-TXT                     │
 │   建议切换  big-batch → short-ctx            │
@@ -106,12 +108,12 @@ inferfabric/scheduler/
 
 ### 4.3 核心数据模型
 
-**StateSnapshot**（判官输入，纯快照无副作用）：
+**StateSnapshot**（判官输入，纯快照无副作用；**只存在活跃模型的一个快照**——非活跃模型无指标数据，不产快照）：
 ```python
 @dataclass(frozen=True)
 class StateSnapshot:
     ts: float                 # 窗口结束时间
-    model: str                # 模型名（判官按模型分别评估）
+    model: str                # 模型名（必为当前活跃模型）
     window_s: int             # 聚合窗口（默认 600）
     # 延迟/负载（来自 request_log_db + metrics）
     ttft_p50_ms: float; ttft_p95_ms: float
@@ -127,16 +129,18 @@ class StateSnapshot:
     pool_top: int; oversell_pct: float; kv_capacity: int
 ```
 
-**Recommendation**（判官输出，纯建议）：
+**Recommendation**（判官输出，纯建议。**Phase 1 只产 `stay` / `switch_preset` 两种 action**）：
 ```python
 @dataclass(frozen=True)
 class Recommendation:
     ts: float
-    model: str
+    model: str                # 必为当前活跃模型
     judge: str                # "rule" | "laya"
-    action: str               # "stay" | "switch_preset" | "switch_model"
-    target: str               # preset 名 / 模型名；action=stay 时 ""
-    direction: str            # "scale_down" | "scale_up" | "same" | ...
+    action: str               # "stay" | "switch_preset"（Phase 1 仅此两者）
+                              # "switch_model" 枚举保留为未来 routing 层占位，本期不产出
+    target: str               # 目标场景 preset 名；action=stay 时 ""
+                              # （Phase 1 不允许目标为模型名）
+    direction: str            # "scale_down" | "scale_up" | "reset" | "same"
     confidence: float         # 0-1
     reason: str               # 人类可读，含触发指标
     cost_estimate_s: float    # 预计切换停机秒数（重启 ~3-6s）
@@ -151,10 +155,10 @@ class Recommendation:
 - **baselines.yaml**（§4.8 校准产物）：每模型×每场景的稳态画像（TTFT/KV/吞吐等）——「正常」的定义；
 - **rules.yaml** 规则只写「与基线相比偏离多少算异常」的**系数/差值**（k 值），业务语义由校准步骤推导（§4.8 步骤 2），不在规则里硬编码毫秒/百分比。
 
-规则放进 `models.d/rules.yaml`（侧车，同 scenarios.yaml 哲学：git 审、可调）：
+规则放进 `models.d/rules.yaml`（侧车，同 scenarios.yaml 哲学：git 审、可调）。**顶层按模型分块 = 每模型的「规则命名空间」，运行时只取当前活跃模型对应的块评估，不遍历所有模型**：
 
 ```yaml
-Qwen38-27B-TXT:
+Qwen38-27B-TXT:                        # 仅当该模型处于 active 时本块生效
   check_interval_s: 60
   window_s: 600
   key_hours: ["09:00-22:00"]        # 关键时段外才允许 auto（业务可调）
@@ -213,9 +217,9 @@ Qwen38-27B-TXT:
 
 - 依赖：vendor `laya` + `transformers` 进 `_deps`（新增，不影响现 vendored 依赖）
 - 形态：`pip install laya` 的 `laya-typed-decisions`，输入 state+questions 单次前向
-- 输入：StateSnapshot 压缩为 JSON（≤1024 token）+ questions：
+- 输入：**当前活跃模型的 StateSnapshot** 压缩为 JSON（≤1024 token）+ questions——`action` 的选择空间**只含该模型的场景档位，无模型维度**（与 Scope A 一致）：
   ```
-  state: {model, window, ttft_p95, kv_pct, error_rate, current_preset, params...}
+  state: {model: <活跃模型>, window, ttft_p95, kv_pct, error_rate, current_preset, params...}
   questions:
     action:     {type: choice, options: {short-ctx: 低延迟...,
                  small-batch: 顶窗..., big-batch: 长窗批处理...,
@@ -235,11 +239,12 @@ Qwen38-27B-TXT:
 | 风险分级 | 动作分类 | 见下 | 仅低风险可 auto |
 | 冷却 | `cooldown_s` | 600 | 同模型同向切换后冷却，防抖 |
 | 日历 | `key_hours` | 09:00-22:00 | 关键时段内禁 auto，仅建议 |
-| 模型活性 | model 需已加载 | — | 休眠模型不触发（先醒/切由人决定） |
+| 模型活性 | 评估对象 = 当前活跃模型 | — | 活跃模型快照才有数据；休眠模型不评估（先醒/切由人决定） |
 
-风险分级（判定 `auto_eligible`）：
+风险分级（判定 `auto_eligible`；**同一活跃模型内的场景切换**）：
 - 低风险（可 auto）：保持 `default` / 降并发档 / 缩窗档（scale_down 向短窗/低 C 移动——切坏了可以再切回去，停机已发生但方向保守）
-- 高风险（仅建议）：升并发/长窗档（scale_up——可能把 KV 撑爆）、跨模型切换（vLLM/NInfer 之间）、`switch_model`
+- 高风险（仅建议）：升并发/长窗档（scale_up——可能把 KV 撑爆）
+- **不适用**：`switch_model` / 跨模型切换——Phase 1 判官不产出此类建议（§2.2），Gate 无需对其分级；未来 routing 层单独设计时再定义
 
 ### 4.7 事件（[tune-recommend]）
 
@@ -263,7 +268,7 @@ Qwen38-27B-TXT:
 
 **步骤 1 · 基线采集（`iff calibrate`）**
 
-- 输入：近 N 天（默认 7 天）的 request_log_db + prometheus 指标，按 **模型 × 场景** 分组；
+- 输入：近 N 天（默认 7 天）的 request_log_db + prometheus 指标，按 **模型 × 场景** 分组——**只有曾经 active 过的模型才有样本**（非活跃模型无指标数据，自然无基线，符合 Scope A）；
 - 输出：`models.d/baselines.yaml`（git 可审、可人工复核后 git commit）：
   ```yaml
   Qwen38-27B-TXT:
@@ -311,11 +316,12 @@ dry-run 期间的语义——**判官照常跑、照常产 Recommendation、照�
 
 ### 5.1 新增 CLI
 ```
-iff advise [model]             # 当前建议（无建议则 "保持当前配置"）
-iff advise --auto             # 开启/执行自动模式（需确认）
-iff advise history [model]    # 建议事件流（同 tune-event 格式）
-iff advise rules              # 展示当前 rules.yaml（含 active/pending/dry-run 标注）
-iff calibrate [model]         # 基线采集 + 业务推导，产出/更新 baselines.yaml
+iff advise [model]             # 当前建议；无参数=评估活跃模型（默认）——无建议则 "保持当前配置"
+                               # 传非活跃模型名 → 提示「未加载，判官只评估活跃模型」
+iff advise --auto             # 开启/执行自动模式（需确认，仅对活跃模型）
+iff advise history [model]    # 建议事件流（同 tune-event 格式；默认活跃模型）
+iff advise rules              # 展示当前 rules.yaml（含 active/pending/dry-run 标注；仅活跃模型块）
+iff calibrate [model]         # 基线采集 + 业务推导，产出/更新 baselines.yaml（默认活跃模型）
 iff calibrate --dry-run N     # 最近 N 天回放验证：产 dry-run 报告，不触发任何执行
 ```
 
@@ -353,7 +359,7 @@ iff calibrate --dry-run N     # 最近 N 天回放验证：产 dry-run 报告，
 | 里程碑 | 内容 | 验收 |
 |---|---|---|
 | **M0 设计审阅**（本次） | 本 spec 审阅通过 | 用户拍板 |
-| **M1 骨架** | scheduler/ 空模块 + StateSnapshot + Recommendation 定义 + observer 聚合 | observer 单测绿；`iff advise` 输出「保持」 |
+| **M1 骨架** | scheduler/ 空模块 + StateSnapshot + Recommendation 定义 + observer 聚合（**只聚合活跃模型，验证快照 model=active**） | observer 单测绿；`iff advise` 输出「保持」 |
 | **M2 基线校准** | `iff calibrate`（采集→业务推导→dry-run 回放）产出 baselines.yaml；RuleJudge 按 pending 接入 | 校准单测绿；≥1 条规则 dry-run 验证通过转 active（§10 验收 2-3） |
 | **M3 RuleJudge + Gate** | rules.yaml（active 规则）+ gate + [tune-recommend] 事件 + CLI/Dashboard 建议展示 | 规则测试绿；真实数据跑通建议；auto 候选仅限 active 规则 |
 | **M4 执行接线** | 建议模式「查看 diff→执行」接入 tune.apply；auto 模式 + 冷却/日历 | 集成测试绿；人工验收一轮 |
@@ -377,11 +383,12 @@ iff calibrate --dry-run N     # 最近 N 天回放验证：产 dry-run 报告，
 3. dry-run 期间建议只记录不执行（outcome=`dry_run`），auto 模式被抑制；规则 `pending → active` 必须经过已完成的 dry-run 观察期；
 4. 自动模式：满足 Gate 全部条件时执行成功并落 [tune-recommend]/[tune-event]；
 5. 任一 Gate 不满足 → 绝不自动执行（测试覆盖矩阵）；
-6. 判官崩溃不影响 proxy 请求转发（故障注入测试）；
-7. 全量 pytest 通过（新 + 既有）。
+6. **判官只评估活跃模型**：非活跃模型传参 → 提示「未加载」；规则仅取活跃模型块；Recommendation.action 从不含 `switch_model`（测试覆盖）；
+7. 判官崩溃不影响 proxy 请求转发（故障注入测试）；
+8. 全量 pytest 通过（新 + 既有）。
 
 ## 11. 关联资产（不修改）
 
 - models.d/*.yaml：只读真源原则不变；rules.yaml 是**新增**侧车，不并入模型 YAML
-- tune.py 五不变量（D1-D5 + P0-4）：判官不引入新写路径，天然继承
-- GPU 状态机 / Switch Guard / 引擎适配器：零改动
+- tune.py 五不变量（D1-D5 + P0-4）：判官不引入新写路径，天然继承——**判官只调活跃模型的 `tune.apply`，无跨模型/switch 调用**
+- GPU 状态机 / Switch Guard / 引擎适配器：零改动（本期不做模型级切换，不触碰 switch 语义）
