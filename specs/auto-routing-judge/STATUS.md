@@ -6,9 +6,9 @@
 |-------|------|------|------|
 | P0 Intake | ✅ | 2026-09-26 | 用户提出「按性能统计 log 做启动重路由裁判」，Laya 事实核实（Apache 2.0 / 421M / typed-decisions） |
 | P1 Explore | ✅ | 2026-09-26 | 三视角可行性分析（用户/技术/架构）获认可：观测层已齐，裁判=旁路建议者，执行走 tune.apply |
-| P2 Specify | 🔶 | 2026-09-26 | spec.md DRAFT 待用户审阅 |
-| P3 Design | ⬜ | | 模块图 / 接口签名 / rules.yaml schema 细化 |
-| P4 Review | ⬜ | | 用户审阅 spec，拍板里程碑范围 |
+| P2 Specify | ✅ | 2026-09-26 | spec.md DRAFT 完成（含 §4.8 基线校准闭环） |
+| P3 Design | ✅ | 2026-09-27 | 用户审阅通过——「行，就这样吧」（阈值从基线出发 + 三步校准闭环被采纳） |
+| P4 Review | ✅ | 2026-09-27 | M0 设计审阅通过，里程碑 M0-M6 + 校准参数 + 示例系数已拍板 |
 | P5 Implement | ⬜ | | M1 骨架 → M2 RuleJudge+Gate → M3 执行接线 |
 | P6 Converge | ⬜ | | M4 数据积累（≥2 周） |
 | P7 Laya | ⬜ | | M5 独立里程碑：LayaJudge 适配器 + held-out 对拍 |
@@ -24,7 +24,13 @@
 
 ## 待用户拍板
 
-- [ ] M0-M6 里程碑范围与顺序（含 M2 基线校准环节拆分）
-- [ ] 基线校准参数：`min_samples=200`（≈2 天流量）、dry-run 观察 ≥7 天（scale_up 方向可延至 ≥14 天）
-- [ ] 业务推导示例系数：TTFT 超基线 2.0× / KV 超基线 +15pct（兜底绝对 90%）/ error 超基线 +2σ / 低载 TTFT < 基线 0.5×
-- [ ] auto 模式是否本期开放（还是 P0 仅建议模式，auto 后置）
+- [x] M0-M6 里程碑范围与顺序（含 M2 基线校准环节拆分）——2026-09-27 已拍板
+- [x] 基线校准参数：`min_samples=200`、dry-run ≥7 天（scale_up 可延至 ≥14 天）——2026-09-27 已拍板
+- [x] 业务推导示例系数：TTFT 2.0× / KV +15pct（兜底 90%）/ error +2σ / 低载 0.5×——2026-09-27 已拍板
+- [x] auto 模式本期开放（仅 active 规则 + Gate 全条件，默认建议模式）——2026-09-27 已拍板
+
+## 下一步（P5 Implement）
+
+- M1 骨架：`inferfabric/scheduler/` + StateSnapshot + Recommendation + observer 聚合
+- M2 基线校准：`iff calibrate`（采集 → 业务推导 → dry-run 回放）
+- M3 RuleJudge + Gate → M4 执行接线 → M5 数据积累 → M6 Laya（对拍达标才主裁）
