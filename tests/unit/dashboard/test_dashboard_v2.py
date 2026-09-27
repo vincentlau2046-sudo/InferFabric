@@ -1571,3 +1571,63 @@ def test_all_dashboard_stop_paths_route_via_do_model_action():
     )
 
 
+def test_gateway_rate_limit_is_readonly_indicator():
+    """R11b：速率限制行是只读状态指示器（非开关），与 LRU/自动切换两张真开关卡区分。
+
+    契约（与用户确认的方案一致）：
+      * 数据源 = snapshot local_models.rate_limit（DualGateLimiter.describe()），
+        前端读该字段渲染徽章 + 实况副标题，不得写死静态文案当唯一内容
+      * 徽章按 mode 变色：reject → ok「生效中」/ observe → warn「观察中」
+      * 副标题展示实际生效的并发排队上限 + RPM 门状态（server_rpm 优先）
+      * 刻意不做开关：不得新增 rate-limit 的 data-action 按钮 / admin toggle 端点
+        （配置改动仍走 iff.yaml + 重启 proxy，无热加载）
+      * 字段缺失（旧 proxy / 异常）→ 回退静态标签「配置见 iff.yaml」不白屏"""
+    js = (ROOT / "inferfabric" / "dashboard" / "js" / "inference.js").read_text(encoding="utf-8")
+    html = (ROOT / "inferfabric" / "dashboard" / "fragments" / "inference.html").read_text(encoding="utf-8")
+
+    # 数据源：必须读 snapshot 的 rate_limit 字段（非写死）
+    assert "rate_limit" in js, "renderGateway must read snapshot local_models.rate_limit"
+    assert "rlMeta" in js and "rlBadge" in js, "rate-limit indicator ids (rlMeta/rlBadge) missing"
+
+    # 徽章按 mode 变色：reject→ok / observe→warn，且文案区分
+    assert "reject" in js, "badge must key on mode === 'reject'"
+    assert "'ok'" in js and "'warn'" in js, "badge must use ok/warn color classes"
+    assert "生效中" in js and "观察中" in js, "badge labels (生效中/观察中) missing"
+
+    # 副标题：并发排队上限 + RPM 门状态
+    assert "并发" in js and "限流" in js, "rlMeta must show concurrency + RPM status"
+
+    # 字段缺失回退静态标签
+    assert "配置见 iff.yaml" in js, "fallback static label (配置见 iff.yaml) missing"
+
+    # HTML 结构：徽章节点存在且无 rate-limit 开关按钮（只读指示器，非开关）
+    assert 'id="rlBadge"' in html, "rlBadge element missing in gateway card"
+    assert 'id="rlMeta"' in html, "rlMeta element missing in gateway card"
+    # 刻意不做开关：不得有 rate-limit 的 data-action 按钮
+    assert 'data-action="rate-limit' not in html, (
+        "rate-limit must stay a read-only indicator — no toggle button"
+    )
+    assert 'data-action="rate-limit' not in js, (
+        "rate-limit must stay a read-only indicator — no toggle action"
+    )
+
+
+def test_gateway_rate_limit_snapshot_contract():
+    """R11b 后端侧：snapshot local_models.rate_limit 来自 dual_gate.describe()。
+
+    锁死字段集（前端只读展示，无写入入口）：
+      mode / server_rpm / model_rpm_default / max_concurrent / global_max_concurrent。
+    与 tests/unit/proxy/test_snapshot_rate_limit.py（_handle_snapshot 行为）互为
+    契约锚点：此处断言 handler 源码确实把 dual_gate.describe() 接进 payload。"""
+    src = (ROOT / "inferfabric" / "proxy" / "handler.py").read_text(encoding="utf-8")
+    # 速率限制数据源 = dual_gate.describe()，且缺 dual_gate 时回退 None
+    assert "dual_gate" in src and "describe()" in src, (
+        "snapshot must source rate_limit from pm.dual_gate.describe()"
+    )
+    assert '"rate_limit"' in src, "snapshot payload must carry a rate_limit field"
+    # 无 dual_gate（旧 proxy / 最小桩）时不得抛错 → getattr 兜底 None
+    assert "getattr(pm, 'dual_gate'" in src, (
+        "dual_gate access must be getattr-guarded (absent → None, no crash)"
+    )
+
+

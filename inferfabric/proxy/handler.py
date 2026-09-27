@@ -1158,6 +1158,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception:
             request_log = []
 
+        # R11b: 速率限制只读指示器 — 数据源 = DualGateLimiter.describe()
+        # （pm 无 dual_gate 时 → None，前端回退静态标签「配置见 iff.yaml」）
+        _dg = getattr(pm, 'dual_gate', None)
         # C1: etag 覆盖全部 payload 字段组（内容哈希，排除 ts/rev/etag）
         content = {
             "status": status, "system": system, "models": models,
@@ -1168,7 +1171,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
              "cache_stats": (getattr(pm, 'response_cache', None).stats()
                              if getattr(pm, 'response_cache', None) is not None else None),
              "auto_switch": {"enabled": bool(getattr(pm, 'auto_switch', True)),
-                             "source": getattr(pm, '_auto_switch_source', 'default')}},
+                             "source": getattr(pm, '_auto_switch_source', 'default')},
+             "rate_limit": (_dg.describe() if _dg is not None else None)},
         }
         etag_raw = _snapshot_etag(content)
         etag = f'"{etag_raw}"'

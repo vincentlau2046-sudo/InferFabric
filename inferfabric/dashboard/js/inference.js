@@ -9,8 +9,10 @@
  *       services_health— { name: health_str }
  *       local_models   — { cache_enabled, cache_stats: {hits,size,max}|null,
  *                          auto_switch: {enabled, source},
+ *                          rate_limit: {mode, server_rpm, model_rpm_default,
+ *                                       max_concurrent, global_max_concurrent}|null,
  *                          configured, discovered }（缓存开关 + LRU 生效计数
- *                          + 自动切换 R-AS）
+ *                          + 自动切换 R-AS + 速率限制只读指示 R11b）
  *   - POST /switch | /stop | /sleep | /wake  — 模型生命周期操作（admin header）
  *   - POST /admin/cache/toggle               — LRU 缓存开关（admin header）
  *   - POST /admin/auto-switch/toggle         — 自动切换开关（admin header，立即生效）
@@ -29,7 +31,12 @@
  *     cache_stats = ResponseCache.stats() 真计数器）；关 → 状态 + 上限 500
  *     （R10 旧契约「后端不暴露命中数」已作废 —— 计数器由后端真实提供，
  *      且缓存命中不再落 RequestLog，命中数成为唯一可见通道）
- *   - rlMeta 静态标签 —— manager.status() 无 rate-limit 字段，配置见 iff.yaml（R11）
+ *   - rlMeta/rlBadge 速率限制只读指示器（R11b，取代 R11 静态标签）：
+ *     数据源 = snapshot local_models.rate_limit（DualGateLimiter.describe()）；
+ *     徽章 observe=warn「观察中」/ reject=ok「生效中」；副标题 = 实际生效的
+ *     并发排队上限 + RPM 门状态（server_rpm=0 且 model_rpm_default=0 → 「关」）。
+ *     刻意不做开关：无按钮/无 action/无 admin 端点——配置在 iff.yaml rate_limit
+ *     段，改动需重启 proxy（无热加载），徽章 title 提示这一点
  *   - autoSwitchMeta 展示自动切换来源（R-AS）：env 锁定 / iff.yaml / 默认；
  *     切换经 POST /admin/auto-switch/toggle 立即生效（无需重启 proxy），
  *     env 锁定时 toast 附 hint 提示重启后回到 env 值
@@ -252,10 +259,30 @@
       asTog.classList.toggle('btn-sec', asOn);
     }
 
-    // #rlMeta — R11：静态标签（manager.status 无 rate-limit 字段）
-    var rl = $('rlMeta');
-    if (rl) {
-      rl.textContent = '配置见 iff.yaml';
+    // #rlMeta/#rlBadge — R11b：速率限制只读指示器（snapshot local_models.rate_limit）
+    // 徽章：observe=warn「观察中」（超限只记日志）/ reject=ok「生效中」（超限 429）；
+    // 副标题：实际生效的并发排队上限 + RPM 门状态。字段缺失（旧 proxy/异常）→ 回退
+    // 静态标签「配置见 iff.yaml」。刻意无按钮/action：配置改动走 iff.yaml + 重启。
+    var rlData = (lm.rate_limit && typeof lm.rate_limit === 'object') ? lm.rate_limit : null;
+    var rlMeta = $('rlMeta');
+    var rlBadge = $('rlBadge');
+    var rlBadgeText = $('rlBadgeText');
+    if (!rlData) {
+      // 字段缺失（旧 proxy / 异常）→ 回退静态标签（不白屏）
+      if (rlMeta) rlMeta.textContent = '配置见 iff.yaml';
+      if (rlBadge) rlBadge.className = 'badge';
+      if (rlBadgeText) rlBadgeText.textContent = '—';
+    } else {
+      // RPM 门：server_rpm 优先（整站门）；=0 时看 model_rpm_default（每模型门）；都 0 → 关
+      // （global_max_concurrent 为 describe() 预留契约字段，当前 UI 不渲染，勿误删）
+      var rpmText = rlData.server_rpm > 0 ? '每分钟限流 ≤ ' + rlData.server_rpm + ' 次'
+        : (rlData.model_rpm_default > 0 ? '每分钟限流 ≤ ' + rlData.model_rpm_default + ' 次（每模型）'
+                                        : '每分钟限流 关');
+      var concText = (rlData.max_concurrent > 0) ? '并发排队 ' + rlData.max_concurrent + ' 路' : '并发排队 关';
+      if (rlMeta) rlMeta.textContent = concText + ' · ' + rpmText;
+      var isReject = rlData.mode === 'reject';
+      if (rlBadge) rlBadge.className = 'badge ' + (isReject ? 'ok' : 'warn');
+      if (rlBadgeText) rlBadgeText.textContent = isReject ? '生效中' : '观察中';
     }
   }
 

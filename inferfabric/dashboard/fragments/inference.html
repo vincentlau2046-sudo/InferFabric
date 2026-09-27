@@ -59,8 +59,12 @@
           <div class="gw-row">
             <div class="gw-label">
               <span class="gw-label-title">速率限制</span>
-              <span class="gw-label-sub" id="rlMeta">配置见 iff.yaml</span>
+              <span class="gw-label-sub mono" id="rlMeta">速率限制 · —</span>
             </div>
+            <!-- R11b: 只读状态徽章（非开关）：snapshot local_models.rate_limit 驱动；
+                 observe=黄(观察中) / reject=绿(生效中)；改配置走 iff.yaml + 重启 proxy -->
+            <span class="badge" id="rlBadge"
+                  title="配置：~/.inferfabric/iff.yaml 的 rate_limit 段（改动需重启 proxy，无热加载）"><span id="rlBadgeText">—</span></span>
           </div>
         </div>
       </div>

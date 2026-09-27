@@ -122,6 +122,7 @@ class RateLimiterV2:
         self._server_bucket = TokenBucket(BucketConfig(
             rpm=server_rpm, burst=max(1, int(server_rpm)) if server_rpm > 0 else 0, timeout=timeout,
         ))
+        self._server_rpm = server_rpm
         self._model_buckets: dict[str, TokenBucket] = {}
         self._model_rpm_default = model_rpm_default
         self._timeout = timeout
@@ -210,6 +211,28 @@ class DualGateLimiter:
         self._mode = mode
         self._timeout = timeout
         self._lock = threading.Lock()
+
+    def describe(self) -> dict:
+        """当前生效的流控配置（只读展示，供 dashboard snapshot 渲染；无写入入口）。
+
+        - server_rpm / model_rpm_default 为 0 → 对应 RPM 门禁用（TokenBucket 禁用，
+          见 TokenBucket.__init__ rpm<=0 分支）
+        - mode=observe → 超限只记日志不拒绝；mode=reject → 超限 429
+        - max_concurrent 由调用方（ProxyManager）保证为 int：iff.yaml 的 auto 档在
+          _compute_max_concurrent() 已解析为 vLLM max_num_seqs 最大值（下限 4）。
+          本类 Semaphore 初值依赖 int，故此处透传 int，前端数值判断（> 0）安全，
+          不会遇到字符串 'auto'（NaN 风险）。
+        - global_max_concurrent 为预留契约字段，当前 dashboard 不渲染。
+        配置来自 iff.yaml rate_limit 段，仅在 ProxyManager 构造时读取一次
+        （无热加载），改动需重启 proxy。
+        """
+        return {
+            "mode": self._mode,
+            "server_rpm": getattr(self._rpm, "_server_rpm", 0),
+            "model_rpm_default": getattr(self._rpm, "_model_rpm_default", 0),
+            "max_concurrent": self._max_concurrent,
+            "global_max_concurrent": self._global_max,
+        }
 
     def _get_or_create_sem(self, model: str) -> threading.Semaphore:
         with self._lock:

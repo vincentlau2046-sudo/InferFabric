@@ -218,6 +218,53 @@ class TestDualGateLimiter:
         assert gate2.mode == "reject"
 
 
+# ─── describe(): snapshot 只读数据源 (R11b) ───
+
+class TestDualGateDescribe:
+    def test_describe_returns_effective_config(self):
+        """describe() 返回当前生效配置（供 dashboard 只读展示，非写入入口）。"""
+        rpm = RateLimiterV2(server_rpm=120, model_rpm_default=30, timeout=5)
+        gate = DualGateLimiter(rpm_limiter=rpm, max_concurrent=8, mode="reject",
+                               timeout=5, global_max_concurrent=16)
+        assert gate.describe() == {
+            "mode": "reject",
+            "server_rpm": 120,
+            "model_rpm_default": 30,
+            "max_concurrent": 8,
+            "global_max_concurrent": 16,
+        }
+
+    def test_describe_defaults_disabled_rpm(self):
+        """默认生产配置（observe + rpm 0）→ RPM 门全禁用，并发门生效。"""
+        rpm = RateLimiterV2(server_rpm=0, model_rpm_default=0, timeout=5)
+        gate = DualGateLimiter(rpm_limiter=rpm, max_concurrent=4, mode="observe")
+        d = gate.describe()
+        assert d["mode"] == "observe"
+        assert d["server_rpm"] == 0
+        assert d["model_rpm_default"] == 0
+        assert d["max_concurrent"] == 4
+        assert d["global_max_concurrent"] == 0
+
+    def test_describe_max_concurrent_int_contract(self):
+        """M1 契约：max_concurrent 由 ProxyManager 保证为 int（auto 档已在
+        _compute_max_concurrent 解析为 vLLM max_num_seqs 最大值，下限 4）。
+        DualGateLimiter 的 Semaphore 初值依赖 int，describe() 透传 int，
+        前端数值判断（> 0）安全。锁死：不得是字符串（会 NaN）。"""
+        rpm = RateLimiterV2(server_rpm=0, model_rpm_default=0, timeout=5)
+        gate = DualGateLimiter(rpm_limiter=rpm, max_concurrent=8, mode="observe")
+        assert isinstance(gate.describe()["max_concurrent"], int)
+
+    def test_describe_missing_rpm_attrs_defaults_zero(self):
+        """L5：rpm_limiter 缺 _server_rpm / _model_rpm_default（未来重构删字段）
+        → describe() 兜底 0 而非抛错，前端 RPM 门显示「关」。"""
+        class _NoAttrsRpm:
+            pass
+        gate = DualGateLimiter(rpm_limiter=_NoAttrsRpm(), max_concurrent=4, mode="observe")
+        d = gate.describe()
+        assert d["server_rpm"] == 0
+        assert d["model_rpm_default"] == 0
+
+
 # ─── PR-G2: stream_options injection ───
 
 class TestStreamOptionsInjection:
