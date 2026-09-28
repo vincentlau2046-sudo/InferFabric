@@ -1,0 +1,6 @@
+# codex.yaml — 出厂默认（内置目录，git 管理）
+id: codex
+name: Codex CLI
+color: "#34d399"
+match:
+  - { header: user-agent, regex: "codex|openai" }

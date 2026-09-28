@@ -1,0 +1,6 @@
+# claude-desktop.yaml — 出厂默认（内置目录，git 管理）
+id: claude-desktop
+name: Claude Desktop
+color: "#8b5cf6"
+match:
+  - { header: x-app, value: desktop }

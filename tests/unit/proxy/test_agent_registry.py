@@ -112,3 +112,43 @@ class TestRequestProtocol:
         assert request_protocol("/v1/messages") == "anthropic"
     def test_chat_openai(self):
         assert request_protocol("/v1/chat/completions") == "openai"
+
+class TestMergeAndBuiltins:
+    """双目录合并：内置可加载、用户覆盖内置、坏文件跳过、reload fail-closed。"""
+
+    def test_builtin_defaults_load(self, tmp_path):
+        from inferfabric.agent_registry import AgentRegistry, _UNKNOWN_ID
+        import inferfabric.agent_registry as ar
+        builtin = Path(ar.__file__).parent / "agents.d"
+        reg = AgentRegistry(builtin, tmp_path / "user")
+        ids = {d.id for d in reg.all()}
+        assert {"claude-code", "claude-desktop", "cursor", "codex"} <= ids
+
+    def test_user_overrides_builtin_by_id(self, tmp_path):
+        ov = """
+id: claude-code
+name: 我的自用
+color: "#111111"
+match:
+  - { header: user-agent, regex: "^my-cc" }
+"""
+        b = tmp_path / "builtin"; b.mkdir()
+        (b / "cc.yaml").write_text(CC, encoding="utf-8")
+        u = tmp_path / "user"; u.mkdir()
+        (u / "cc.yaml").write_text(ov, encoding="utf-8")
+        reg = AgentRegistry(b, u)
+        cc = [d for d in reg.all() if d.id == "claude-code"][0]
+        assert cc.name == "我的自用" and cc.source == "user"
+        # 覆盖后按新规则分类
+        assert reg.classify("openai", {"User-Agent": "my-cc/1"}).agent == "claude-code"
+
+    def test_broken_user_file_skipped_others_ok(self, tmp_path):
+        b = tmp_path / "builtin"; b.mkdir()
+        (b / "cc.yaml").write_text(CC, encoding="utf-8")
+        u = tmp_path / "user"; u.mkdir()
+        (u / "broken.yaml").write_text("{{{{ not yaml", encoding="utf-8")
+        (u / "ok.yaml").write_text(CURSOR, encoding="utf-8")
+        reg = AgentRegistry(b, u)
+        ids = {d.id for d in reg.all()}
+        assert "claude-code" in ids and "cursor" in ids   # 坏文件不影响好文件
+        assert reg.classify("openai", {"User-Agent": "C/1"}).agent == _UNKNOWN_ID

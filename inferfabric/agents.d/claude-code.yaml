@@ -1,0 +1,7 @@
+# claude-code.yaml — 出厂默认（内置目录，git 管理；用户覆盖同 id 放 ~/.inferfabric/agents.d/）
+id: claude-code
+name: Claude Code
+color: "#d97757"
+match:
+  - { header: x-app, value: cli }
+  - { header: user-agent, regex: "^claude-cli/" }

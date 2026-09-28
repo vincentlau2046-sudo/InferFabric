@@ -1,0 +1,6 @@
+# cursor.yaml — 出厂默认（内置目录，git 管理）
+id: cursor
+name: Cursor
+color: "#38bdf8"
+match:
+  - { header: user-agent, regex: "Cursor|Windsurf" }
