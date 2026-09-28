@@ -126,14 +126,13 @@
 
 | 端口 | 文件名 | served_name | 类型 | GPU 角色 | 描述 |
 |------|--------|-------------|------|----------|------|
-| 8002 | `Qwen38-27B-VL.yaml` | `Qwen38-27B-VL` | vllm | exclusive | Qwen3.8-27B Abliterated NVFP4 VL |
 | 8003 | `qwen3-vl-4b.yaml` | `qwen3-vl-4b` | vllm | shared | Qwen3-VL-4B GPTQ W4A16（AICF 质检） |
 | 8004 | `ovis-ocr2.yaml` | `ovis-ocr2` | vllm | shared | OvisOC2 0.8B 端到端文档OCR |
 | 8005 | `gemma4-31b-vl.yaml` | `gemma4-31b-vl` | vllm | exclusive | Gemma4-31B IT NVFP4 Dense VL |
 | 8006 | `muse-glimmer-vl.yaml` | `muse-glimmer` | vllm | exclusive | Meta Muse Glimmer 30B NVFP4 VL （SGLang） |
 | 8007 | `Qwen38-27B-TXT.yaml` | `Qwen38-27B-TXT` | ninfer | exclusive | Qwen3.8-27B NVFP4 NInfer（纯文本，MTP，KV 固定 600K） |
 | 8008 | `qwen36-35b-vl.yaml` | `qwen36-35b-vl` | vllm | exclusive | Qwen3.6-35B A3B MoE NVFP4 VL |
-| 8009 | `NI-Qwen38-27B-VL.yaml` | `NI-Qwen38-27B-VL` | ninfer | exclusive | Qwen3.8-27B NVFP4 NInfer 多模态 VL（视觉塔 + NVFP4 KV） |
+| 8009 | `Qwen38-27B-VL.yaml` | `Qwen38-27B-VL` | ninfer | exclusive | Qwen3.8-27B NVFP4 NInfer 多模态 VL（视觉塔 + NVFP4 KV） |
 | 8188 | `comfyui.yaml` | — | comfyui | shared | ComfyUI 图像生成 |
 | 8880 | `tts-qwen3.yaml` | — | tts_server | shared | Qwen3-TTS 1.7B 语音合成 |
 | 8881 | `asr-sensevoice.yaml` | — | asr_server | shared | ASR SenseVoice-Small 中文语音识别 |
@@ -166,6 +165,7 @@
 
 ## 更新时间线
 
+- 2026-09-28: 归档 `Qwen38-27B-VL.yaml`（vllm，端口 8002，Abliterated NVFP4，`Huihui-Qwen3.8-27B-abliterated-NVFP4`）→ `archive/Qwen38-27B-VL.yaml.bak`（如需恢复：还原至 `models.d/` 并把本表 8002 行加回；注意 8009 的 served_name 已占用 `Qwen38-27B-VL`，恢复时需改回旧名或换名）。`NI-Qwen38-27B-VL.yaml`（NInfer，8009）更名为 `Qwen38-27B-VL.yaml`：name/served_name/model_id 全部改为 `Qwen38-27B-VL`，weight_path 与容器名不变；`scenarios.yaml` 同步改 key。
 - 2026-09-22: 新增 `NI-Qwen38-27B-VL.yaml`（NInfer 多模态 VL，端口 8009）。补登 8007 `Qwen38-27B-TXT`；修正 8002 行文件/served_name 为 `Qwen38-27B-VL`；模板 type 增补 `sglang`/`ninfer` 并新增 ninfer 字段说明。
 - 2026-09-22: `NI-Qwen38-27B-VL.yaml` 调显存寻更多 KV：压 `media_cache_mib: 0` + `media_live_mib: 1024`（default 是 1024/2048），并将 `kv_capacity` 由 `0`(auto) 改为显式（auto 只到 ~378K；显式上限实测 ≈434K/卡上、ToDesk 占用时）。NInferConfig 新增 `media_cache_mib`/`media_live_mib` 字段（config.py 代码改动 → 需重启 proxy）。
 - 2026-09-22: `NI-Qwen38-27B-VL.yaml` `kv_capacity` 由 420000 降到 `410000`（留 ~0.7 GiB 显存余量防 OOM，比 420K 的 487 MiB free 更稳）。

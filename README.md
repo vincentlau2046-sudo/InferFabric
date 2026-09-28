@@ -339,13 +339,13 @@ models.d/scenarios.yaml            ← 第 2 层：场景定义侧车（单一�
 - **启动即读**：`switch()` 部署非活跃模型前重读磁盘「YAML + 应用层」——长驻代理的内存不会启动旧场景。
 - **展示读磁盘**：CLI / Dashboard / API 的「当前场景」一律直读应用层文件（`status().scenario_active`），不读代理内存。
 - **单写者 + 文件锁**：应用层只由 `tune.apply` 写入（`fcntl.flock` 排他锁覆盖写文件 + 重启临界区），并发写者串行化；其余工具链只读。
-- **kv_capacity 不是场景字段**：它是模型的固定物理 KV 池（Qwen38-27B-TXT=632000 / NI-Qwen38-27B-VL=410000）。场景 C×W 池顶超出即「超卖」——预期行为（满载由引擎 preempt 兜底），`iff tune` 仅 ⚠ 提示、不阻塞。
+- **kv_capacity 不是场景字段**：它是模型的固定物理 KV 池（Qwen38-27B-TXT=632000 / Qwen38-27B-VL=410000）。场景 C×W 池顶超出即「超卖」——预期行为（满载由引擎 preempt 兜底），`iff tune` 仅 ⚠ 提示、不阻塞。
 - **draft>1 自动冒烟**：`draft_tokens > 1` 的场景应用后自动跑一条短请求冒烟，失败自动还原上一次配置。
 - **场景变更事件日志**：每次生效的 apply（写应用层/重启/回滚，含失败路径）发一行 JSON 结构化事件 `[tune-event]`（from→to 场景、关键参数、池顶/超卖、MTP 冒烟、状态）——CLI 跑走 stdout、Dashboard 走 systemd journal；可按时间戳与 `/api/request_log`、指标日志 join，做「场景参数 × 指标」关联分析，持续优化部署参数。
 
 ### 当前场景定义（NInfer 双模型，2026-09-26 统一调整）
 
-| 场景（使用档位） | Qwen38-27B-TXT（kv 池 600K） | NI-Qwen38-27B-VL（kv 池 410K） |
+| 场景（使用档位） | Qwen38-27B-TXT（kv 池 632K） | Qwen38-27B-VL（kv 池 410K） |
 |------|------|------|
 | **short-ctx** 低延迟 | C6 · 131072 · MTP draft=2 · 超卖 19.6% | C5 · 131072 · MTP draft=2 · 超卖 37.4% |
 | **small-batch** 顶窗批处理 | C3 · 262144 · MTP draft=3 · 超卖 19.6% | C2 · 262144 · MTP draft=3 · 超卖 21.8% |
@@ -367,7 +367,7 @@ models.d/scenarios.yaml            ← 第 2 层：场景定义侧车（单一�
 
 Dashboard 推理页模型卡有 **⚙ 场景** 按钮：三阶段模态框（选场景 → diff/告警预览 → 应用），全走 `POST /admin/tune`（进程内，与 CLI 同一临界区），不直接改文件。
 
-> ⚠️ VL 模型（NI-Qwen38-27B-VL）的场景切换不会主动执行——按约定需先申请、由用户切换（见 `CLAUDE.md`）。
+> ⚠️ VL 模型（Qwen38-27B-VL）的场景切换不会主动执行——按约定需先申请、由用户切换（见 `CLAUDE.md`）。
 
 ---
 
@@ -569,14 +569,13 @@ python3 -m inferfabric.proxy.handler --async
 
 | Port | Service | Engine | GPU Role |
 |------|---------|--------|----------|
-| 8002 | Qwen38-27B-VL | vLLM | exclusive |
 | 8003 | qwen3-vl-4b | vLLM | shared |
 | 8004 | ovis-ocr2 | vLLM | shared |
 | 8005 | gemma4-31b-vl | vLLM | exclusive |
 | 8006 | muse-glimmer-vl | SGLang | exclusive |
 | 8007 | Qwen38-27B-TXT | NInfer | exclusive |
 | 8008 | qwen36-35b-vl | vLLM | exclusive |
-| 8009 | NI-Qwen38-27B-VL | NInfer | exclusive |
+| 8009 | Qwen38-27B-VL | NInfer | exclusive |
 | 8188 | comfyui | ComfyUI | shared |
 | 8880 | tts-qwen3 | TTS | shared |
 | 8881 | asr-sensevoice | ASR | shared |

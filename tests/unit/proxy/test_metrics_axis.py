@@ -21,7 +21,7 @@ import inferfabric.proxy.handler as handler_module
 from inferfabric.proxy.handler import _metrics_axis
 
 
-def _pm(model_names=("Qwen38-27B-TXT", "NI-Qwen38-27B-VL"),
+def _pm(model_names=("Qwen38-27B-TXT", "Qwen38-27B-VL"),
         cloud_ids=("glm-5.1", "deepseek-v4-flash")):
     pm = MagicMock()
     pm.mgr._models = {n: SimpleNamespace(name=n) for n in model_names}
