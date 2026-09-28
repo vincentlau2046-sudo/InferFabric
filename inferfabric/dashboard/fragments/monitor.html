@@ -116,6 +116,48 @@
 
   </div>
 
+  <!-- Row 2.5: 客户端 Agent 用量 — col-12 单卡（图左表右，布局 A；v6.5）。
+       图源 GET /api/agent-stats（30s 节流）；未识别可一键认领落盘。 -->
+  <div class="if-grid">
+    <div class="col-12">
+      <div class="if-card">
+        <div class="if-card-hdr">
+          <span class="if-card-title">客户端 / Agent 用量</span>
+          <span class="if-card-sub" id="monAgentSub">按请求头识别 · 未识别可在下方认领</span>
+          <div class="mon-seg" data-seg="agscope">
+            <button type="button" class="mon-seg-btn active" data-scope="all">全部</button>
+            <button type="button" class="mon-seg-btn" data-scope="local">本地</button>
+            <button type="button" class="mon-seg-btn" data-scope="cloud">云端</button>
+          </div>
+          <div class="mon-seg" data-seg="aggran">
+            <button type="button" class="mon-seg-btn" data-gran="minute">分钟</button>
+            <button type="button" class="mon-seg-btn active" data-gran="hour">小时</button>
+            <button type="button" class="mon-seg-btn" data-gran="day">天</button>
+            <button type="button" class="mon-seg-btn" data-gran="week">周</button>
+          </div>
+          <span class="mon-claim-badge" id="monAgentUnkBadge" style="display:none">
+            <svg><use href="#s-bolt"/></svg><span id="monAgentUnkNum">0</span>
+          </span>
+          <button type="button" class="mon-mini-btn" id="monAgentManage" title="管理：删除">管理</button>
+        </div>
+        <div class="if-card-body if-agent-body">
+          <div class="if-agent-left">
+            <div class="mon-chart-wrap">
+              <div id="monAgentChart" class="mon-chart"></div>
+              <div id="monAgentEmpty" class="mon-chart-empty" style="display:none">暂无客户端数据——经代理发起请求后在此统计</div>
+            </div>
+          </div>
+          <div class="if-agent-right">
+            <div id="monAgentTable">
+              <div class="skeleton"><div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div></div>
+            </div>
+            <div id="monAgentUnassigned" style="display:none"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Row 3: 模型延迟趋势 — 时间轴 × 逐模型分色折线（v6.0 取代模型条形双卡）。
        两张小倍数卡（左 TTFT / 右 TPOT）各单 y 轴（量纲差 ~2 数量级，禁双 y 轴）。
        共享控制条：窗口 分钟/小时/天（latwin，数据仅 30d 不做周）+ 分位 P50/P50+P95

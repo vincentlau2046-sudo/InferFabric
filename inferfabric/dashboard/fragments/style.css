@@ -1361,3 +1361,24 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
   opacity:.35;transition:opacity .15s}
 .mon-lat-chip.on{border-color:var(--mc)}
 .mon-lat-chip.on .dot{opacity:1}
+
+/* ── v6.5 客户端 Agent 卡 ── */
+.if-agent-body{display:grid;grid-template-columns:minmax(0,60fr) minmax(0,40fr);gap:16px;align-items:start}
+.if-agent-left{min-width:0}
+.if-agent-right{min-width:0}
+.mon-agent-tbl th,.mon-agent-tbl td{padding:4px 8px;font-size:12px}
+.agent-unk-row{background:rgba(156,163,175,.06)}
+.agent-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.agent-unk-tag{color:var(--crit,#ef4444);font-size:11px}
+.agent-unk-head{font-size:12px;font-weight:600;margin:8px 0 4px;color:var(--txt-2,#64748b)}
+.agent-unk-item{display:flex;gap:8px;align-items:center;font-size:12px;padding:3px 0}
+.agent-unk-count{color:var(--txt-2,#64748b);margin-right:auto}
+.mon-claim-badge{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--crit,#ef4444);cursor:pointer}
+.mon-mini-btn{font-size:11px;padding:2px 8px;border:1px solid var(--line,#e2e8f0);border-radius:6px;background:transparent;cursor:pointer}
+.mon-mini-btn:hover{background:rgba(100,116,139,.08)}
+.mon-mini-btn.active{background:rgba(100,116,139,.15)}
+.if-agent-claim label{display:block;font-size:12px;margin:8px 0}
+.if-agent-claim input,.if-agent-claim select{width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--line,#e2e8f0);border-radius:6px;background:transparent;color:inherit}
+.agent-claim-sample{font-size:12px;padding:6px 8px;background:rgba(100,116,139,.08);border-radius:6px;margin-bottom:8px}
+.agent-claim-preview{font-size:12px;color:var(--txt-2,#64748b);min-height:18px}
+@media (max-width:1100px){.if-agent-body{grid-template-columns:1fr}}

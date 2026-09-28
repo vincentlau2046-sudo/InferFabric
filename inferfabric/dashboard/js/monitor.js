@@ -44,8 +44,17 @@
   /* ── 状态 ── */
   var _pgran = 'hour';           // 功耗/电费图表粒度 display filter（小时/天/周）
   var _tokenGran = 'hour';       // Token 图表粒度 display filter（分钟/小时/天/周）
-  var _charts = { power: null, tokenLocal: null, tokenCloud: null, ttft: null, tpot: null };
+  var _charts = { power: null, tokenLocal: null, tokenCloud: null, ttft: null, tpot: null, agent: null };
   var _chartsInit = false;
+
+  /* ── 客户端 / Agent 用量卡（v6.5） ──
+   * 数据源 GET /api/agent-stats；30s TTL + inflight guard；不随 3s snapshot。
+   * 认领：POST /api/agents（adminHeaders）；DELETE /api/agents?id= 管理。 */
+  var _AGENT_TTL = 30000;
+  var _agentCache = null, _agentLast = 0, _agentInflight = false;
+  var _agentCfg = { gran: 'hour', scope: 'all' };
+  var _agentManage = false;
+  var _claimSample = '';
 
   // 功耗/电费卡独立 TTL 缓存（5min）——历史功耗无需秒级刷新；不随 3s snapshot 重绘。
   // 数据源 /api/power（服务端 60s 采样 + v007 表 + 5min 后端 TTL），与延迟卡同构。
@@ -110,6 +119,7 @@
       _charts.tokenCloud = IFCharts.create('monTokenCloudChart');
       _charts.ttft = IFCharts.create('monTtftChart');
       _charts.tpot = IFCharts.create('monTpotChart');
+      _charts.agent = IFCharts.create('monAgentChart');
     }
     // null → 容器显示 empty state（IFCharts 已 log warning）
     if (!_charts.power) {
@@ -967,10 +977,234 @@
    * 云端「累计费用 ¥」折线覆盖（随粒度：小时=24h / 天=30d / 周=90d，可看趋势）。
    * 本地无价格（只花电费，已在 功耗/电费 卡）。 */
 
+  /* ── 客户端 / Agent 用量卡函数（v6.5，布局 A：图左表右） ── */
+  function getAgentStats() {
+    if (_agentCache && Date.now() - _agentLast < _AGENT_TTL) { renderAgentCard(); return; }
+    if (_agentInflight) return;
+    _agentInflight = true;
+    fetch('/api/agent-stats?granularity=' + _agentCfg.gran + '&scope=' + _agentCfg.scope,
+          { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (d) { _agentCache = d; _agentLast = Date.now(); renderAgentCard(); })
+      .catch(function (e) { console.warn('[monitor] /api/agent-stats failed:', e); })
+      .then(function () { _agentInflight = false; });
+  }
+
+  function renderAgentTable(totals) {
+    var el = $('monAgentTable'); if (!el) return;
+    if (!totals || !totals.length) {
+      el.innerHTML = '<div class="if-empty">暂无客户端数据——经代理发起请求后在此统计</div>';
+      return;
+    }
+    var rows = '';
+    for (var i = 0; i < totals.length; i++) {
+      var t = totals[i];
+      var isUnk = t.agent === 'unknown';
+      rows += '<tr class="' + (isUnk ? 'agent-unk-row' : '') + '">' +
+        '<td><span class="agent-dot" style="background:' + escHtml(t.color) + '"></span>' +
+          escHtml(t.name) + (isUnk ? ' <span class="agent-unk-tag">未识别</span>' : '') + '</td>' +
+        '<td class="mono num">' + UI.fmtNum(t.requests) + '</td>' +
+        '<td class="mono num">' + escHtml(t.success_rate.toFixed(0)) + '%</td>' +
+        '<td class="mono num">' + UI.fmtNum(t.tokens_in) + '/' + UI.fmtNum(t.tokens_out) + '</td>' +
+        '<td class="mono num">' + (t.cost_yuan > 0 ? _yuanFmt(t.cost_yuan) : '—') + '</td>' +
+        '<td class="mono num">' + (t.ttft_p50 != null ? escHtml(t.ttft_p50.toFixed(0)) + 'ms' : '—') + '</td>' +
+        '<td class="mono">' + escHtml((t.top_models || []).slice(0, 1).map(function (m) { return shortName(m.model); }).join('')) + '</td>' +
+        '<td>' + (isUnk ? '<button class="mon-mini-btn" data-claim="1" title="识别为新 Agent">识别</button>' : '') +
+          (_agentManage && !isUnk && t.source !== 'builtin'
+             ? '<button class="mon-mini-btn" data-del="' + escHtml(t.agent) + '" title="删除">✕</button>' : '') + '</td>' +
+      '</tr>';
+    }
+    el.innerHTML = '<div class="cp-table-wrap">' +
+      '<table class="if-table mon-tbl mon-agent-tbl">' +
+        '<thead><tr><th>客户端</th><th>请求</th><th>成功</th><th>Tokens in/out</th>' +
+        '<th>费用</th><th>TTFT P50</th><th>Top 模型</th><th></th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table></div>';
+  }
+
+  function _agentPatternFromUA(ua) {
+    ua = ua || '';
+    var pre = (ua.match(/^[A-Za-z0-9]+/) || [''])[0];
+    return pre ? ('^' + pre) : '.*';
+  }
+
+  function renderAgentUnassigned(list) {
+    var box = $('monAgentUnassigned'); if (!box) return;
+    var badge = $('monAgentUnkBadge'), num = $('monAgentUnkNum');
+    if (num) num.textContent = (list || []).length;
+    if (badge) badge.style.display = (list && list.length) ? '' : 'none';
+    if (!list || !list.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    var rows = '';
+    for (var i = 0; i < list.length; i++) {
+      var u = list[i];
+      rows += '<div class="agent-unk-item"><span class="mono">' + escHtml(u.ua) +
+        '</span><span class="agent-unk-count">' + UI.fmtNum(u.requests) + ' 次</span>' +
+        '<button class="mon-mini-btn" data-claim-ua="' + escHtml(u.ua) + '">识别</button></div>';
+    }
+    box.innerHTML = '<div class="agent-unk-head">未识别来源（待认领）</div>' + rows;
+    box.style.display = '';
+  }
+
+  function renderAgentCard() {
+    if (!isMonitorActive()) return;
+    var d = _agentCache; if (!d) { getAgentStats(); return; }
+    var emptyEl = $('monAgentEmpty');
+    var have = d.window_requests > 0;
+    renderAgentTable(d.totals);
+    renderAgentUnassigned(d.unassigned);
+    if (!have) {
+      if (emptyEl) emptyEl.style.display = '';
+      return;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+    ensureCharts();
+    if (_charts.agent) {
+      // 堆叠柱（每 Agent 一色）；scope=云端 → y 轴切每桶累计费用 ¥（设计 §5）
+      var isCloud = _agentCfg.scope === 'cloud';
+      var cats = [];
+      if (d.totals.length && d.series[d.totals[0].agent]) {
+        cats = d.series[d.totals[0].agent].map(function (b) { return String(b.x); });
+      }
+      var series = [], names = [];
+      for (var i = 0; i < d.totals.length; i++) {
+        var t = d.totals[i];
+        var pts = (d.series[t.agent] || []).map(function (b) { return isCloud ? b.cost : b.requests; });
+        series.push({ name: t.name, type: 'bar', stack: 'a', barWidth: '70%',
+                      itemStyle: { color: t.color }, data: pts });
+        names.push(t.name);
+      }
+      IFCharts.update(_charts.agent, {
+        grid: { left: 40, right: 12, top: 24, bottom: 26 },
+        tooltip: { trigger: 'axis' },
+        legend: { show: true, top: 0, type: 'scroll', textStyle: { fontSize: 11 } },
+        xAxis: { type: 'category', data: cats, show: false },
+        yAxis: { type: 'value', name: isCloud ? '费用 ¥' : '请求' },
+        series: series,
+      });
+    }
+  }
+
+  /* ── 一键认领（未识别 → 用户目录落盘） ── */
+  function bindAgentEvents() {
+    document.addEventListener('click', function (ev) {
+      var btn = ev.target.closest ? ev.target.closest('[data-claim], [data-claim-ua], [data-del]') : null;
+      if (!btn) return;
+      ev.preventDefault();
+      if (btn.hasAttribute('data-claim-ua')) { openClaimModal(btn.getAttribute('data-claim-ua')); return; }
+      if (btn.hasAttribute('data-claim')) {
+        var first = (_agentCache && _agentCache.unassigned && _agentCache.unassigned[0]) || {};
+        openClaimModal(first.ua || ''); return;
+      }
+      if (btn.hasAttribute('data-del')) { delAgent(btn.getAttribute('data-del')); return; }
+    });
+  }
+
+  function openClaimModal(ua) {
+    _claimSample = ua || '';
+    var rid = _agentPatternFromUA(_claimSample);
+    var base = (rid.length > 1 ? rid.slice(1) : 'agent').toLowerCase()
+        .replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
+    var holder = $('confirmModal');
+    holder.innerHTML =
+      '<div class="if-modal-backdrop">' +
+        '<div class="if-modal" role="dialog" aria-modal="true">' +
+          '<div class="if-modal-title">识别为新 Agent</div>' +
+          '<div class="if-modal-body if-agent-claim">' +
+            '<div class="agent-claim-sample mono">样本: ' + escHtml(_claimSample || '—') + '</div>' +
+            '<label>名称 <input type="text" id="claimName" value="' + escHtml(base) + '" maxlength="40"></label>' +
+            '<label>标识 id <input type="text" id="claimId" value="' + escHtml(base) + '" placeholder="小写字母数字连字符" pattern="[a-z0-9-]{1,64}"></label>' +
+            '<label>匹配来源 <select id="claimHeader">' +
+              '<option value="user-agent">User-Agent</option>' +
+              '<option value="x-app">x-app</option></select></label>' +
+            '<label>匹配规则 <input type="text" id="claimPattern" value="' + escHtml(rid) + '"></label>' +
+            '<div class="agent-claim-preview" id="claimPreview"></div>' +
+          '</div>' +
+          '<div class="if-modal-actions">' +
+            '<button type="button" class="btn btn-sec" id="claimCancel">取消</button>' +
+            '<button type="button" class="btn btn-pri" id="claimSave">创建并生效</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    holder.style.display = 'block';
+    bindClaimEvents();
+    updateClaimPreview();
+  }
+
+  function updateClaimPreview() {
+    var pat = $('claimPattern'), pre = $('claimPreview');
+    if (!pat || !pre) return;
+    var msg, ok = false;
+    try {
+      ok = new RegExp(pat.value).test(_claimSample || '');
+      msg = '实时预览: 「' + (_claimSample || '—') + '」 ' + (ok ? '→ ✓ 命中' : '→ ✗ 不命中');
+    } catch (e) { msg = '实时预览: regex 无法编译'; }
+    pre.textContent = msg;
+    pre.style.color = ok ? 'var(--ok)' : 'var(--crit)';
+  }
+
+  function bindClaimEvents() {
+    var c = $('claimCancel'), s = $('claimSave');
+    if (c) c.addEventListener('click', closeClaimModal);
+    if (s) s.addEventListener('click', submitClaim);
+    var pat = $('claimPattern');
+    if (pat) pat.addEventListener('input', updateClaimPreview);
+    var idInput = $('claimId');
+    if (idInput) idInput.addEventListener('input', function () { idInput.dataset.touched = '1'; });
+    var nameInput = $('claimName');
+    if (nameInput) nameInput.addEventListener('input', function () {
+      var ipt = $('claimId');
+      if (ipt && !ipt.dataset.touched) {
+        ipt.value = nameInput.value.toLowerCase()
+          .replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
+      }
+    });
+  }
+
+  function closeClaimModal() {
+    var holder = $('confirmModal');
+    if (holder) { holder.innerHTML = ''; holder.style.display = 'none'; }
+    _claimSample = '';
+  }
+
+  function submitClaim() {
+    var id = $('claimId').value, name = $('claimName').value,
+        header = $('claimHeader').value, pattern = $('claimPattern').value;
+    fetch('/api/agents', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, UI.adminHeaders()),
+      body: JSON.stringify({ id: id, name: name, header: header, pattern: pattern, color: '#94a3b8' }),
+    })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) { UI.toast(res.d.error || '认领失败', 'error'); return; }
+        UI.toast('已创建 Agent ' + id + '，热重载已生效', 'ok');
+        closeClaimModal();
+        _agentCache = null; getAgentStats();
+      });
+  }
+
+  function delAgent(id) {
+    UI.confirm({
+      title: '删除 Agent ' + id,
+      body: '仅删除 ~/.inferfabric/agents.d/' + id + '.yaml（内置不可删）。历史请求行不受影响。',
+      danger: true,
+      onOk: function () {
+        fetch('/api/agents?id=' + encodeURIComponent(id), {
+          method: 'DELETE', headers: UI.adminHeaders(),
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d.ok) { UI.toast('已删除 ' + id, 'ok'); _agentCache = null; getAgentStats(); }
+            else { UI.toast(d.error || '删除失败', 'error'); }
+          });
+      },
+    });
+  }
+
   /* ── 渲染入口 ── */
   function renderMonitor() {
     renderPowerCard();
     renderTokenChart();
+    getAgentStats();
     // 延迟趋势卡不随 3s snapshot 重渲染（数据源 /api/latency 有独立 5min TTL 缓存，
     // 数据不变时重画纯属浪费且让图闪）。延迟卡由 getLatSeries 的 TTL 节流：
     // TTL 过期才 fetch → 落地 renderLatencyCards()；命中缓存则不 fetch 不重绘。
@@ -1059,6 +1293,35 @@
     });
   }
 
+  /* ── 客户端 Agent 卡：粒度/范围 seg + 管理开关 + claim/删除事件 ── */
+  document.querySelectorAll('[data-seg="aggran"] .mon-seg-btn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var host = b.parentNode;
+      host.querySelectorAll('.mon-seg-btn').forEach(function (x) { x.classList.remove('active'); });
+      b.classList.add('active');
+      _agentCfg.gran = b.getAttribute('data-gran');
+      _agentCache = null; getAgentStats();
+    });
+  });
+  document.querySelectorAll('[data-seg="agscope"] .mon-seg-btn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var host = b.parentNode;
+      host.querySelectorAll('.mon-seg-btn').forEach(function (x) { x.classList.remove('active'); });
+      b.classList.add('active');
+      _agentCfg.scope = b.getAttribute('data-scope');
+      _agentCache = null; getAgentStats();
+    });
+  });
+  var mBtn = $('monAgentManage');
+  if (mBtn) {
+    mBtn.addEventListener('click', function () {
+      _agentManage = !_agentManage;
+      mBtn.classList.toggle('active', _agentManage);
+      if (_agentCache) renderAgentTable(_agentCache.totals);
+    });
+  }
+  bindAgentEvents();
+
   /* ── 主题变更：IFCharts 自动 dispose+重建，但我们需要重新注入数据 ── */
   if (IFCharts && typeof IFCharts.onThemeChange === 'function') {
     IFCharts.onThemeChange(function () {
@@ -1068,6 +1331,7 @@
         _pgranRendered = null;
         renderPowerCard();
         renderTokenChart();
+        renderAgentCard();
         renderLatencyCards();
       }
     });
