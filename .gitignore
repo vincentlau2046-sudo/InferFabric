@@ -7,6 +7,8 @@ __pycache__/
 *.state.db
 state.db
 .state.db
+.state.db-shm
+.state.db-wal
 
 # Cloud provider config (contains env var refs, real keys in ~/.inferfabric/)
 cloud_provider.yaml
