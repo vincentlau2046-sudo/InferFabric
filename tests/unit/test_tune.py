@@ -78,11 +78,29 @@ presets:
     prefill_chunk: 2048
     enable_mtp: true
     draft_tokens: 1
+  # per-scenario kv：场景显式 kv_capacity → 校验/超卖按新值算
+  kv-heavy:
+    max_concurrency: 5
+    max_context: 204800
+    default_max_tokens: 32768
+    prefill_chunk: 2048
+    enable_mtp: true
+    draft_tokens: 1
+    kv_capacity: 900000
+  # kv 低于窗口 → 引擎启动必失败（❌ blocking）
+  kv-under-window:
+    max_concurrency: 2
+    max_context: 200000
+    default_max_tokens: 8192
+    prefill_chunk: 2048
+    enable_mtp: true
+    draft_tokens: 1
+    kv_capacity: 100000
 """
 
 
 # 侧车（手动配置单一真相源）：small 场景覆盖模型 YAML 内联同名场景。
-# 注意：kv_capacity 不是场景字段（模型固定物理池，在 ninfer: 块），不在此出现。
+# kv_capacity 现为可选场景字段：场景写它即覆盖模型 YAML 固定池，不写=沿用模型值。
 SIDECAR = """\
 Qwen38-27B-TXT:
   small:
@@ -153,8 +171,9 @@ def test_preview_short_parallel_diff(model):
     assert p["before"]["max_concurrency"] == 6
     assert p["after"]["max_concurrency"] == 8
     assert p["after"]["max_context"] == 98304
-    assert "kv_capacity" not in p["after"], "kv 是固定物理池，不是场景字段"
-    # 池顶 = 8×⌈98304/64⌉×64 = 786432；固定 kv 600000 → 超卖 (786432−600000)/786432 = 23.7%
+    # 此场景未写 kv_capacity → 不进 diff（沿用模型 YAML 固定 600000）
+    assert "kv_capacity" not in p["after"], "场景未写 kv → after 不应含 kv（沿用模型 YAML 值）"
+    # 池顶 = 8×⌈98304/64⌉×64 = 786432；沿用固定 kv 600000 → 超卖 (786432−600000)/786432 = 23.7%
     assert not [i for i in p["issues"] if i.startswith("❌")]
     assert any("超卖 23.7%" in i for i in p["issues"])
 
@@ -175,6 +194,21 @@ def test_preview_tiny_shows_surplus(model):
     # 池顶 = 2×16384 = 32768 < kv 600000 → 余量 (1−32768/600000) = 94.5%
     assert not [i for i in p["issues"] if i.startswith("❌")]
     assert any("满载余量 94.5%" in i for i in p["issues"])
+
+
+def test_preview_scenario_kv_override(model):
+    """场景显式 kv_capacity → 进入 diff，超卖按新 kv 计算（per-scenario KV 语义）。"""
+    p = tune.preview(model, "kv-heavy")
+    assert p["after"]["kv_capacity"] == 900000
+    # 池顶 = 5×⌈204800/64⌉×64 = 1024000；kv 900000 → 超卖 (1024000−900000)/1024000 = 12.1%
+    assert any("超卖 12.1%" in i for i in p["issues"])
+
+
+def test_preview_kv_below_window_blocking(model):
+    """kv_capacity < max_context → ❌blocking（引擎启动必失败，需拦住）。"""
+    p = tune.preview(model, "kv-under-window")
+    assert any(i.startswith("❌") and "kv_capacity" in i and "max_context" in i
+               for i in p["issues"])
 
 
 def test_preview_wild_clamp_and_whitelist(model):

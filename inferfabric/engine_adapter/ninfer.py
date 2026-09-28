@@ -92,43 +92,54 @@ class NInferAdapter(EngineAdapter):
         return 'ninfer_pid'
 
     # ── 场景预设调优（iff tune）钩子 ──────────────────────────────
-    # 注意：kv_capacity 是模型的固定物理 KV 池（TXT=600K / VL=410K），
-    # 不是场景可调字段——场景只调 C/W 等，池顶超卖由引擎 preempt 兜底。
+    # kv_capacity 是可选场景字段：场景可用它**覆盖**模型 YAML 的固定物理 KV 池
+    # （TXT=632K / VL=410K 是 default 基线），以便每个场景按自己的 C 开销
+    # 独立配池——C 高先降 KV 防 OOM、C 低可提 KV 多吃额度。不写则沿用模型 YAML 值。
+    # 引擎硬校验兜底：kv ∈ [max_context, C×⌈W/64⌉×64]（见 layouts_impl.h
+    # validate_target_options），越界启动即 throw。
     _SCENARIO_FIELDS = [
         "max_concurrency", "max_context", "default_max_tokens",
         "prefill_chunk", "enable_mtp", "draft_tokens",
+        "kv_capacity",
     ]
 
     def scenario_fields(self, model: ModelConfig) -> list[str]:
-        """NInfer 可被场景预设修改的字段白名单（不含固定 kv_capacity）。"""
+        """NInfer 可被场景预设修改的字段白名单（kv_capacity 可选，默认=模型 YAML 值）。"""
         return list(self._SCENARIO_FIELDS)
 
     def engine_caps(self, model: ModelConfig) -> dict[str, dict]:
         """引擎 C++ 硬限（engine.cpp/serve_options/speculative_options 核实）:
         max_concurrency [1,8]、draft_tokens [1,5]、prefill_chunk 128 倍数、
-        max_context ≤ 256K。"""
+        max_context ≤ 256K、kv_capacity ≥ 1（64 页对齐由引擎启动时处理）。"""
         return {
             "max_concurrency": {"min": 1, "max": 8},
             "draft_tokens": {"min": 1, "max": 5},
             "prefill_chunk": {"step": 128},
             "max_context": {"min": 16, "max": 262144},
             "default_max_tokens": {"min": 1},
+            "kv_capacity": {"min": 1},
             "enable_mtp": {},
         }
 
     def validate_scenario(self, model: ModelConfig, values: dict) -> list[str]:
         """超卖 / 满载余量 / MTP 保护。values 为已钳制的场景目标值。
 
-        kv_capacity 是模型固定值（model.ninfer.kv_capacity），不参与场景变更。
+        kv 取场景目标值（values 里写了 kv_capacity 用场景值；未写 = 模型 YAML 固定值）。
         池顶 = C × ⌈window/64⌉ × 64（池按 64-token 页分配）。
         - 池顶 > kv：超卖 (池顶−kv)/池顶 —— 满载时超出物理池的部分靠 preempt 兜底，
           是刻意设计（场景按需求配 C/W，池不够就换小场景），仅 ⚠ 不阻塞。
         - 池顶 < kv：满载余量 (1−池顶/kv) —— 池没吃满，可加大 C/W。
+        - kv < 窗口：引擎硬校验不通过（validate_target_options）、启动必失败，❌ 阻塞。
         """
         issues: list[str] = []
         c = values.get("max_concurrency")
         w = values.get("max_context")
-        kv = model.ninfer.kv_capacity if model.ninfer else 0
+        kv = values.get("kv_capacity")
+        if kv is None:
+            kv = model.ninfer.kv_capacity if model.ninfer else 0
+        if kv is not None and w is not None and kv < w:
+            issues.append(
+                f"❌kv_capacity {kv} < max_context {w}（引擎要求 kv ≥ 窗口，否则启动失败）")
         if c and w and kv:
             import math
             pool_top = c * math.ceil(w / 64) * 64
@@ -136,7 +147,7 @@ class NInferAdapter(EngineAdapter):
                 oversell = (pool_top - kv) / pool_top * 100
                 issues.append(
                     f"⚠超卖 {oversell:.1f}%：池顶 {pool_top}（= {c}×⌈{w}/64⌉×64）"
-                    f" > 固定 kv_capacity {kv}（满载超出部分由 preempt 兜底，预期行为）")
+                    f" > kv_capacity {kv}（满载超出部分由 preempt 兜底，预期行为）")
             elif pool_top < kv:
                 slack = (1 - pool_top / kv) * 100
                 issues.append(
