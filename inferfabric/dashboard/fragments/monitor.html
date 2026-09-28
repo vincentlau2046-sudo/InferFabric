@@ -124,19 +124,21 @@
         <div class="if-card-hdr">
           <span class="if-card-title">客户端 / Agent 用量</span>
           <span class="if-card-sub" id="monAgentSub">按请求头识别 · 未识别可在下方认领</span>
-          <div class="mon-seg" data-seg="agscope">
-            <button type="button" class="mon-seg-btn active" data-scope="all">全部</button>
-            <button type="button" class="mon-seg-btn" data-scope="local">本地</button>
-            <button type="button" class="mon-seg-btn" data-scope="cloud">云端</button>
-          </div>
           <div class="mon-seg" data-seg="aggran">
             <button type="button" class="mon-seg-btn" data-gran="minute">分钟</button>
             <button type="button" class="mon-seg-btn active" data-gran="hour">小时</button>
             <button type="button" class="mon-seg-btn" data-gran="day">天</button>
             <button type="button" class="mon-seg-btn" data-gran="week">周</button>
           </div>
+        </div>
+        <div class="if-agent-bar">
+          <div class="mon-seg" data-seg="agscope">
+            <button type="button" class="mon-seg-btn active" data-scope="all">全部</button>
+            <button type="button" class="mon-seg-btn" data-scope="local">本地</button>
+            <button type="button" class="mon-seg-btn" data-scope="cloud">云端</button>
+          </div>
           <span class="mon-claim-badge" id="monAgentUnkBadge" style="display:none">
-            <svg><use href="#s-bolt"/></svg><span id="monAgentUnkNum">0</span>
+            <svg><use href="#s-bolt"/></svg><span id="monAgentUnkNum">0</span><span class="mon-claim-label">未识别</span>
           </span>
           <button type="button" class="mon-mini-btn" id="monAgentManage" title="管理：删除">管理</button>
         </div>
