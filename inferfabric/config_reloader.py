@@ -18,6 +18,16 @@ if TYPE_CHECKING:
 log = logging.getLogger("inferfabric.config_reloader")
 
 
+def build_config_reloader(mgr, auth=None, cloud=None) -> "ConfigReloader":
+    """装配 ConfigReloader（含 agents 域 registry）。threaded main() 与 async
+    start_async() 两条服务路径共用，防止任一路径漏接 agent_registry 而分叉。
+
+    mgr: ProxyManager（.mgr/.auth/.cloud/.agent_registry 属性）。
+    """
+    return ConfigReloader(mgr.mgr, auth=auth, cloud=cloud,
+                          registry=getattr(mgr, "agent_registry", None))
+
+
 class ConfigReloader:
     """Unified config hot-reload with signal handling (v5.2).
 

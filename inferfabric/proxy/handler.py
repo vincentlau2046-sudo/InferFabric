@@ -2336,9 +2336,8 @@ def main():
     signal.signal(signal.SIGTERM, handle_signal)
 
     # v5.2: Unified hot-reload via ConfigReloader
-    from inferfabric.config_reloader import ConfigReloader
-    config_reloader = ConfigReloader(mgr.mgr, auth=mgr.auth, cloud=mgr.cloud,
-                                     registry=mgr.agent_registry)
+    from inferfabric.config_reloader import build_config_reloader
+    config_reloader = build_config_reloader(mgr, auth=mgr.auth, cloud=mgr.cloud)
     mgr.config_reloader = config_reloader
     config_reloader.setup()
 

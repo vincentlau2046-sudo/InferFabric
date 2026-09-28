@@ -208,3 +208,31 @@ class TestClaimAndManage:
         monkeypatch.setattr(r, "_collect_defs", boom)
         assert r.reload() is False
         assert r.classify("anthropic", {"x-app": "cli"}).agent == before
+
+
+class TestClaimWriteLock:
+    def test_add_from_ui_serialized_by_write_lock(self, tmp_path):
+        """写路径（查重+落盘+reload）必须被 registry 写锁串行化：
+        持锁时 add_from_ui 阻塞，放锁后完成，不残留 .tmp。"""
+        import threading
+        reg = _mk(tmp_path)
+        lock = reg._write_lock
+        lock.acquire()
+        result = {}
+
+        def worker():
+            try:
+                reg.add_from_ui("lock-tm", "lock-tm", "user-agent", r"^lock-tm", "#aabbcc")
+                result["ok"] = True
+            except Exception as e:  # noqa: BLE001
+                result["err"] = repr(e)
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        t.join(0.3)
+        assert t.is_alive(), "持 _write_lock 时 add_from_ui 应阻塞（并发写需串行化）"
+        lock.release()
+        t.join(2.0)
+        assert not t.is_alive()
+        assert result.get("ok") is True, f"unexpected: {result}"
+        assert not list((tmp_path / "user").glob("*.tmp")), ".tmp 半文件不应残留"

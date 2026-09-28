@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -124,6 +125,9 @@ class AgentRegistry:
         self._user_dir = Path(user_dir)
         self._defs: list[AgentDef] = []
         self._snapshot: _Snapshot = _Snapshot(tuple())
+        # 写路径（认领/删除）串行化：并发同 id 认领时保证「一成一败 409」。
+        # classify 读 _snapshot（不可变元组 + 原子换引用），无需此锁。
+        self._write_lock = threading.Lock()
         self.load()
 
     def load(self) -> None:
@@ -235,32 +239,35 @@ class AgentRegistry:
             re.compile(pattern)
         except re.error as e:
             raise ValueError(f"bad regex: {pattern!r} ({e})") from e
-        if any(d.id == id for d in self._defs):
-            raise KeyError(f"agent id already exists: {id}")
-        self._user_dir.mkdir(parents=True, exist_ok=True)
-        path = self._user_dir / f"{id}.yaml"
-        agent = {"id": id, "name": name, "color": color,
-                 "match": [{"header": header, "regex": pattern}]}
-        comment = "# auto-generated {ts} (dashboard one-click) — 编辑后 iff reload 生效\n".format(
-            ts=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
-        tmp = path.with_suffix(".yaml.tmp")
-        tmp.write_text(comment + yaml.safe_dump(agent, allow_unicode=True, sort_keys=False),
-                       encoding="utf-8")
-        os.replace(tmp, path)  # 原子替换：不残留 .tmp，并发写最后者胜
-        self.reload()
+        with self._write_lock:
+            # 查重+落盘+reload 整体持锁：并发同 id 认领时第二个必见已提交文件 → 409
+            if any(d.id == id for d in self._defs):
+                raise KeyError(f"agent id already exists: {id}")
+            self._user_dir.mkdir(parents=True, exist_ok=True)
+            path = self._user_dir / f"{id}.yaml"
+            agent = {"id": id, "name": name, "color": color,
+                     "match": [{"header": header, "regex": pattern}]}
+            comment = "# auto-generated {ts} (dashboard one-click) — 编辑后 iff reload 生效\n".format(
+                ts=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+            tmp = path.with_suffix(".yaml.tmp")
+            tmp.write_text(comment + yaml.safe_dump(agent, allow_unicode=True, sort_keys=False),
+                           encoding="utf-8")
+            os.replace(tmp, path)  # 原子替换：不残留 .tmp，并发写最后者胜
+            self.reload()
         return self._find(id)
 
     def remove(self, id: str) -> None:
         """删除用户目录 agent（管理模式）。内置/保留字/不存在 → 抛 ValueError。"""
-        d = self._find(id)
-        if d is None:
-            raise ValueError(f"agent not found: {id}")
-        if d.source != "user":
-            raise ValueError(f"builtin agent cannot be removed: {id}")
-        path = self._user_dir / f"{id}.yaml"
-        if path.exists():
-            path.unlink()
-        self.reload()
+        with self._write_lock:
+            d = self._find(id)
+            if d is None:
+                raise ValueError(f"agent not found: {id}")
+            if d.source != "user":
+                raise ValueError(f"builtin agent cannot be removed: {id}")
+            path = self._user_dir / f"{id}.yaml"
+            if path.exists():
+                path.unlink()
+            self.reload()
 
     def _find(self, id: str) -> AgentDef | None:
         return next((d for d in self._defs if d.id == id), None)

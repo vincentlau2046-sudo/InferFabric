@@ -102,3 +102,26 @@ def test_reloader_reloads_registry():
     failed = rel.reload_all()
     # reload_all 会先跑 mgr.reload_models（mgr=None → N/A），registry 必被调
     assert calls  # registry.reload 至少被调用一次
+
+
+# ── Final-fix regression: 两条服务路径共用 ConfigReloader 装配（防再分叉） ──
+
+def test_build_config_reloader_wires_registry():
+    """装配 helper 必须接手 ProxyManager 并把 agent_registry 穿给 ConfigReloader。"""
+    from types import SimpleNamespace
+    from inferfabric.config_reloader import build_config_reloader
+    mgr = SimpleNamespace(mgr="MM", auth="A", cloud="C", agent_registry="REG")
+    rel = build_config_reloader(mgr, auth=mgr.auth, cloud=mgr.cloud)
+    assert rel._registry == "REG"
+    assert rel._mgr == "MM"
+    assert rel._auth == "A"
+    assert rel._cloud == "C"
+
+
+def test_async_server_uses_build_config_reloader():
+    """生产 async 路径必须走装配 helper——否则 SIGHUP//reload-config 的 agents 热重载静默失效。"""
+    from pathlib import Path
+    import inferfabric.proxy.async_server as asrv
+    src = Path(asrv.__file__).read_text(encoding="utf-8")
+    assert "build_config_reloader" in src
+    assert "ConfigReloader(mgr.mgr" not in src

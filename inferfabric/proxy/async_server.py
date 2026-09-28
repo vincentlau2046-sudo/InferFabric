@@ -616,9 +616,9 @@ def start_async():
     watchdog = ModelWatchdog(mgr.mgr, check_interval=30, auto_restart=True)
     watchdog.start()
 
-    # v5.2: 统一热加载
-    from inferfabric.config_reloader import ConfigReloader
-    config_reloader = ConfigReloader(mgr.mgr, auth=mgr.auth, cloud=mgr.cloud)
+    # v5.2: 统一热加载（含 agents 域 registry；与线程版 main 共用同一装配）
+    from inferfabric.config_reloader import build_config_reloader
+    config_reloader = build_config_reloader(mgr, auth=mgr.auth, cloud=mgr.cloud)
     mgr.config_reloader = config_reloader
     config_reloader.setup()
 
