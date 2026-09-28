@@ -8,7 +8,13 @@
       models: ["qwen35-9b-vl"]
       expires: "2026-08-30T00:00:00+08:00"
 
-文件不存在或为空 = 不开启鉴权（当前行为不变）。
+═══ 命名规则（约定，不强制；仅为可读性与未来 key_name↔agent 关联） ═══
+  primary: sk-iff-<yyyymm>-v<n>          例: sk-iff-202609-v1
+  guest  : sk-<agent-id>-<yyyymm>-v<n>   例: sk-claude-code-202609-v1
+          ↑ 对象取 agents.d 的 id（Claude Code → claude-code）
+  yyyymm = 发卡年月；v<n> = 换发版本（同对象重发递增）
+
+文件不存在或为空 = 不开启鉴权（当前行为不变，默认保持关闭）。
 """
 
 from dataclasses import dataclass, field
