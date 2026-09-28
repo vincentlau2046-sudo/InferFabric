@@ -28,3 +28,7 @@ IFFDB.register_migration(6, "request_log", "add_tokens_in_cached")
 # v007: gpu_power_samples (v6.2 功耗/电费时间序列)
 from inferfabric.migrations import v007_gpu_power_series
 IFFDB.register_migration(7, "request_log", "gpu_power_series")
+
+# v008: request_log.agent/ua (v6.5 客户端 Agent 识别)
+from inferfabric.migrations import v008_add_agent_ua
+IFFDB.register_migration(8, "request_log", "add_agent_ua")

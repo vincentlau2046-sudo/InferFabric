@@ -35,6 +35,8 @@ class RequestLog:
     tokens_in: int = 0
     tokens_in_cached: int = 0          # tokens_in 中命中前缀缓存的部分（缓存命中率 = cached/in）
     tokens_out: int = 0
+    agent: str = ""      # 客户端 Agent id（agents.d 归一化，unknown 兜底；v6.5）
+    ua: str = ""         # 原始 User-Agent（认领学习回路原料）
     duration_ms: float = 0.0
     route: str = "local"               # "local" | "cloud"
     cloud_provider: str | None = None   # "baidu-codingplan" | None
@@ -113,6 +115,8 @@ class RequestLogger:
                 "tokens_in": entry.tokens_in,
                 "tokens_in_cached": entry.tokens_in_cached,
                 "tokens_out": entry.tokens_out,
+                "agent": entry.agent,
+                "ua": entry.ua,
                 "duration_ms": entry.duration_ms,
                 "route": entry.route,
                 "cloud_provider": entry.cloud_provider,

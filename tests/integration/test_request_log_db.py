@@ -931,3 +931,23 @@ class TestTokensInCachedColumn:
         rows = db.query_request_log(since=0)
         assert rows[0]["req_id"] == "iff-old-1"
         assert rows[0]["tokens_in_cached"] == 0
+
+def test_insert_and_query_agent_fields(tmp_path):
+    """agent/ua 字段经 IFFDB 写入/读出往返一致。
+
+    注：conftest 的 tmp_iffdb 把 data_dir 当文件路径用（iff.db/state.db），
+    建库即炸（见 test_power_series.py 中同款替身）→ 此处自建目录版。
+    """
+    from inferfabric.db import IFFDB
+    import inferfabric.migrations  # noqa: F401
+    db = IFFDB(tmp_path)
+    db.insert_request_log([{
+        "req_id": "a1", "key_name": "primary", "model": "qwen38",
+        "status": 200, "ttft_ms": 100.0, "tokens_in": 10, "tokens_in_cached": 0,
+        "tokens_out": 5, "duration_ms": 500.0,
+        "timestamp": 1000.0, "ts": "t", "route": "local",
+        "cloud_provider": None, "error": None,
+        "agent": "claude-code", "ua": "claude-cli/2.0",
+    }])
+    rows = db.query_request_log(since=0)
+    assert rows[0]["agent"] == "claude-code" and rows[0]["ua"] == "claude-cli/2.0"
