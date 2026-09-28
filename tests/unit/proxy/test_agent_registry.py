@@ -152,3 +152,59 @@ match:
         ids = {d.id for d in reg.all()}
         assert "claude-code" in ids and "cursor" in ids   # 坏文件不影响好文件
         assert reg.classify("openai", {"User-Agent": "C/1"}).agent == _UNKNOWN_ID
+
+class TestClaimAndManage:
+    def test_claim_creates_file_and_reloads(self, tmp_path):
+        r = _mk(tmp_path)
+        d = r.add_from_ui("curl-cli", "curl-cli", "user-agent", "^curl", "#94a3b8")
+        assert d.id == "curl-cli" and d.source == "user"
+        # 落盘文件可读且内容吻合
+        ua_file = tmp_path / "user" / "curl-cli.yaml"
+        assert ua_file.exists()
+        hit = r.classify("openai", {"User-Agent": "curl/8.5.2"})
+        assert hit.agent == "curl-cli"
+
+    def test_claim_no_tmp_leftover(self, tmp_path):
+        r = _mk(tmp_path)
+        r.add_from_ui("a1", "a1", "user-agent", "^a1", "#000")
+        assert not list((tmp_path / "user").glob("*.tmp"))
+
+    def test_claim_duplicate_raises_keyerror(self, tmp_path):
+        r = _mk(tmp_path)
+        r.add_from_ui("a1", "a1", "user-agent", "^a1", "#000")
+        with pytest.raises(KeyError):
+            r.add_from_ui("a1", "a1", "user-agent", "^a1", "#000")
+
+    def test_claim_invalid_inputs(self, tmp_path):
+        r = _mk(tmp_path)
+        with pytest.raises(ValueError):
+            r.add_from_ui("Bad ID!", "x", "user-agent", "^x", "#000")
+        with pytest.raises(ValueError):
+            r.add_from_ui("unknown", "x", "user-agent", "^x", "#000")   # 保留字
+        with pytest.raises(ValueError):
+            r.add_from_ui("ok", "x", "x-custom", "^x", "#000")          # header 白名单外
+        with pytest.raises(ValueError):
+            r.add_from_ui("ok", "x", "user-agent", "(", "#000")         # 坏 regex
+
+    def test_remove_user_agent_allowed(self, tmp_path):
+        r = _mk(tmp_path)
+        r.add_from_ui("curl-cli", "curl-cli", "user-agent", "^curl", "#000")
+        r.remove("curl-cli")
+        assert r.classify("openai", {"User-Agent": "curl/8"}).agent == _UNKNOWN_ID
+        assert not (tmp_path / "user" / "curl-cli.yaml").exists()
+
+    def test_remove_builtin_rejected(self, tmp_path):
+        b = tmp_path / "builtin"; b.mkdir()
+        (b / "cc.yaml").write_text(CC, encoding="utf-8")
+        r = AgentRegistry(b, tmp_path / "user")
+        with pytest.raises(ValueError):
+            r.remove("claude-code")
+
+    def test_reload_failure_keeps_old(self, tmp_path, monkeypatch):
+        r = _mk(tmp_path, builtin=[("cc.yaml", CC)])
+        before = r.classify("anthropic", {"x-app": "cli"}).agent
+        def boom():
+            raise OSError("disk lost")
+        monkeypatch.setattr(r, "_collect_defs", boom)
+        assert r.reload() is False
+        assert r.classify("anthropic", {"x-app": "cli"}).agent == before
