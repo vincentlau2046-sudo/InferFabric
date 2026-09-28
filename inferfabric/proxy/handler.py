@@ -28,6 +28,7 @@ from http.client import HTTPConnection
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from inferfabric.state import GPUMode
+from inferfabric.agent_registry import request_protocol
 from inferfabric.proxy.request_logger import RequestLog
 from inferfabric.anomaly_collector import AnomalyEvent
 
@@ -404,6 +405,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         req_id = pm.new_request_id()
         req_start = time.monotonic()
         key_name = pm.auth.key_name(auth_header) if pm.auth.enabled else "anonymous"
+        # v6.5: 客户端 Agent 分类（每请求一次，缓存到 handler 供所有 RequestLog 站点取值）。
+        # 生产必挂 pm.agent_registry；getattr 兜底仅为单测裸 fake（无 path/headers/registry）冷启动。
+        _reg = getattr(pm, "agent_registry", None)
+        if _reg is not None:
+            self._agent_hit = _reg.classify(
+                request_protocol(getattr(self, "path", "")),
+                getattr(self, "headers", {}))
         # G-1b: 挂到 handler 上，供 _forward_local / forwarder 写 RequestLog
         self._req_id = req_id
         self._req_start = req_start
@@ -428,6 +436,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 pm.logger.log(RequestLog(
                     req_id=req_id, key_name=key_name, model=req_model,
                     status=req_status, error=req_error,
+                    agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
+                    ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
                     duration_ms=(time.monotonic()-req_start)*1000,
                 ))
                 self._send_json({"error": auth_reason, "status": "unauthorized"}, 401)
@@ -471,6 +481,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 pm.logger.log(RequestLog(
                     req_id=req_id, key_name=key_name, model=original_model,
                     status=503, error="model_switching",
+                    agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
+                    ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
                     duration_ms=elapsed,
                 ))
                 pm.anomalies.record(AnomalyEvent(
@@ -509,6 +521,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     pm.logger.log(RequestLog(
                         req_id=req_id, key_name=key_name, model=original_model,
                         status=409, error="switch_in_progress",
+                        agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
+                        ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
                         duration_ms=elapsed,
                     ))
                     pm.anomalies.record(AnomalyEvent(
@@ -532,6 +546,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     pm.logger.log(RequestLog(
                         req_id=req_id, key_name=key_name, model=original_model,
                         status=503, error="auto_switch_failed",
+                        agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
+                        ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
                         duration_ms=elapsed,
                     ))
                     pm.anomalies.record(AnomalyEvent(
@@ -554,6 +570,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 pm.logger.log(RequestLog(
                     req_id=req_id, key_name=key_name, model=original_model,
                     status=503, error="model_not_active",
+                    agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
+                    ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
                     duration_ms=elapsed,
                 ))
                 pm.anomalies.record(AnomalyEvent(
@@ -592,6 +610,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                         model=original_model or requested_model, status=result.status, route=f"cloud:{provider_name}",
                         key_name=key_name, req_id=req_id,
                         cloud_provider=provider_name,
+                        agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
+                        ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
                         tokens_in=result.usage.get("prompt_tokens", 0),
                         tokens_in_cached=result.usage.get("prompt_tokens_cached", 0),
                         tokens_out=result.usage.get("completion_tokens", 0),
@@ -612,6 +632,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         pm.logger.log(RequestLog(
             req_id=req_id, key_name=key_name, model=original_model,
             status=404, error="unknown_model",
+            agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
+            ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
             duration_ms=elapsed,
         ))
         pm.anomalies.record(AnomalyEvent(
@@ -656,6 +678,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     status=200 if status == 200 else 502,
                     ttft_ms=getattr(self, '_ttft_ms', None),
                     route="local",
+                    agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
+                    ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
                     tokens_in=int(usage.get("prompt_tokens") or 0),
                     tokens_in_cached=int(usage.get("prompt_tokens_cached") or 0),
                     tokens_out=int(usage.get("completion_tokens") or 0),
@@ -1869,11 +1893,19 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         req_start = time.monotonic()
         auth_header = self.headers.get("Authorization", "") or self.headers.get("x-api-key", "")
         key_name = pm.auth.key_name(auth_header) if pm.auth.enabled else "anonymous"
+        # v6.5: 客户端 Agent 分类（缓存到 handler，embeddings/rerank 站点取值）
+        _reg = getattr(pm, "agent_registry", None)
+        if _reg is not None:
+            self._agent_hit = _reg.classify(
+                request_protocol(getattr(self, "path", "")),
+                getattr(self, "headers", {}))
 
         def _block(status, body, error, headers=None):
             pm.logger.log(RequestLog(
                 req_id=req_id, key_name=key_name, model=model_name,
                 status=status, error=error,
+                agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
+                ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
                 duration_ms=(time.monotonic() - req_start) * 1000,
             ))
             return {"blocked": True, "status": status, "body": body, "headers": headers}
@@ -2019,6 +2051,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             pm.logger.log(RequestLog(
                 req_id=ctx["req_id"], key_name=ctx["key_name"], model=model_name,
                 status=status, route="local",
+                agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
+                ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
                 duration_ms=(time.monotonic() - ctx["req_start"]) * 1000,
             ))
             gate.release()
@@ -2088,6 +2122,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             pm.logger.log(RequestLog(
                 req_id=ctx["req_id"], key_name=ctx["key_name"], model=model_name,
                 status=status, route="local",
+                agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
+                ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
                 duration_ms=(time.monotonic() - ctx["req_start"]) * 1000,
             ))
             gate.release()

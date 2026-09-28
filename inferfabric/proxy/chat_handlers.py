@@ -11,6 +11,7 @@ import logging
 from inferfabric import forwarder
 from inferfabric.proxy.sse_buffer import SSELineBuffer, first_token_ttft_cb
 from inferfabric.proxy.request_logger import RequestLog
+from inferfabric.agent_registry import request_protocol
 from inferfabric.proxy.usage import normalize_usage
 from inferfabric.anomaly_collector import AnomalyEvent
 
@@ -208,6 +209,12 @@ def handle_chat(handler, pm, data):
     handler._req_start = time.monotonic()
     auth_header = handler.headers.get("Authorization", "") or handler.headers.get("x-api-key", "")
     key_name = pm.auth.key_name(auth_header) if pm.auth.enabled else "anonymous"
+    # v6.5: 客户端 Agent 分类（每请求一次，缓存到 handler 供所有 RequestLog 站点取值）
+    _reg = getattr(pm, "agent_registry", None)
+    if _reg is not None:
+        handler._agent_hit = _reg.classify(
+            request_protocol(getattr(handler, "path", "")),
+            getattr(handler, "headers", {}))
 
     # G-1b: Initialize usage (before any early return)
     # prompt_tokens = 总输入（含缓存命中）；prompt_tokens_cached = 缓存命中部分
@@ -221,7 +228,10 @@ def handle_chat(handler, pm, data):
         if not auth_ok:
             pm.logger.log(RequestLog(
                 req_id=req_id, key_name=key_name, model=model_for_auth,
-                status=401, error=auth_reason, duration_ms=(time.monotonic()-handler._req_start)*1000,
+                status=401, error=auth_reason,
+                agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
+                ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
+                duration_ms=(time.monotonic()-handler._req_start)*1000,
             ))
             handler._send_json({"error": auth_reason, "status": "unauthorized"}, 401)
             return
@@ -265,6 +275,8 @@ def handle_chat(handler, pm, data):
             pm.logger.log(RequestLog(
                 req_id=req_id, key_name=key_name, model=model,
                 status=409, error="switch_in_progress",
+                agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
+                ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
                 duration_ms=elapsed,
             ))
             pm.anomalies.record(AnomalyEvent(
@@ -284,6 +296,8 @@ def handle_chat(handler, pm, data):
             pm.logger.log(RequestLog(
                 req_id=req_id, key_name=key_name, model=model,
                 status=503, error="cannot_switch",
+                agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
+                ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
                 duration_ms=elapsed,
             ))
             pm.anomalies.record(AnomalyEvent(
@@ -321,6 +335,8 @@ def handle_chat(handler, pm, data):
                     model=model, status=result.status, route=f"cloud:{provider_name}",
                     key_name=key_name, req_id=req_id,
                     cloud_provider=provider_name,
+                    agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
+                    ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
                     tokens_in=result.usage.get("prompt_tokens", 0),
                     tokens_in_cached=result.usage.get("prompt_tokens_cached", 0),
                     tokens_out=result.usage.get("completion_tokens", 0),
@@ -333,6 +349,8 @@ def handle_chat(handler, pm, data):
         pm.logger.log(RequestLog(
             req_id=req_id, key_name=key_name, model=model,
             status=404, error="unknown_model",
+            agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
+            ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
             duration_ms=elapsed,
         ))
         pm.anomalies.record(AnomalyEvent(
@@ -377,6 +395,8 @@ def handle_chat(handler, pm, data):
         pm.logger.log(RequestLog(
             req_id=req_id, key_name=key_name, model=model,
             status=429, error=gate.reason, route="local",
+            agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
+            ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
             duration_ms=(time.monotonic()-handler._req_start)*1000,
         ))
         handler._send_json(
@@ -393,6 +413,8 @@ def handle_chat(handler, pm, data):
                 pm.logger.log(RequestLog(
                     req_id=req_id, key_name=key_name, model=model,
                     status=200, ttft_ms=ttft, route="local",
+                    agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
+                    ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
                     tokens_in=usage.get("prompt_tokens", 0),
                     tokens_in_cached=usage.get("prompt_tokens_cached", 0),
                     tokens_out=usage.get("completion_tokens", 0),
@@ -404,6 +426,8 @@ def handle_chat(handler, pm, data):
         pm.logger.log(RequestLog(
             req_id=req_id, key_name=key_name, model=model,
             status=502, error="upstream_unavailable", route="local",
+            agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
+            ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
             duration_ms=(time.monotonic()-handler._req_start)*1000,
         ))
         handler._send_json({"error": "Upstream unavailable after retry"}, 502)
