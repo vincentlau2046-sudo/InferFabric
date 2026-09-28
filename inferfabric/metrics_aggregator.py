@@ -17,7 +17,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from statistics import median
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Mapping
 
 if TYPE_CHECKING:
     from inferfabric.request_log_db import RequestLogDB
@@ -74,6 +74,24 @@ def _e2e_tps_of(sample: dict) -> float | None:
             and (sample.get("tokens_out") or 0) >= 1):
         return (sample["tokens_out"] or 0) / (sample["duration_ms"] / 1000.0)
     return None
+
+
+def cost_of_row(prices: dict, row: Mapping) -> float:
+    """单行请求费用（¥）：仅云端路由按价格表逐请求计；本地/未配价 → 0.0。
+
+    token-curve 与 agent-stats 共用的唯一计价入口（口径防漂移，设计 §4）。
+    """
+    if not row.get("cloud_provider"):
+        return 0.0
+    try:
+        tin = int(row.get("tokens_in") or 0)
+        tout = int(row.get("tokens_out") or 0)
+    except (ValueError, TypeError):
+        return 0.0
+    p = prices.get(row.get("model") or "")
+    if p is None:
+        return 0.0
+    return (tin / 1e6) * p.price_input + (tout / 1e6) * p.price_output
 
 
 @dataclass

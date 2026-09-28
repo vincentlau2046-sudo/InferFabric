@@ -29,6 +29,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from inferfabric.state import GPUMode
 from inferfabric.agent_registry import request_protocol
+from inferfabric.agent_stats import AGENT_GRAN, aggregate_agent_stats
+from inferfabric.metrics_aggregator import cost_of_row
 from inferfabric.proxy.request_logger import RequestLog
 from inferfabric.anomaly_collector import AnomalyEvent
 
@@ -197,6 +199,7 @@ _GET_ROUTES = {
     "/api/token-stats":         lambda h, pm: h._handle_token_stats(pm),
     "/api/token-curve":         lambda h, pm: h._handle_token_curve(pm),
     "/api/snapshot":            lambda h, pm: h._handle_snapshot(pm),
+    "/api/agent-stats":         lambda h, pm: h._handle_agent_stats(pm),
     "/api/anomalies":           lambda h, pm: h._handle_anomalies(pm),
     "/metrics":                 lambda h, pm: h._handle_metrics(pm),
     "/history":                 lambda h, pm: h._send_json(pm.mgr.state.get_history(limit=30)),
@@ -1102,13 +1105,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 target[idx]["completion"] += tokens_out
                 target[idx]["cached"] += cached
                 target[idx]["requests"] += 1
-                # 云端计费：按模型查价格表（与 metrics cost_yuan 同口径）；
-                # 未配价的模型不计费（cost 保持 0，前端显示 ¥0）
+                # 云端计费：与 agent-stats 共用 cost_of_row 唯一计价入口（口径防漂移）
                 if r.get("cloud_provider"):
-                    p = prices.get(r.get("model") or "")
-                    if p is not None and (p.price_input or p.price_output):
-                        target[idx]["cost"] += (tokens_in / 1e6) * p.price_input \
-                                               + (tokens_out / 1e6) * p.price_output
+                    target[idx]["cost"] += cost_of_row(prices, r)
 
             # cost 输出保留 4 位小数（与 metrics cost_yuan 同口径），避免浮点长尾
             for b in local_b + cloud_b:
@@ -1122,6 +1121,34 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             log.error("/api/token-curve failed: %s", e)
             self._send_json({"error": "token curve unavailable"}, 500)
+
+    def _handle_agent_stats(self, pm):
+        """GET /api/agent-stats?granularity=minute|hour|day|week&scope=all|local|cloud
+
+        客户端 Agent 用量分桶（v6.5）。数据源 = request_log（SQLite），
+        费用经 cost_of_row 与 /api/token-curve 同口径。"""
+        from urllib.parse import urlparse, parse_qs
+        try:
+            qs = parse_qs(urlparse(self.path).query or "")
+            g = (qs.get("granularity", ["hour"])[0]).lower()
+            if g not in AGENT_GRAN:
+                self._send_json({"error": f"invalid granularity: {g}"}, 400)
+                return
+            scope = (qs.get("scope", ["all"])[0]).lower()
+            if scope not in ("all", "local", "cloud"):
+                self._send_json({"error": f"invalid scope: {scope}"}, 400)
+                return
+            spec = AGENT_GRAN[g]
+            since = int(time.time() - spec["since"])
+            rows = pm.telemetry.query_request_log(since=since, limit=100000)
+            meta = {d.id: {"name": d.name, "color": d.color, "source": d.source}
+                    for d in pm.agent_registry.all()}
+            res = aggregate_agent_stats(rows, g, scope, pm.metrics.price_config, meta)
+            res["granularity"] = g
+            self._send_json(res, 200)
+        except Exception as e:
+            log.error("/api/agent-stats failed: %s", e)
+            self._send_json({"error": "agent stats unavailable"}, 500)
 
     def _handle_snapshot(self, pm):
         """GET /api/snapshot — single consistent control-plane snapshot.
