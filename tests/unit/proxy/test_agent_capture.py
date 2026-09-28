@@ -89,3 +89,16 @@ def test_chat_entry_classifies_and_logs_agent(tmp_path):
 def test_request_protocol_known_paths():
     assert request_protocol("/v1/messages") == "anthropic"
     assert request_protocol("/v1/chat/completions") == "openai"
+
+
+def test_reloader_reloads_registry():
+    import inferfabric.config_reloader as cr
+    from inferfabric.agent_registry import AgentRegistry
+    r = AgentRegistry.__new__(AgentRegistry)
+    calls = []
+    r.reload = lambda: (calls.append(1), True)[1]
+    rel = cr.ConfigReloader(mgr=None, auth=None, cloud=None, registry=r)
+    rel._last_reload = 0  # 跳过 5s 冷却
+    failed = rel.reload_all()
+    # reload_all 会先跑 mgr.reload_models（mgr=None → N/A），registry 必被调
+    assert calls  # registry.reload 至少被调用一次

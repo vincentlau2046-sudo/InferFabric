@@ -27,10 +27,11 @@ class ConfigReloader:
     """
 
     def __init__(self, mgr: "ModelManager", auth: "AuthManager" = None,
-                 cloud: "CloudDiscovery" = None):
+                 cloud: "CloudDiscovery" = None, registry=None):
         self._mgr = mgr
         self._auth = auth
         self._cloud = cloud
+        self._registry = registry
         self._last_reload = 0.0
         self._cooldown = 5.0  # seconds
 
@@ -81,6 +82,14 @@ class ConfigReloader:
             except Exception as e:
                 failed.append("cloud")
                 log.error("ConfigReloader: cloud reload failed: %s", e)
+        if self._registry:
+            try:
+                if not self._registry.reload():
+                    failed.append("agents")
+                    log.error("ConfigReloader: agent registry reload FAILED")
+            except Exception as e:
+                failed.append("agents")
+                log.error("ConfigReloader: agent registry reload failed: %s", e)
         # Invalidate dashboard cache
         try:
             from inferfabric.dashboard import invalidate_cache

@@ -2337,7 +2337,8 @@ def main():
 
     # v5.2: Unified hot-reload via ConfigReloader
     from inferfabric.config_reloader import ConfigReloader
-    config_reloader = ConfigReloader(mgr.mgr, auth=mgr.auth, cloud=mgr.cloud)
+    config_reloader = ConfigReloader(mgr.mgr, auth=mgr.auth, cloud=mgr.cloud,
+                                     registry=mgr.agent_registry)
     mgr.config_reloader = config_reloader
     config_reloader.setup()
 
