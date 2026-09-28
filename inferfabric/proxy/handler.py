@@ -200,6 +200,7 @@ _GET_ROUTES = {
     "/api/token-curve":         lambda h, pm: h._handle_token_curve(pm),
     "/api/snapshot":            lambda h, pm: h._handle_snapshot(pm),
     "/api/agent-stats":         lambda h, pm: h._handle_agent_stats(pm),
+    "/api/agents":              lambda h, pm: h._handle_agents(pm),
     "/api/anomalies":           lambda h, pm: h._handle_anomalies(pm),
     "/metrics":                 lambda h, pm: h._handle_metrics(pm),
     "/history":                 lambda h, pm: h._send_json(pm.mgr.state.get_history(limit=30)),
@@ -234,6 +235,7 @@ _POST_ROUTES = {
     "/admin/cache/toggle":     _admin(lambda h, pm: h._handle_cache_toggle(pm)),
     "/admin/auto-switch/toggle": _admin(lambda h, pm: h._handle_auto_switch_toggle(pm)),
     "/admin/gpu-clear":        _admin(lambda h, pm: h._handle_gpu_clear(pm)),
+    "/api/agents":             _admin(lambda h, pm: h._handle_post_agents(pm)),
 
     # ─── Admin: Cloud Provider Management (PR-D) ─────────────────
     "/admin/cloud/reload":      _admin(lambda h, pm: h._handle_cloud_reload(pm)),
@@ -248,6 +250,7 @@ _POST_ROUTES = {
 
 _DELETE_ROUTES = {
     "/admin/cloud/providers":   _admin(lambda h, pm: h._handle_cloud_providers(pm)),
+    "/api/agents":             _admin(lambda h, pm: h._handle_delete_agent(pm)),
 }
 
 # Helper for watchdog route
@@ -1149,6 +1152,52 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             log.error("/api/agent-stats failed: %s", e)
             self._send_json({"error": "agent stats unavailable"}, 500)
+
+    def _handle_agents(self, pm):
+        """GET /api/agents — 已知 Agent 清单（dashboard 图例/管理）。"""
+        self._send_json({"agents": [{
+            "id": d.id, "name": d.name, "color": d.color, "source": d.source,
+            "rules": [{"header": r.header, "value": r.value, "regex": r.regex,
+                       "protocol": r.protocol} for r in d.rules],
+        } for d in pm.agent_registry.all()]}, 200)
+
+    def _handle_post_agents(self, pm):
+        """POST /api/agents — 一键认领（admin-token 保护）。"""
+        try:
+            data = self._read_body()
+            if not isinstance(data, dict):
+                self._send_json({"error": "body required"}, 400)
+                return
+            d = pm.agent_registry.add_from_ui(
+                str(data.get("id") or ""), str(data.get("name") or ""),
+                str(data.get("header") or "user-agent"),
+                str(data.get("pattern") or ""),
+                str(data.get("color") or "#94a3b8"),
+            )
+            self._send_json({"agent": {
+                "id": d.id, "name": d.name, "color": d.color, "source": d.source,
+            }}, 200)
+        except KeyError:
+            self._send_json({"error": "agent id already exists"}, 409)
+        except ValueError as e:
+            self._send_json({"error": str(e)}, 400)
+        except Exception as e:
+            log.error("/api/agents POST failed: %s", e)
+            self._send_json({"error": "claim failed"}, 500)
+
+    def _handle_delete_agent(self, pm):
+        """DELETE /api/agents?id=<id> — 管理模式删除（仅用户目录文件）。"""
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(self.path).query)
+        aid = (qs.get("id") or [""])[0]
+        try:
+            pm.agent_registry.remove(aid)
+            self._send_json({"ok": True}, 200)
+        except ValueError as e:
+            self._send_json({"error": str(e)}, 400)
+        except Exception as e:
+            log.error("/api/agents DELETE failed: %s", e)
+            self._send_json({"error": "delete failed"}, 500)
 
     def _handle_snapshot(self, pm):
         """GET /api/snapshot — single consistent control-plane snapshot.
