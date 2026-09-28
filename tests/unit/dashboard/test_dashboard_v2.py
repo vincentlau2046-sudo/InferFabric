@@ -588,18 +588,31 @@ def test_monitor_latency_cards():
 
 
 def test_monitor_readonly():
-    """监控 TAB 必须只读：monitor.js 不得包含任何 method:"POST" /
-    method: "POST" 引用（spec §4.3：纯遥测、零操作）。
+    """监控 TAB 遥测只读（spec §4.3），唯一例外 = v6.5 一键认领/管理删除。
 
-    窗口/粒度切换是 display filter（客户端过滤），不触达服务端状态。
-    所有 fetch 调用必须为 GET（不指定 method = GET）。"""
+    设计文档 2026-09-28-agent-aware-clients §5：认领闭环（POST /api/agents）
+    与管理删除（DELETE /api/agents?id=）落进监控 TAB，但走 control-plane
+    admin-token 保护（UI.adminHeaders，同 /switch /stop）——写操作仅此一条，
+    其余所有 fetch 必须为 GET（display filter 不触达服务端状态）。"""
     js = (ROOT / "inferfabric" / "dashboard" / "js" / "monitor.js").read_text(encoding="utf-8")
-    # 不得出现 POST method（含空格变体）
-    assert 'method:"POST"' not in js, "monitor.js contains method:\"POST\" — read-only violation"
-    assert 'method: "POST"' not in js, "monitor.js contains method: \"POST\" — read-only violation"
-    assert "'POST'" not in js, "monitor.js references 'POST' — read-only violation"
-    assert '"POST"' not in js, "monitor.js references \"POST\" — read-only violation"
-    # HTML fragment 同样不得有 form action 或 method
+    # v6.5 例外：认领 POST + 管理 DELETE 必须在 adminHeaders 保护的 /api/agents fetch 中
+    assert 'method: \'POST\'' in js and "'/api/agents'" in js, \
+        "monitor.js 缺少 admin 保护的一键认领 POST /api/agents"
+    assert 'method: \'DELETE\'' in js and "'/api/agents?id='" in js, \
+        "monitor.js 缺少 admin 保护的管理删除 DELETE /api/agents?id="
+    # 除认领行外不得出现任何其它 POST/DELETE（非 admin 写操作 = 违反只读契约）。
+    # fetch 的 URL 与 method 常在相邻行（Object.assign 拆行）→ 按 ±3 行邻域判断。
+    lines = js.splitlines()
+    bad = []
+    for i, ln in enumerate(lines):
+        if "POST" not in ln and "DELETE" not in ln:
+            continue
+        nb = "\n".join(lines[max(0, i - 3):i + 3])
+        if "adminHeaders" in nb or "'/api/agents'" in nb:
+            continue
+        bad.append(ln.strip())
+    assert not bad, f"monitor.js 存在非 admin 写操作: {bad}"
+    # HTML fragment 不得有 form action 或 method
     frag = (_DASHBOARD_DIR / "fragments" / "monitor.html").read_text(encoding="utf-8")
     assert "method=" not in frag, "monitor.html contains method= — read-only violation"
     assert "<form" not in frag, "monitor.html contains <form> — read-only violation"
