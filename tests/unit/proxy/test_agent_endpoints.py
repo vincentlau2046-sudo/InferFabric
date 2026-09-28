@@ -7,6 +7,7 @@ def _handler(path):
     h = ProxyHandler.__new__(ProxyHandler)
     h.path = path
     h.command = "GET"
+    h.headers = {}  # BaseHTTPRequestHandler 恒有；snapshot 读 If-None-Match
     h._sent = []
     h._send_json = lambda data, code=200: h._sent.append((code, data))
     return h
@@ -83,3 +84,39 @@ def test_agents_delete_builtin_400(tmp_path):
     h = _handler("/api/agents?id=claude-code")
     h._handle_delete_agent(pm)
     assert h._sent[-1][0] == 400
+
+def test_request_log_carries_agent_ua():
+    h = _handler("/api/request_log")
+    rows = [{"timestamp": 1.0, "model": "m", "status": 200, "tokens_in": 1,
+             "tokens_in_cached": 0, "tokens_out": 1, "ttft_ms": 1.0,
+             "duration_ms": 2.0, "route": "local", "key_name": "k", "error": "",
+             "agent": "claude-code", "ua": "claude-cli/2.0"}]
+    pm = SimpleNamespace(telemetry=SimpleNamespace(
+        query_request_log=lambda since, limit=1: rows))
+    h._handle_request_log(pm)
+    code, data = h._sent[-1]
+    assert code == 200 and data["logs"][0]["agent"] == "claude-code"
+    assert data["logs"][0]["ua"] == "claude-cli/2.0"
+
+
+def test_snapshot_carries_agent_ua():
+    h = _handler("/api/snapshot")
+    # snapshot 走真实 send_response/_safe_write 而非 _send_json 桩
+    h.send_response = lambda code, message=None: None
+    h.send_header = lambda k, v: None
+    h.end_headers = lambda: None
+    bodies = []
+    h._safe_write = lambda b: bodies.append(b)
+    rows = [{"timestamp": 1.0, "model": "m", "status": 200, "tokens_in": 1,
+             "tokens_in_cached": 0, "tokens_out": 1, "ttft_ms": None,
+             "duration_ms": None, "route": "local", "key_name": "k", "error": None,
+             "agent": "", "ua": "curl/8"}]
+    pm = SimpleNamespace(telemetry=SimpleNamespace(query_request_log=lambda since, limit=50: rows),
+                         mgr=SimpleNamespace(state=SimpleNamespace(get_history=lambda n: []),
+                                             list_models=lambda: [], _models={}),
+                         _snap_exp_cache=None)
+    h._handle_snapshot(pm)
+    import json
+    data = json.loads(bodies[-1])
+    rl = data["request_log"]
+    assert rl[0]["agent"] == "" and rl[0]["ua"] == "curl/8"

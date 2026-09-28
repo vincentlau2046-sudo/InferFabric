@@ -961,6 +961,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     "route": r["route"],
                     "key_name": r.get("key_name", ""),
                     "error": r.get("error", ""),
+                    "agent": r.get("agent", ""),
+                    "ua": r.get("ua", ""),
                 })
             self._send_json({"logs": logs, "count": len(logs)}, 200)
         except Exception as e:
@@ -1252,7 +1254,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                  "tokens_out": r["tokens_out"],
                  "ttft_ms": round(r["ttft_ms"], 1) if r["ttft_ms"] else None,
                  "duration_ms": round(r["duration_ms"], 1) if r["duration_ms"] else None,
-                 "route": r["route"], "key_name": r.get("key_name", ""), "error": r.get("error", "")}
+                 "route": r["route"], "key_name": r.get("key_name", ""), "error": r.get("error", ""),
+                 "agent": r.get("agent", ""), "ua": r.get("ua", "")}
                 for r in rows
             ]
         except Exception:
