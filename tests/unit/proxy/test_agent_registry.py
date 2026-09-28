@@ -236,3 +236,60 @@ class TestClaimWriteLock:
         assert not t.is_alive()
         assert result.get("ok") is True, f"unexpected: {result}"
         assert not list((tmp_path / "user").glob("*.tmp")), ".tmp 半文件不应残留"
+
+
+# ── v6.6 aliases：子进程工具归入已有 Agent（认领时选归属） ──
+
+class TestAliases:
+    def test_classify_matches_alias_rule(self, tmp_path):
+        """agent 的 aliases 规则命中 → 归入该 agent（子进程工具归属）。"""
+        reg = _mk(tmp_path, builtin=[("cc.yaml", CC)])
+        # 给 claude-code 加 alias：curl 归入它
+        (tmp_path / "user" / "claude-code.yaml").write_text(
+            "id: claude-code\naliases:\n  - { header: user-agent, regex: \"^curl\" }\n",
+            encoding="utf-8")
+        reg.reload()
+        # 主规则仍命中
+        assert reg.classify("anthropic", {"x-app": "cli"}).agent == "claude-code"
+        # alias 命中 curl → 归入 claude-code（不是 unknown）
+        assert reg.classify("openai", {"User-Agent": "curl/8.5.2"}).agent == "claude-code"
+
+    def test_add_alias_to_builtin_writes_additive_override(self, tmp_path):
+        """给 builtin agent 加 alias → 写 user-dir 覆盖文件（仅 aliases，additive），
+        builtin 原 match 规则不丢。"""
+        reg = _mk(tmp_path, builtin=[("cc.yaml", CC)])
+        d = reg.add_alias("claude-code", "user-agent", r"^curl")
+        assert d is not None and d.id == "claude-code"
+        # builtin 原规则仍工作
+        assert reg.classify("anthropic", {"x-app": "cli"}).agent == "claude-code"
+        # 新 alias 命中
+        assert reg.classify("openai", {"User-Agent": "curl/8.5.2"}).agent == "claude-code"
+        # 覆盖文件落盘
+        override = tmp_path / "user" / "claude-code.yaml"
+        assert override.exists()
+        import yaml as _y
+        raw = _y.safe_load(override.read_text(encoding="utf-8"))
+        assert "aliases" in raw and raw["aliases"][0]["regex"] == "^curl"
+        # 不含 match（additive，不复制 builtin 规则）
+        assert "match" not in raw
+
+    def test_add_alias_to_user_agent_appends(self, tmp_path):
+        """给已有 user agent 追加 alias → 读改写，不丢已有 aliases。"""
+        (tmp_path / "user").mkdir(exist_ok=True)
+        (tmp_path / "user" / "myagent.yaml").write_text(
+            "id: myagent\nname: My\nmatch:\n  - { header: user-agent, regex: \"^myagent\" }\n",
+            encoding="utf-8")
+        reg = _mk(tmp_path)
+        reg.add_alias("myagent", "user-agent", r"^wget")
+        assert reg.classify("openai", {"User-Agent": "wget/1.21"}).agent == "myagent"
+        assert reg.classify("openai", {"User-Agent": "myagent/2"}).agent == "myagent"
+
+    def test_add_alias_invalid_raises(self, tmp_path):
+        reg = _mk(tmp_path, builtin=[("cc.yaml", CC)])
+        import pytest
+        with pytest.raises(ValueError):
+            reg.add_alias("claude-code", "bad-header", "^x")     # 非法 header
+        with pytest.raises(ValueError):
+            reg.add_alias("claude-code", "user-agent", "(unclosed")  # 坏 regex
+        with pytest.raises(ValueError):
+            reg.add_alias("nonexistent", "user-agent", "^x")     # 父 agent 不存在

@@ -120,3 +120,32 @@ def test_snapshot_carries_agent_ua():
     data = json.loads(bodies[-1])
     rl = data["request_log"]
     assert rl[0]["agent"] == "" and rl[0]["ua"] == "curl/8"
+
+
+def test_agents_post_alias_to_builtin(tmp_path):
+    """POST /api/agents 带 parent_id → 走 add_alias，子进程 UA 归入已有 builtin agent。"""
+    from inferfabric.agent_registry import AgentRegistry
+    b = tmp_path / "builtin"; u = tmp_path / "user"
+    b.mkdir(); u.mkdir()
+    (b / "cc.yaml").write_text(
+        "id: claude-code\nname: Claude Code\ncolor: \"#d97757\"\nmatch:\n  - { header: x-app, value: cli }\n",
+        encoding="utf-8")
+    pm = _mk_pm(tmp_path)
+    pm.agent_registry = AgentRegistry(b, u)
+    h = _handler("/api/agents")
+    h._read_body = lambda: {"parent_id": "claude-code", "header": "user-agent", "pattern": "^curl"}
+    h._handle_post_agents(pm)
+    code, data = h._sent[-1]
+    assert code == 200 and data["agent"]["id"] == "claude-code"
+    # curl 现在归入 claude-code
+    assert pm.agent_registry.classify("openai", {"User-Agent": "curl/8.5.2"}).agent == "claude-code"
+    # builtin 原规则不丢
+    assert pm.agent_registry.classify("anthropic", {"x-app": "cli"}).agent == "claude-code"
+
+
+def test_agents_post_alias_not_found_400(tmp_path):
+    pm = _mk_pm(tmp_path)
+    h = _handler("/api/agents")
+    h._read_body = lambda: {"parent_id": "ghost", "header": "user-agent", "pattern": "^x"}
+    h._handle_post_agents(pm)
+    assert h._sent[-1][0] == 400

@@ -102,6 +102,7 @@ class AgentDef:
     color: str
     rules: tuple[MatchRule, ...]
     source: str  # "builtin" | "user"
+    aliases: tuple[MatchRule, ...] = ()  # v6.6: 子进程工具归属（additive，认领时选父 agent）
 
 
 @dataclass(frozen=True)
@@ -164,6 +165,10 @@ class AgentRegistry:
             for rule in d.rules:
                 if rule.matches(protocol, headers):
                     return AgentHit(d.id, d.name, d.color, ua)
+            # v6.6: aliases（子进程工具归属）——主规则未命中再查别名
+            for rule in d.aliases:
+                if rule.matches(protocol, headers):
+                    return AgentHit(d.id, d.name, d.color, ua)
         return AgentHit(_UNKNOWN_ID, _UNKNOWN_NAME, _UNKNOWN_COLOR, ua)
 
     def all(self) -> list[AgentDef]:
@@ -186,7 +191,17 @@ class AgentRegistry:
                     continue
                 idx = index.get(d.id)
                 if idx is not None:
-                    defs[idx] = d  # 用户目录覆盖内置（同 id）；保持内置原位置（排序稳定）
+                    # v6.6: 用户目录同 id 覆盖——
+                    #   有 match → 整体替换（既有语义）；仅有 aliases → additive（保留 builtin
+                    #   规则，追加别名），用于「子进程工具归入 builtin agent」不复制原规则。
+                    if d.rules:
+                        defs[idx] = d
+                    elif d.aliases:
+                        from dataclasses import replace as _replace
+                        defs[idx] = _replace(defs[idx],
+                                             aliases=defs[idx].aliases + d.aliases)
+                    else:
+                        defs[idx] = d  # 理论不达（_read_def 已过滤空规则）
                 else:
                     index[d.id] = len(defs)
                     defs.append(d)
@@ -212,8 +227,14 @@ class AgentRegistry:
                 rule = MatchRule.build(m)
                 if rule is not None:
                     rules.append(rule)
-        if not rules:
-            log.warning("agents.d: %s has no usable rules, skipped", path)
+        aliases: list[MatchRule] = []
+        for m in raw.get("aliases") or []:
+            if isinstance(m, dict):
+                rule = MatchRule.build(m)
+                if rule is not None:
+                    aliases.append(rule)
+        if not rules and not aliases:
+            log.warning("agents.d: %s has no usable rules/aliases, skipped", path)
             return None
         return AgentDef(
             id=aid,
@@ -221,6 +242,7 @@ class AgentRegistry:
             color=str(raw.get("color") or _UNKNOWN_COLOR),
             rules=tuple(rules),
             source=source,
+            aliases=tuple(aliases),
         )
 
     def add_from_ui(self, id: str, name: str, header: str,
@@ -255,6 +277,47 @@ class AgentRegistry:
             os.replace(tmp, path)  # 原子替换：不残留 .tmp，并发写最后者胜
             self.reload()
         return self._find(id)
+
+    def add_alias(self, parent_id: str, header: str, pattern: str) -> AgentDef:
+        """认领时选「归入已有 Agent」：把 (header, pattern) 作为 alias 追加到父 agent。
+
+        - builtin 父 → 写 user-dir <parent_id>.yaml（仅 aliases，additive；不复制原规则）
+        - user 父    → 读改写其 YAML，aliases 列表追加
+        两者均原子落盘 + reload。返回更新后的父 def。
+
+        Raises:
+            ValueError: header/regex 非法，或父 agent 不存在
+        """
+        if header not in _HEADER_WHITELIST:
+            raise ValueError(f"invalid header signal: {header!r}")
+        try:
+            re.compile(pattern)
+        except re.error as e:
+            raise ValueError(f"bad regex: {pattern!r} ({e})") from e
+        with self._write_lock:
+            parent = self._find(parent_id)
+            if parent is None:
+                raise ValueError(f"parent agent not found: {parent_id!r}")
+            self._user_dir.mkdir(parents=True, exist_ok=True)
+            path = self._user_dir / f"{parent_id}.yaml"
+            new_rule = {"header": header, "regex": pattern}
+            if path.exists():
+                with open(path, encoding="utf-8") as f:
+                    raw = yaml.safe_load(f) or {}
+                aliases = list(raw.get("aliases") or [])
+                aliases.append(new_rule)
+                raw["aliases"] = aliases
+            else:
+                # builtin 父：新建 additive 覆盖文件（仅 aliases）
+                raw = {"id": parent_id, "aliases": [new_rule]}
+            comment = "# auto-generated {ts} (dashboard alias claim) — 编辑后 iff reload 生效\n".format(
+                ts=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+            tmp = path.with_suffix(".yaml.tmp")
+            tmp.write_text(comment + yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+                           encoding="utf-8")
+            os.replace(tmp, path)
+            self.reload()
+        return self._find(parent_id)
 
     def remove(self, id: str) -> None:
         """删除用户目录 agent（管理模式）。内置/保留字/不存在 → 抛 ValueError。"""

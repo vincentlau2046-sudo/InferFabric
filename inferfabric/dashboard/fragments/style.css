@@ -1379,11 +1379,12 @@ hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-2) 0; }
 .mon-claim-badge{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--crit,#ef4444);cursor:pointer}
 .mon-claim-badge svg{width:12px;height:12px;flex-shrink:0}
 .mon-claim-label{font-size:11px}
-.mon-mini-btn{font-size:11px;padding:2px 8px;border:1px solid var(--line,#e2e8f0);border-radius:6px;background:transparent;cursor:pointer}
-.mon-mini-btn:hover{background:rgba(100,116,139,.08)}
-.mon-mini-btn.active{background:rgba(100,116,139,.15)}
+.mon-mini-btn{font-size:11px;padding:2px 8px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--ink-2);cursor:pointer}
+.mon-mini-btn:hover{background:var(--surface-2);color:var(--ink)}
+.mon-mini-btn.active{background:var(--surface-2);color:var(--ink)}
 .if-agent-claim label{display:block;font-size:12px;margin:8px 0}
 .if-agent-claim input,.if-agent-claim select{width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--line,#e2e8f0);border-radius:6px;background:transparent;color:inherit}
 .agent-claim-sample{font-size:12px;padding:6px 8px;background:rgba(100,116,139,.08);border-radius:6px;margin-bottom:8px}
-.agent-claim-preview{font-size:12px;color:var(--txt-2,#64748b);min-height:18px}
+.agent-claim-preview{font-size:12px;color:var(--ink-3);min-height:18px}
+.agent-claim-hint{font-size:11px;color:var(--ink-3);padding:4px 0}
 @media (max-width:1100px){.if-agent-body{grid-template-columns:1fr}}

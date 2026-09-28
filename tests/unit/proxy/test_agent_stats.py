@@ -47,15 +47,16 @@ class TestAggregate:
         assert out["series"]["claude-code"][-1]["requests"] == 1
 
     def test_empty_and_unknown_normalized(self):
-        """历史 '' 与 'unknown' 混存 → 单一未识别桶。"""
-        rows = [_row(timestamp=NOW - 10, agent="", ua="curl/8"),
-                _row(timestamp=NOW - 20, agent="unknown", ua="python-requests/2")]
+        """v6.6: agent='' 行（采集未跑，历史存量）不进聚合；agent='unknown'（分类器
+        跑过未命中）保留为唯一未识别桶。采集后 curl/urllib 应被 classify 为 'unknown' 而非 ''。"""
+        rows = [_row(timestamp=NOW - 10, agent="", ua="curl/8"),           # 历史存量→排除
+                _row(timestamp=NOW - 20, agent="unknown", ua="python-requests/2")]  # 采集后未命中→保留
         out = aggregate_agent_stats(rows, "hour", "all", PRICES, {}, now=NOW)
         ids = [t["agent"] for t in out["totals"]]
         assert ids == ["unknown"]
         unk = out["totals"][0]
-        assert unk["requests"] == 2
-        assert {u["ua"] for u in out["unassigned"]} == {"curl/8", "python-requests/2"}
+        assert unk["requests"] == 1  # 仅 unknown 行计入
+        assert {u["ua"] for u in out["unassigned"]} == {"python-requests/2"}
 
     def test_scope_local_filters_cloud(self):
         rows = [_row(timestamp=NOW - 10, cloud_provider=None),
@@ -75,3 +76,60 @@ class TestAggregate:
         rows = [_row(timestamp=NOW - 10, agent="unknown", ua="curl/8.5.2")]
         out = aggregate_agent_stats(rows, "hour", "all", PRICES, {}, now=NOW)
         assert out["totals"][0]["agent"] == "unknown"
+
+
+# ── v6.6 优化：历史空行不进聚合 + 用户认领 agent 走 palette 补色 ──
+
+class TestHistoricalFilter:
+    def test_empty_agent_rows_excluded(self):
+        """agent='' 的行（采集上线前历史存量 / 采集漏点）不进聚合——
+        否则 14 万历史空行淹没真实识别率。agent='unknown'（分类器跑过未命中）保留。"""
+        rows = [
+            _row(timestamp=NOW - 50, agent="claude-code", ua="cc"),
+            _row(timestamp=NOW - 50, agent="", ua=""),          # 历史存量
+            _row(timestamp=NOW - 50, agent="", ua=""),          # 历史存量
+            _row(timestamp=NOW - 50, agent="unknown", ua="curl/8"),  # 采集后未命中
+        ]
+        out = aggregate_agent_stats(rows, "hour", "all", PRICES, {}, now=NOW)
+        # claude-code 1 + unknown 1 = 2（两条历史空行不计）
+        assert out["window_requests"] == 2
+        agents = {t["agent"] for t in out["totals"]}
+        assert agents == {"claude-code", "unknown"}
+
+    def test_empty_agent_with_ua_still_excluded(self):
+        """agent='' 即使带 ua 也不计——agent='' 意味采集未跑，无可靠信号。"""
+        rows = [_row(timestamp=NOW - 50, agent="", ua="something")]
+        out = aggregate_agent_stats(rows, "hour", "all", PRICES, {}, now=NOW)
+        assert out["window_requests"] == 0
+
+
+class TestPaletteForClaimed:
+    def test_user_source_gets_palette_color(self):
+        """source='user'（用户认领）的 agent 按 palette rank 取色，
+        不再用 YAML 里的 #94a3b8 灰。builtin 保留品牌色。"""
+        from inferfabric.agent_stats import PALETTE_SERIES
+        rows = [
+            _row(timestamp=NOW - 50, agent="claude-code", ua="cc"),
+            _row(timestamp=NOW - 50, agent="my-claim", ua="mc"),
+        ]
+        meta = {
+            "claude-code": {"name": "Claude Code", "color": "#d97757", "source": "builtin"},
+            "my-claim": {"name": "my-claim", "color": "#94a3b8", "source": "user"},
+        }
+        out = aggregate_agent_stats(rows, "hour", "all", PRICES, meta, now=NOW)
+        cc = next(t for t in out["totals"] if t["agent"] == "claude-code")
+        mc = next(t for t in out["totals"] if t["agent"] == "my-claim")
+        assert cc["color"] == "#d97757"  # builtin 品牌色不变
+        assert mc["color"] == PALETTE_SERIES[0]  # 用户认领走 palette[0]
+
+    def test_palette_cycles_and_skips_amber(self):
+        """多个 user agent 按 palette 系列槽 [0,2,3,4] 循环，跳过琥珀[1]（累计线专用槽）。"""
+        from inferfabric.agent_stats import PALETTE_SERIES
+        rows = [_row(timestamp=NOW - 50, agent=f"u{i}", ua=f"u{i}") for i in range(5)]
+        meta = {f"u{i}": {"name": f"u{i}", "color": "#fff", "source": "user"} for i in range(5)}
+        out = aggregate_agent_stats(rows, "hour", "all", PRICES, meta, now=NOW)
+        colors = {t["agent"]: t["color"] for t in out["totals"]}
+        # 5 个 user agent → palette [0,2,3,4,0]（跳过 [1]=琥珀）
+        assert colors["u0"] == PALETTE_SERIES[0]
+        assert colors["u1"] == PALETTE_SERIES[1]  # = palette[2]
+        assert "#b45309" not in colors.values()   # 琥珀不出现

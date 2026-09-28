@@ -1103,15 +1103,35 @@
     var rid = _agentPatternFromUA(_claimSample);
     var base = (rid.length > 1 ? rid.slice(1) : 'agent').toLowerCase()
         .replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
+    // 归入已有 Agent 的候选列表（排除 unknown）
+    var opts = '';
+    if (_agentCache && _agentCache.totals) {
+      for (var i = 0; i < _agentCache.totals.length; i++) {
+        var t = _agentCache.totals[i];
+        if (t.agent === 'unknown') continue;
+        if (t.source === 'observed') continue;  // 无 def 的历史残留，不可归入
+        opts += '<option value="' + escHtml(t.agent) + '">' + escHtml(t.name) + '</option>';
+      }
+    }
     var holder = $('confirmModal');
     holder.innerHTML =
       '<div class="if-modal-backdrop">' +
         '<div class="if-modal" role="dialog" aria-modal="true">' +
-          '<div class="if-modal-title">识别为新 Agent</div>' +
+          '<div class="if-modal-title" id="claimTitle">识别客户端</div>' +
           '<div class="if-modal-body if-agent-claim">' +
             '<div class="agent-claim-sample mono">样本: ' + escHtml(_claimSample || '—') + '</div>' +
-            '<label>名称 <input type="text" id="claimName" value="' + escHtml(base) + '" maxlength="40"></label>' +
-            '<label>标识 id <input type="text" id="claimId" value="' + escHtml(base) + '" placeholder="小写字母数字连字符" pattern="[a-z0-9-]{1,64}"></label>' +
+            '<label>归属 <select id="claimMode">' +
+              '<option value="new">新建独立 Agent</option>' +
+              '<option value="alias"' + (opts ? '' : ' disabled') + '>归入已有 Agent（子工具）</option>' +
+            '</select></label>' +
+            '<div id="claimNewFields">' +
+              '<label>名称 <input type="text" id="claimName" value="' + escHtml(base) + '" maxlength="40"></label>' +
+              '<label>标识 id <input type="text" id="claimId" value="' + escHtml(base) + '" placeholder="小写字母数字连字符" pattern="[a-z0-9-]{1,64}"></label>' +
+            '</div>' +
+            '<div id="claimAliasFields" style="display:none">' +
+              '<label>归入 <select id="claimParent">' + opts + '</select></label>' +
+              '<div class="agent-claim-hint">该 UA 将作为子工具归入选定 Agent，命中即计入其用量。</div>' +
+            '</div>' +
             '<label>匹配来源 <select id="claimHeader">' +
               '<option value="user-agent">User-Agent</option>' +
               '<option value="x-app">x-app</option></select></label>' +
@@ -1147,6 +1167,17 @@
     if (s) s.addEventListener('click', submitClaim);
     var pat = $('claimPattern');
     if (pat) pat.addEventListener('input', updateClaimPreview);
+    // 归属模式切换：新建 vs 归入已有（alias）
+    var mode = $('claimMode');
+    if (mode) mode.addEventListener('change', function () {
+      var isAlias = mode.value === 'alias';
+      var nf = $('claimNewFields'), af = $('claimAliasFields');
+      var title = $('claimTitle'), save = $('claimSave');
+      if (nf) nf.style.display = isAlias ? 'none' : '';
+      if (af) af.style.display = isAlias ? '' : 'none';
+      if (title) title.textContent = isAlias ? '归入已有 Agent' : '识别为新 Agent';
+      if (save) save.textContent = isAlias ? '归入并生效' : '创建并生效';
+    });
     var idInput = $('claimId');
     if (idInput) idInput.addEventListener('input', function () { idInput.dataset.touched = '1'; });
     var nameInput = $('claimName');
@@ -1166,17 +1197,26 @@
   }
 
   function submitClaim() {
-    var id = $('claimId').value, name = $('claimName').value,
-        header = $('claimHeader').value, pattern = $('claimPattern').value;
+    var header = $('claimHeader').value, pattern = $('claimPattern').value;
+    var mode = $('claimMode');
+    var isAlias = mode && mode.value === 'alias';
+    var body;
+    if (isAlias) {
+      var parent = $('claimParent').value;
+      body = { parent_id: parent, header: header, pattern: pattern };
+    } else {
+      body = { id: $('claimId').value, name: $('claimName').value,
+               header: header, pattern: pattern, color: '#94a3b8' };
+    }
     fetch('/api/agents', {
       method: 'POST',
       headers: Object.assign({ 'Content-Type': 'application/json' }, UI.adminHeaders()),
-      body: JSON.stringify({ id: id, name: name, header: header, pattern: pattern, color: '#94a3b8' }),
+      body: JSON.stringify(body),
     })
       .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
       .then(function (res) {
         if (!res.ok) { UI.toast(res.d.error || '认领失败', 'error'); return; }
-        UI.toast('已创建 Agent ' + id + '，热重载已生效', 'ok');
+        UI.toast(isAlias ? ('已归入 ' + body.parent_id + '，热重载已生效') : ('已创建 Agent ' + body.id + '，热重载已生效'), 'ok');
         closeClaimModal();
         _agentCache = null; getAgentStats();
       });

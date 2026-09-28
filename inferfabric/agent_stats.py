@@ -11,6 +11,10 @@ from typing import Mapping
 
 from inferfabric.metrics_aggregator import cost_of_row
 
+# v7.0 调色板系列槽（与 charts.js PALETTES 对齐；跳过琥珀[1] 累计线专用槽）。
+# 用户认领的 agent（source='user'）按 rank 取色；内置 agent 保留品牌色。
+PALETTE_SERIES = ['#2563eb', '#0891b2', '#15803d', '#db2777']  # 蓝/青/绿/粉（跳琥珀）
+
 AGENT_GRAN = {
     "minute": {"since": 3600,       "n": 12, "width_s": 5 * 60},
     "hour":   {"since": 24 * 3600,  "n": 24, "width_s": 3600},
@@ -46,6 +50,11 @@ def aggregate_agent_stats(rows, gran, scope, prices, meta,
     unk_counter: Counter = Counter()
     for r in rows:
         if not in_scope(r):
+            continue
+        # v6.6: agent='' 的行是采集上线前的历史存量 / 采集漏点（无可靠信号），
+        # 不进聚合——否则 14 万历史空行淹没真实识别率。agent='unknown'（分类器
+        # 跑过未命中）保留。
+        if not r.get("agent"):
             continue
         ts = r.get("timestamp")
         if not ts:
@@ -111,6 +120,15 @@ def aggregate_agent_stats(rows, gran, scope, prices, meta,
     if unk:
         result.remove(unk)
         result.insert(0, unk)  # 未识别置顶（设计 §5）
+    # v6.6: 用户认领 agent（source='user'）按 rank 走 palette 补色（跳琥珀[1]）；
+    # builtin 保留品牌色；unknown 保留灰。仅对 totals 中的非 unknown、非 builtin 行赋色。
+    pal_idx = 0
+    for t in result:
+        if t["agent"] == "unknown":
+            continue
+        if t.get("source") == "user":
+            t["color"] = PALETTE_SERIES[pal_idx % len(PALETTE_SERIES)]
+            pal_idx += 1
     for _, ser in series.items():
         for b in ser:
             b["cost"] = round(b["cost"], 4)

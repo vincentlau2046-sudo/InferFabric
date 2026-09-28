@@ -1164,18 +1164,30 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         } for d in pm.agent_registry.all()]}, 200)
 
     def _handle_post_agents(self, pm):
-        """POST /api/agents — 一键认领（admin-token 保护）。"""
+        """POST /api/agents — 一键认领（admin-token 保护）。
+
+        两种语义（body 有 parent_id 分流）：
+          - 新建独立 Agent: {id, name, header, pattern, color}
+          - 归入已有 Agent: {parent_id, header, pattern}  （子进程工具归属）
+        """
         try:
             data = self._read_body()
             if not isinstance(data, dict):
                 self._send_json({"error": "body required"}, 400)
                 return
-            d = pm.agent_registry.add_from_ui(
-                str(data.get("id") or ""), str(data.get("name") or ""),
-                str(data.get("header") or "user-agent"),
-                str(data.get("pattern") or ""),
-                str(data.get("color") or "#94a3b8"),
-            )
+            if data.get("parent_id"):
+                d = pm.agent_registry.add_alias(
+                    str(data.get("parent_id")),
+                    str(data.get("header") or "user-agent"),
+                    str(data.get("pattern") or ""),
+                )
+            else:
+                d = pm.agent_registry.add_from_ui(
+                    str(data.get("id") or ""), str(data.get("name") or ""),
+                    str(data.get("header") or "user-agent"),
+                    str(data.get("pattern") or ""),
+                    str(data.get("color") or "#94a3b8"),
+                )
             self._send_json({"agent": {
                 "id": d.id, "name": d.name, "color": d.color, "source": d.source,
             }}, 200)
