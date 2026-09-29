@@ -999,18 +999,22 @@
     var rows = '';
     for (var i = 0; i < totals.length; i++) {
       var t = totals[i];
-      var isUnk = t.agent === 'unknown';
+      // 待认领 = 无真实 def 的行：source 为 observed（无 def 回退）或 historical（无信号）。
+      // 这些行 name 回退为「未识别」/「历史（无信号）」但 agent id 不是 'unknown'，
+      // 之前只判 agent==='unknown' 导致 smoke-tmp 等 observed 残留显示「未识别」却无按钮。
+      var claimable = (t.agent === 'unknown') || (t.source === 'observed');
+      var isUnk = claimable;  // 统一用 claimable 控制样式与按钮
       rows += '<tr class="' + (isUnk ? 'agent-unk-row' : '') + '">' +
         '<td><span class="agent-dot" style="background:' + escHtml(t.color) + '"></span>' +
-          escHtml(t.name) + (isUnk ? ' <span class="agent-unk-tag">未识别</span>' : '') + '</td>' +
+          escHtml(t.name) + (isUnk ? ' <span class="agent-unk-tag">待认领</span>' : '') + '</td>' +
         '<td class="mono num">' + UI.fmtNum(t.requests) + '</td>' +
         '<td class="mono num">' + escHtml(t.success_rate.toFixed(0)) + '%</td>' +
         '<td class="mono num">' + UI.fmtNum(t.tokens_in) + '/' + UI.fmtNum(t.tokens_out) + '</td>' +
         '<td class="mono num">' + (t.cost_yuan > 0 ? _yuanFmt(t.cost_yuan) : '—') + '</td>' +
         '<td class="mono num">' + (t.ttft_p50 != null ? escHtml(t.ttft_p50.toFixed(0)) + 'ms' : '—') + '</td>' +
         '<td class="mono">' + escHtml((t.top_models || []).slice(0, 1).map(function (m) { return shortName(m.model); }).join('')) + '</td>' +
-        '<td>' + (isUnk ? '<button class="mon-mini-btn" data-claim="1" title="识别为新 Agent">识别</button>' : '') +
-          (_agentManage && !isUnk && t.source !== 'builtin'
+        '<td>' + (claimable ? '<button class="mon-mini-btn" data-claim="' + escHtml(t.agent) + '" title="识别/认领">识别</button>' : '') +
+          (_agentManage && !claimable && t.source !== 'builtin'
              ? '<button class="mon-mini-btn" data-del="' + escHtml(t.agent) + '" title="删除">✕</button>' : '') + '</td>' +
       '</tr>';
     }
@@ -1091,8 +1095,13 @@
       ev.preventDefault();
       if (btn.hasAttribute('data-claim-ua')) { openClaimModal(btn.getAttribute('data-claim-ua')); return; }
       if (btn.hasAttribute('data-claim')) {
-        var first = (_agentCache && _agentCache.unassigned && _agentCache.unassigned[0]) || {};
-        openClaimModal(first.ua || ''); return;
+        // data-claim 带 agent id（observed 残留如 smoke-tmp）或 'unknown'。
+        // 取 unassigned 首个 UA 预填；observed 残留无 unassigned 条目时用 agent id 当样本。
+        var claimAgent = btn.getAttribute('data-claim') || 'unknown';
+        var sampleUa = (_agentCache && _agentCache.unassigned && _agentCache.unassigned[0])
+          ? _agentCache.unassigned[0].ua : '';
+        if (!sampleUa && claimAgent !== 'unknown') sampleUa = claimAgent;
+        openClaimModal(sampleUa); return;
       }
       if (btn.hasAttribute('data-del')) { delAgent(btn.getAttribute('data-del')); return; }
     });
