@@ -38,6 +38,6 @@ def test_v008_idempotent_on_existing(tmp_path):
     db = _migrate(tmp_path)
     with db.connect(REQUEST_LOG_DB) as conn:
         row = conn.execute("SELECT agent, ua FROM request_log WHERE req_id='r1'").fetchone()
-    # v008 加列默认 ''；v009 回填历史 agent='' → 'claude-code'
-    assert row[0] == "claude-code" and row[1] == ""
+    # v008 加列默认 ''；v009 回填 → claude-code；v010 诚实化无 ua → historical
+    assert row[0] == "historical" and row[1] == ""
     db.close()

@@ -38,10 +38,12 @@ def _seed_old_request_log(tmp_path, rows):
 
 
 def test_v009_backfills_empty_agent_to_claude_code(tmp_path):
-    """agent='' 的历史行 → 回填 'claude-code'。"""
+    """v009 把 agent='' → claude-code（后被 v010 诚实化修正）。
+    本测试钉 v009 单步行为：跑完 v009（user_version=9）后 agent='' 消失。
+    全迁移链下 v010 会进一步修正无 ua 行 → historical。"""
     _seed_old_request_log(tmp_path, [
         ("r1", "m", 200, 1.0, "", ""),              # 历史无 agent
-        ("r2", "m", 200, 2.0, "", "curl/8"),        # 有 ua 但 agent 空（采集漏点）
+        ("r2", "m", 200, 2.0, "", "curl/8"),        # 有 ua 但 agent 空
         ("r3", "m", 200, 3.0, "claude-code", "cc"), # 已有 agent 不动
         ("r4", "m", 200, 4.0, "unknown", "x"),      # unknown 不动
     ])
@@ -49,22 +51,23 @@ def test_v009_backfills_empty_agent_to_claude_code(tmp_path):
     with db.connect(REQUEST_LOG_DB) as conn:
         rows = {r[0]: r[1] for r in conn.execute(
             "SELECT req_id, agent FROM request_log").fetchall()}
-    assert rows["r1"] == "claude-code"   # '' → claude-code
-    assert rows["r2"] == "claude-code"   # '' → claude-code（即使有 ua）
-    assert rows["r3"] == "claude-code"   # 原已是 claude-code 不变
-    assert rows["r4"] == "unknown"       # unknown 不动
+    # 全迁移链：v009 回填 → v010 诚实化
+    # r1 无 ua → historical；r2 有 ua 非 claude-cli → unknown（待 reclassify）
+    assert rows["r1"] == "historical"
+    assert rows["r2"] == "unknown"
+    assert rows["r3"] == "unknown"   # r3 ua="cc" 非 claude-cli → v010 改 unknown
+    assert rows["r4"] == "unknown"
     db.close()
 
 
 def test_v009_idempotent(tmp_path):
-    """重跑 v009 不报错、不重复影响已回填行。"""
+    """重跑全迁移不报错、结果稳定。"""
     _seed_old_request_log(tmp_path, [("r1", "m", 200, 1.0, "", "")])
     db = _migrate(tmp_path)
-    # 再跑一次迁移（模拟重启）
     db._run_migrations()
     with db.connect(REQUEST_LOG_DB) as conn:
         row = conn.execute("SELECT agent FROM request_log WHERE req_id='r1'").fetchone()
-    assert row[0] == "claude-code"
+    assert row[0] == "historical"  # v010 诚实化后无 ua → historical
     db.close()
 
 

@@ -37,6 +37,7 @@ class RequestLog:
     tokens_out: int = 0
     agent: str = ""      # 客户端 Agent id（agents.d 归一化，unknown 兜底；v6.5）
     ua: str = ""         # 原始 User-Agent（认领学习回路原料）
+    x_app: str = ""      # 事实层：原始 x-app header（reclassify 原料；v6.6）
     duration_ms: float = 0.0
     route: str = "local"               # "local" | "cloud"
     cloud_provider: str | None = None   # "baidu-codingplan" | None
@@ -117,6 +118,7 @@ class RequestLogger:
                 "tokens_out": entry.tokens_out,
                 "agent": entry.agent,
                 "ua": entry.ua,
+                "x_app": entry.x_app,
                 "duration_ms": entry.duration_ms,
                 "route": entry.route,
                 "cloud_provider": entry.cloud_provider,

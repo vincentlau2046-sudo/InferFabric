@@ -236,6 +236,7 @@ _POST_ROUTES = {
     "/admin/auto-switch/toggle": _admin(lambda h, pm: h._handle_auto_switch_toggle(pm)),
     "/admin/gpu-clear":        _admin(lambda h, pm: h._handle_gpu_clear(pm)),
     "/api/agents":             _admin(lambda h, pm: h._handle_post_agents(pm)),
+    "/api/agents/reclassify":  _admin(lambda h, pm: h._handle_reclassify(pm)),
 
     # ─── Admin: Cloud Provider Management (PR-D) ─────────────────
     "/admin/cloud/reload":      _admin(lambda h, pm: h._handle_cloud_reload(pm)),
@@ -444,6 +445,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     status=req_status, error=req_error,
                     agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
                     ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
+                    x_app=getattr(self, "_agent_hit", None) and self._agent_hit.x_app or "",
                     duration_ms=(time.monotonic()-req_start)*1000,
                 ))
                 self._send_json({"error": auth_reason, "status": "unauthorized"}, 401)
@@ -489,6 +491,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     status=503, error="model_switching",
                     agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
                     ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
+                    x_app=getattr(self, "_agent_hit", None) and self._agent_hit.x_app or "",
                     duration_ms=elapsed,
                 ))
                 pm.anomalies.record(AnomalyEvent(
@@ -529,6 +532,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                         status=409, error="switch_in_progress",
                         agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
                         ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
+                    x_app=getattr(self, "_agent_hit", None) and self._agent_hit.x_app or "",
                         duration_ms=elapsed,
                     ))
                     pm.anomalies.record(AnomalyEvent(
@@ -554,6 +558,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                         status=503, error="auto_switch_failed",
                         agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
                         ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
+                    x_app=getattr(self, "_agent_hit", None) and self._agent_hit.x_app or "",
                         duration_ms=elapsed,
                     ))
                     pm.anomalies.record(AnomalyEvent(
@@ -578,6 +583,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     status=503, error="model_not_active",
                     agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
                     ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
+                    x_app=getattr(self, "_agent_hit", None) and self._agent_hit.x_app or "",
                     duration_ms=elapsed,
                 ))
                 pm.anomalies.record(AnomalyEvent(
@@ -618,6 +624,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                         cloud_provider=provider_name,
                         agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
                         ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
+                    x_app=getattr(self, "_agent_hit", None) and self._agent_hit.x_app or "",
                         tokens_in=result.usage.get("prompt_tokens", 0),
                         tokens_in_cached=result.usage.get("prompt_tokens_cached", 0),
                         tokens_out=result.usage.get("completion_tokens", 0),
@@ -640,6 +647,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             status=404, error="unknown_model",
             agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
             ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
+                    x_app=getattr(self, "_agent_hit", None) and self._agent_hit.x_app or "",
             duration_ms=elapsed,
         ))
         pm.anomalies.record(AnomalyEvent(
@@ -686,6 +694,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     route="local",
                     agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
                     ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
+                    x_app=getattr(self, "_agent_hit", None) and self._agent_hit.x_app or "",
                     tokens_in=int(usage.get("prompt_tokens") or 0),
                     tokens_in_cached=int(usage.get("prompt_tokens_cached") or 0),
                     tokens_out=int(usage.get("completion_tokens") or 0),
@@ -1191,6 +1200,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"agent": {
                 "id": d.id, "name": d.name, "color": d.color, "source": d.source,
             }}, 200)
+            # 认领后自动 reclassify：映射层变了，用新规则重新分类 unknown 历史行
+            # （事实层 ua/x_app 不变；reclassify 只更新 agent 派生值）。
+            try:
+                pm.telemetry.reclassify_request_log(pm.agent_registry.classify)
+            except Exception as e:
+                log.warning("post-claim reclassify failed (non-fatal): %s", e)
         except KeyError:
             self._send_json({"error": "agent id already exists"}, 409)
         except ValueError as e:
@@ -1212,6 +1227,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             log.error("/api/agents DELETE failed: %s", e)
             self._send_json({"error": "delete failed"}, 500)
+
+    def _handle_reclassify(self, pm):
+        """POST /api/agents/reclassify — 认领后重新分类 unknown 历史行。
+
+        事实层（ua/x_app）不变，用当前 registry 映射层重新 classify。
+        返回更新行数。认领 alias 后自动调用——unassigned 立即清空。
+        """
+        try:
+            reg = pm.agent_registry
+            n = pm.telemetry.reclassify_request_log(reg.classify)
+            self._send_json({"reclassified": n, "ok": True}, 200)
+        except Exception as e:
+            log.error("/api/agents/reclassify failed: %s", e)
+            self._send_json({"error": "reclassify failed"}, 500)
 
     def _handle_snapshot(self, pm):
         """GET /api/snapshot — single consistent control-plane snapshot.
@@ -1997,6 +2026,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 status=status, error=error,
                 agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
                 ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
+                    x_app=getattr(self, "_agent_hit", None) and self._agent_hit.x_app or "",
                 duration_ms=(time.monotonic() - req_start) * 1000,
             ))
             return {"blocked": True, "status": status, "body": body, "headers": headers}
@@ -2144,6 +2174,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 status=status, route="local",
                 agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
                 ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
+                    x_app=getattr(self, "_agent_hit", None) and self._agent_hit.x_app or "",
                 duration_ms=(time.monotonic() - ctx["req_start"]) * 1000,
             ))
             gate.release()
@@ -2215,6 +2246,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 status=status, route="local",
                 agent=self._agent_hit.agent if hasattr(self, "_agent_hit") else "",
                 ua=self._agent_hit.ua if hasattr(self, "_agent_hit") else "",
+                    x_app=getattr(self, "_agent_hit", None) and self._agent_hit.x_app or "",
                 duration_ms=(time.monotonic() - ctx["req_start"]) * 1000,
             ))
             gate.release()

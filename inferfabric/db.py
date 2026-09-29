@@ -341,16 +341,17 @@ class IFFDB:
         # 旧调用方（v6.5 前构造的 entry dict / 测试 fixture）可能缺
         # tokens_in_cached / agent / ua 键 → 缺省，保持后向兼容。
         entries = [dict(e, tokens_in_cached=e.get("tokens_in_cached", 0),
-                        agent=e.get("agent", ""), ua=e.get("ua", "")) for e in entries]
+                        agent=e.get("agent", ""), ua=e.get("ua", ""),
+                        x_app=e.get("x_app", "")) for e in entries]
         with self._write_lock:
             with self.connect(REQUEST_LOG_DB) as conn:
                 conn.executemany(
                     "INSERT OR IGNORE INTO request_log "
                     "(req_id, key_name, model, status, ttft_ms, tokens_in, "
-                    " tokens_in_cached, tokens_out, agent, ua, "
+                    " tokens_in_cached, tokens_out, agent, ua, x_app, "
                     " duration_ms, route, cloud_provider, error, timestamp, ts) "
                     "VALUES (:req_id, :key_name, :model, :status, :ttft_ms, :tokens_in, "
-                    ":tokens_in_cached, :tokens_out, :agent, :ua, "
+                    ":tokens_in_cached, :tokens_out, :agent, :ua, :x_app, "
                     ":duration_ms, :route, :cloud_provider, :error, "
                     ":timestamp, :ts)",
                     entries,
@@ -373,6 +374,32 @@ class IFFDB:
             params.append(limit)
             rows = conn.execute(sql, params).fetchall()
             return [dict(zip(cols, r)) for r in rows]
+
+    def reclassify_request_log(self, classify_fn) -> int:
+        """对 agent='unknown' 且有 ua 的行用 classify_fn 重新分类。
+        classify_fn(ua, x_app) -> agent_id；返回非 unknown 则 UPDATE。
+        返回更新行数。认领后调用——映射层变了，事实层（ua/x_app）不变。
+        """
+        with self._write_lock:
+            with self.connect(REQUEST_LOG_DB) as conn:
+                rows = conn.execute(
+                    "SELECT id, ua, x_app FROM request_log "
+                    "WHERE agent='unknown' AND ua!=''").fetchall()
+                updated = 0
+                for row_id, ua, x_app in rows:
+                    headers = {"user-agent": ua or ""}
+                    if x_app:
+                        headers["x-app"] = x_app
+                    new_agent = classify_fn("openai", headers)
+                    # classify 返回 AgentHit；取 .agent 字段
+                    agent_id = getattr(new_agent, "agent", new_agent)
+                    if agent_id != "unknown" and agent_id:
+                        conn.execute(
+                            "UPDATE request_log SET agent=? WHERE id=?",
+                            (agent_id, row_id))
+                        updated += 1
+                conn.commit()
+                return updated
 
     def prune_request_log(self, before: float) -> int:
         with self._write_lock:

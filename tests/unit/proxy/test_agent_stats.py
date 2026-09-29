@@ -133,3 +133,35 @@ class TestPaletteForClaimed:
         assert colors["u0"] == PALETTE_SERIES[0]
         assert colors["u1"] == PALETTE_SERIES[1]  # = palette[2]
         assert "#b45309" not in colors.values()   # 琥珀不出现
+
+
+class TestHistoricalBucket:
+    def test_historical_displayed_not_in_unassigned(self):
+        """historical 行在 totals 显示（token/cost 有统计意义），不进 unassigned。"""
+        rows = [
+            _row(timestamp=NOW - 50, agent="historical", ua=""),         # 历史无信号
+            _row(timestamp=NOW - 50, agent="claude-code", ua="cc"),      # 正常
+            _row(timestamp=NOW - 50, agent="unknown", ua="curl/8"),      # 待认领
+        ]
+        out = aggregate_agent_stats(rows, "hour", "all", PRICES, {}, now=NOW)
+        agents = {t["agent"]: t for t in out["totals"]}
+        assert "historical" in agents
+        assert agents["historical"]["name"] == "历史（无信号）"
+        assert agents["historical"]["requests"] == 1
+        # historical 不进 unassigned（没有 ua 可认领）
+        uas = [u["ua"] for u in out["unassigned"]]
+        assert "" not in uas
+        assert "curl/8" in uas  # unknown 的 ua 仍进 unassigned
+
+    def test_historical_not_pinned_top(self):
+        """historical 不置顶（非待处理）；unknown 仍置顶。"""
+        rows = [
+            _row(timestamp=NOW - 50, agent="historical", ua=""),
+            _row(timestamp=NOW - 50, agent="claude-code", ua="cc"),
+            _row(timestamp=NOW - 50, agent="unknown", ua="x"),
+        ]
+        out = aggregate_agent_stats(rows, "hour", "all", PRICES, {}, now=NOW)
+        # unknown 置顶
+        assert out["totals"][0]["agent"] == "unknown"
+        # historical 不在第一位
+        assert out["totals"][1]["agent"] != "historical" or out["totals"][0]["agent"] == "unknown"

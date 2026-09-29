@@ -231,6 +231,7 @@ def handle_chat(handler, pm, data):
                 status=401, error=auth_reason,
                 agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
                 ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
+                    x_app=getattr(handler, "_agent_hit", None) and handler._agent_hit.x_app or "",
                 duration_ms=(time.monotonic()-handler._req_start)*1000,
             ))
             handler._send_json({"error": auth_reason, "status": "unauthorized"}, 401)
@@ -277,6 +278,7 @@ def handle_chat(handler, pm, data):
                 status=409, error="switch_in_progress",
                 agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
                 ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
+                    x_app=getattr(handler, "_agent_hit", None) and handler._agent_hit.x_app or "",
                 duration_ms=elapsed,
             ))
             pm.anomalies.record(AnomalyEvent(
@@ -298,6 +300,7 @@ def handle_chat(handler, pm, data):
                 status=503, error="cannot_switch",
                 agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
                 ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
+                    x_app=getattr(handler, "_agent_hit", None) and handler._agent_hit.x_app or "",
                 duration_ms=elapsed,
             ))
             pm.anomalies.record(AnomalyEvent(
@@ -337,6 +340,7 @@ def handle_chat(handler, pm, data):
                     cloud_provider=provider_name,
                     agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
                     ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
+                    x_app=getattr(handler, "_agent_hit", None) and handler._agent_hit.x_app or "",
                     tokens_in=result.usage.get("prompt_tokens", 0),
                     tokens_in_cached=result.usage.get("prompt_tokens_cached", 0),
                     tokens_out=result.usage.get("completion_tokens", 0),
@@ -351,6 +355,7 @@ def handle_chat(handler, pm, data):
             status=404, error="unknown_model",
             agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
             ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
+                    x_app=getattr(handler, "_agent_hit", None) and handler._agent_hit.x_app or "",
             duration_ms=elapsed,
         ))
         pm.anomalies.record(AnomalyEvent(
@@ -397,6 +402,7 @@ def handle_chat(handler, pm, data):
             status=429, error=gate.reason, route="local",
             agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
             ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
+                    x_app=getattr(handler, "_agent_hit", None) and handler._agent_hit.x_app or "",
             duration_ms=(time.monotonic()-handler._req_start)*1000,
         ))
         handler._send_json(
@@ -415,6 +421,7 @@ def handle_chat(handler, pm, data):
                     status=200, ttft_ms=ttft, route="local",
                     agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
                     ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
+                    x_app=getattr(handler, "_agent_hit", None) and handler._agent_hit.x_app or "",
                     tokens_in=usage.get("prompt_tokens", 0),
                     tokens_in_cached=usage.get("prompt_tokens_cached", 0),
                     tokens_out=usage.get("completion_tokens", 0),
@@ -428,6 +435,7 @@ def handle_chat(handler, pm, data):
             status=502, error="upstream_unavailable", route="local",
             agent=handler._agent_hit.agent if hasattr(handler, "_agent_hit") else "",
             ua=handler._agent_hit.ua if hasattr(handler, "_agent_hit") else "",
+                    x_app=getattr(handler, "_agent_hit", None) and handler._agent_hit.x_app or "",
             duration_ms=(time.monotonic()-handler._req_start)*1000,
         ))
         handler._send_json({"error": "Upstream unavailable after retry"}, 502)

@@ -36,3 +36,7 @@ IFFDB.register_migration(8, "request_log", "add_agent_ua")
 # v009: 历史行 agent='' 回填 claude-code（v6.6）
 from inferfabric.migrations import v009_backfill_agent
 IFFDB.register_migration(9, "request_log", "backfill_agent")
+
+# v010: 诚实化历史数据 + 预留 x_app 列（v6.6 架构修正）
+from inferfabric.migrations import v010_honestize_and_x_app
+IFFDB.register_migration(10, "request_log", "honestize_and_x_app")

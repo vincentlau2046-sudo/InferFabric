@@ -23,6 +23,7 @@ AGENT_GRAN = {
 }
 
 _UNKNOWN_META = {"name": "未识别", "color": "#9ca3af", "source": "observed"}
+_HISTORICAL_META = {"name": "历史（无信号）", "color": "#475569", "source": "historical"}
 
 
 def _empty_buckets(n):
@@ -93,7 +94,10 @@ def aggregate_agent_stats(rows, gran, scope, prices, meta,
 
     result: list[dict] = []
     for agent, agg in totals.items():
-        m = meta.get(agent, _UNKNOWN_META)
+        if agent == "historical":
+            m = _HISTORICAL_META
+        else:
+            m = meta.get(agent, _UNKNOWN_META)
         ttfts = sorted(agg["ttft"])
         def _q(q):
             if not ttfts:

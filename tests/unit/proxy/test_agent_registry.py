@@ -293,3 +293,23 @@ class TestAliases:
             reg.add_alias("claude-code", "user-agent", "(unclosed")  # 坏 regex
         with pytest.raises(ValueError):
             reg.add_alias("nonexistent", "user-agent", "^x")     # 父 agent 不存在
+
+
+class TestClassifyXApp:
+    def test_classify_captures_x_app(self, tmp_path):
+        """classify 时一并捕获 x-app header 信号存入 AgentHit（事实层原料）。"""
+        reg = _mk(tmp_path, builtin=[("cc.yaml", CC)])
+        hit = reg.classify("anthropic", {"x-app": "cli", "User-Agent": "claude-cli/2"})
+        assert hit.agent == "claude-code"
+        assert hit.x_app == "cli"
+
+    def test_classify_x_app_empty_when_absent(self, tmp_path):
+        reg = _mk(tmp_path, builtin=[("cc.yaml", CC)])
+        hit = reg.classify("openai", {"User-Agent": "curl/8"})
+        assert hit.x_app == ""
+
+    def test_classify_x_app_case_insensitive(self, tmp_path):
+        """x-app header 键大小写不敏感（与 ua 一致）。"""
+        reg = _mk(tmp_path, builtin=[("cc.yaml", CC)])
+        hit = reg.classify("anthropic", {"X-App": "cli"})
+        assert hit.x_app == "cli"

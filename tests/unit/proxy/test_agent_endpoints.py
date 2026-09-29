@@ -149,3 +149,47 @@ def test_agents_post_alias_not_found_400(tmp_path):
     h._read_body = lambda: {"parent_id": "ghost", "header": "user-agent", "pattern": "^x"}
     h._handle_post_agents(pm)
     assert h._sent[-1][0] == 400
+
+
+def test_reclassify_updates_unknown_rows(tmp_path):
+    """POST /api/agents/reclassify — 对 agent='unknown' 且有 ua 的行用当前
+    registry 重新 classify，命中的行 UPDATE 为新 agent。"""
+    from inferfabric.agent_registry import AgentRegistry
+    import time
+    b = tmp_path / "builtin"; u = tmp_path / "user"
+    b.mkdir(); u.mkdir()
+    # registry 有 curl alias 归入 claude-code
+    (b / "cc.yaml").write_text(
+        "id: claude-code\nname: Claude Code\ncolor: \"#d97757\"\nmatch:\n  - { header: x-app, value: cli }\n",
+        encoding="utf-8")
+    (u / "claude-code.yaml").write_text(
+        "id: claude-code\naliases:\n  - { header: user-agent, regex: \"^curl\" }\n", encoding="utf-8")
+    reg = AgentRegistry(b, u)
+    # 建 DB 带未知行
+    import sqlite3
+    from inferfabric.db import IFFDB, REQUEST_LOG_DB
+    db = IFFDB(tmp_path)
+    import inferfabric.migrations  # noqa
+    db._run_migrations()
+    with db.connect(REQUEST_LOG_DB) as conn:
+        conn.execute("INSERT INTO request_log (req_id, model, status, timestamp, agent, ua) "
+                     "VALUES ('r1','m',200,?,'unknown','curl/8.5.2')", (time.time(),))
+        conn.execute("INSERT INTO request_log (req_id, model, status, timestamp, agent, ua) "
+                     "VALUES ('r2','m',200,?,'unknown','Python-urllib/3.13')", (time.time(),))
+        conn.commit()
+    pm = _mk_pm(tmp_path)
+    pm.agent_registry = reg
+    pm.telemetry = db
+    # reclassify
+    h = _handler("/api/agents/reclassify")
+    h._handle_reclassify(pm)
+    code, data = h._sent[-1]
+    assert code == 200
+    assert data["reclassified"] >= 1  # curl 命中 claude-code
+    # DB 验证
+    with db.connect(REQUEST_LOG_DB) as conn:
+        r1 = conn.execute("SELECT agent FROM request_log WHERE req_id='r1'").fetchone()
+        r2 = conn.execute("SELECT agent FROM request_log WHERE req_id='r2'").fetchone()
+    assert r1[0] == "claude-code"   # curl 命中 alias
+    assert r2[0] == "unknown"       # Python-urllib 未命中（无 alias）
+    db.close()

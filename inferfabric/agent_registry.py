@@ -116,6 +116,9 @@ class AgentHit:
     name: str
     color: str
     ua: str
+    x_app: str = ""  # 事实层：原始 x-app header 信号（reclassify 原料 + 未来智能化）
+    color: str
+    ua: str
 
 
 class AgentRegistry:
@@ -156,20 +159,24 @@ class AgentRegistry:
     def classify(self, protocol: str, headers: Mapping) -> AgentHit:
         snap = self._snapshot
         ua = ""
+        x_app = ""
         for k, val in headers.items():
-            if str(k).lower() == "user-agent":
+            kl = str(k).lower()
+            if kl == "user-agent":
                 ua = str(val or "")
-                break
+            elif kl == "x-app":
+                x_app = str(val or "")
         ua = ua[:512]
+        x_app = x_app[:128]
         for d in snap.defs:
             for rule in d.rules:
                 if rule.matches(protocol, headers):
-                    return AgentHit(d.id, d.name, d.color, ua)
+                    return AgentHit(d.id, d.name, d.color, ua, x_app)
             # v6.6: aliases（子进程工具归属）——主规则未命中再查别名
             for rule in d.aliases:
                 if rule.matches(protocol, headers):
-                    return AgentHit(d.id, d.name, d.color, ua)
-        return AgentHit(_UNKNOWN_ID, _UNKNOWN_NAME, _UNKNOWN_COLOR, ua)
+                    return AgentHit(d.id, d.name, d.color, ua, x_app)
+        return AgentHit(_UNKNOWN_ID, _UNKNOWN_NAME, _UNKNOWN_COLOR, ua, x_app)
 
     def all(self) -> list[AgentDef]:
         return list(self._defs)
