@@ -32,3 +32,7 @@ IFFDB.register_migration(7, "request_log", "gpu_power_series")
 # v008: request_log.agent/ua (v6.5 客户端 Agent 识别)
 from inferfabric.migrations import v008_add_agent_ua
 IFFDB.register_migration(8, "request_log", "add_agent_ua")
+
+# v009: 历史行 agent='' 回填 claude-code（v6.6）
+from inferfabric.migrations import v009_backfill_agent
+IFFDB.register_migration(9, "request_log", "backfill_agent")

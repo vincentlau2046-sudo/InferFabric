@@ -19,7 +19,7 @@ def test_v008_adds_columns(tmp_path):
 
 
 def test_v008_idempotent_on_existing(tmp_path):
-    """旧库升级：已存在该列不应报错；历史行默认 ''。"""
+    """旧库升级：已存在该列不应报错；历史行 v008 默认 ''，v009 回填 claude-code。"""
     import sqlite3
     p = tmp_path / "request_log.db"
     conn = sqlite3.connect(p)
@@ -38,5 +38,6 @@ def test_v008_idempotent_on_existing(tmp_path):
     db = _migrate(tmp_path)
     with db.connect(REQUEST_LOG_DB) as conn:
         row = conn.execute("SELECT agent, ua FROM request_log WHERE req_id='r1'").fetchone()
-    assert row[0] == "" and row[1] == ""
+    # v008 加列默认 ''；v009 回填历史 agent='' → 'claude-code'
+    assert row[0] == "claude-code" and row[1] == ""
     db.close()
