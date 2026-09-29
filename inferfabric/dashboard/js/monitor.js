@@ -48,9 +48,9 @@
   var _chartsInit = false;
 
   /* ── 客户端 / Agent 用量卡（v6.5） ──
-   * 数据源 GET /api/agent-stats；30s TTL + inflight guard；不随 3s snapshot。
+   * 数据源 GET /api/agent-stats；5min TTL + inflight guard；不随 3s snapshot。
    * 认领：POST /api/agents（adminHeaders）；DELETE /api/agents?id= 管理。 */
-  var _AGENT_TTL = 30000;
+  var _AGENT_TTL = 300000;        // 5min——四卡统一口径（fetch + 重绘均 5min，图不闪）
   var _agentCache = null, _agentLast = 0, _agentInflight = false;
   var _agentCfg = { gran: 'hour', scope: 'all' };
   var _agentManage = false;
@@ -60,7 +60,7 @@
   // 数据源 /api/power（服务端 60s 采样 + v007 表 + 5min 后端 TTL），与延迟卡同构。
   var _pgranCache = {};
   var _pgranInflight = {};
-  var _POWER_TTL = 300000;       // 5min——与后端 _power_series_cache 对齐
+  var _POWER_TTL = 300000;       // 5min——四卡统一口径
   var _pgranRendered = null;     // 已完整渲染（热缓存 + 同档 → 3s 轮询下跳过重绘）
 
   // 引擎指标节流（避免每 3s 轮询都打 /api/engine_metrics）
@@ -76,7 +76,8 @@
   // data = 端点响应 {local, cloud}，local[i]/cloud[i] = idx i（i=0 最旧 → n-1 最新），
   // 含 prompt/completion/cached 拆分。
   var _tokenCurveCache = {};         // gran -> {data, at}
-  var TOKEN_CURVE_TTL = 15000;       // 15s — 同 ENGINE_TTL
+  var TOKEN_CURVE_TTL = 300000;      // 5min——四卡统一口径（fetch + 重绘均 5min，图不闪）
+  var _tokenRenderedAt = {};         // gran -> 上次渲染用的 cache.at（同 at → 跳过重绘，防闪）
 
   /* ── 小工具 ── */
   function escHtml(s) {
@@ -378,15 +379,16 @@
   // cumTok/cumCost = 窗口起点累积（前缀和）：本地卡用 cumTok（累计 token 量），
   // 云端卡用 cumCost（累计费用 ¥，桶 cost 字段；未配价模型 cost=0）。
   // 无缓存时返回 n 个零桶（空图 + empty state，累积线平 0）。
+  // x 轴标签用桶起点 b.t（墙钟对齐，与功耗卡同口径）；b.t 缺失时回退旧推算。
   function _tokenFromBuckets(gran, buckets, now) {
     var n = _TOKEN_N[gran] || 24;
     var w = _TOKEN_W[gran] || 3600000;
     var xs = [], prompt = [], comp = [], cumTok = [], cumCost = [];
     var runTok = 0, runCost = 0;
     for (var k = 0; k < n; k++) {
-      var end = now - (n - 1 - k) * w;   // 桶结束时刻（最旧桶 = now-(n-1)w，最新桶 = now）
-      xs.push(_tokenGranLabel(gran, end));
       var b = (buckets && buckets[k]) || {};
+      var tMs = b.t != null ? (b.t * 1000) : (now - (n - 1 - k) * w);
+      xs.push(_tokenGranLabel(gran, tMs));
       var p = b.prompt || 0, c = b.completion || 0;
       prompt.push(p);
       comp.push(c);
@@ -396,9 +398,9 @@
     return { xs: xs, prompt: prompt, completion: comp, cumTok: cumTok, cumCost: cumCost };
   }
 
-  // 桶标签：minute → HH:mm（桶结束时刻）；hour → HH:00；day/week → MM-DD
-  function _tokenGranLabel(gran, endDate) {
-    var d = new Date(endDate);
+  // 桶标签：minute → HH:mm（桶起点）；hour → HH:00；day/week → MM-DD
+  function _tokenGranLabel(gran, dateMs) {
+    var d = new Date(dateMs);
     if (gran === 'minute') return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     if (gran === 'hour') return String(d.getHours()).padStart(2, '0') + ':00';
     return (d.getMonth() + 1) + '-' + d.getDate();
@@ -504,10 +506,18 @@
 
   /* 本地 / 云端双卡（左右）：同一粒度下各渲染一张双轴图。
    * 柱（左轴）= 每桶 Prompt/Completion 堆叠；折线（右轴）= 窗口起点累积——
-   * 本地 cumTok（token 量）、云端 cumCost（费用 ¥）。 */
+   * 本地 cumTok（token 量）、云端 cumCost（费用 ¥）。
+   * 重绘节流：热缓存（TOKEN_CURVE_TTL 5min 内）+ 同档 → 跳过重绘（3s 轮询下不闪）；
+   *           fetch 落地 / 切档 / 切 tab → 强制重绘一次。与功耗卡 _pgranRendered 同构。 */
   function renderTokenChart() {
     ensureCharts();
     if (!_charts.tokenLocal || !_charts.tokenCloud) return;
+    // 热缓存 + 同档 + 已用当前 cache.at 渲染过 → 数据没变，跳过重绘（3s 轮询不闪图）。
+    // fetch 落地（cache.at 更新）/ 切档（_tokenGran 变）/ 切 tab → at 不匹配 → 强制重绘。
+    var hit = _tokenCurveCache[_tokenGran];
+    if (hit && (Date.now() - hit.at) < TOKEN_CURVE_TTL
+        && _tokenRenderedAt[_tokenGran] === hit.at) return;
+    if (hit) _tokenRenderedAt[_tokenGran] = hit.at;
     renderCacheHitBadges();
 
     var scopes = [
@@ -979,7 +989,9 @@
 
   /* ── 客户端 / Agent 用量卡函数（v6.5，布局 A：图左表右） ── */
   function getAgentStats() {
-    if (_agentCache && Date.now() - _agentLast < _AGENT_TTL) { renderAgentCard(); return; }
+    // 热缓存 → 数据没变，跳过重绘（3s 轮询不闪图；与 Token/功耗卡同构）。
+    // fetch 落地（_agentCache 更新）/ 切档切 scope（清缓存）/ 切 tab → 强制重绘。
+    if (_agentCache && Date.now() - _agentLast < _AGENT_TTL) return;
     if (_agentInflight) return;
     _agentInflight = true;
     fetch('/api/agent-stats?granularity=' + _agentCfg.gran + '&scope=' + _agentCfg.scope,
@@ -1063,10 +1075,13 @@
     ensureCharts();
     if (_charts.agent) {
       // 堆叠柱（每 Agent 一色）；scope=云端 → y 轴切每桶累计费用 ¥（设计 §5）
+      // x 轴标签用桶起点 b.t（墙钟对齐，与 Token/功耗卡同口径），弃裸下标 x。
       var isCloud = _agentCfg.scope === 'cloud';
       var cats = [];
       if (d.totals.length && d.series[d.totals[0].agent]) {
-        cats = d.series[d.totals[0].agent].map(function (b) { return String(b.x); });
+        cats = d.series[d.totals[0].agent].map(function (b) {
+          return _tokenGranLabel(_agentCfg.gran, (b.t != null ? b.t : 0) * 1000);
+        });
       }
       var series = [], names = [];
       for (var i = 0; i < d.totals.length; i++) {
@@ -1080,10 +1095,11 @@
         grid: { left: 40, right: 12, top: 24, bottom: 26 },
         tooltip: { trigger: 'axis' },
         legend: { show: true, top: 0, type: 'scroll', textStyle: { fontSize: 11 } },
-        xAxis: { type: 'category', data: cats, show: false },
+        xAxis: { type: 'category', data: cats, boundaryGap: true,
+                 axisLabel: { fontSize: 11, interval: 'auto' } },
         yAxis: { type: 'value', name: isCloud ? '费用 ¥' : '请求' },
         series: series,
-      });
+      }, { replaceSeries: true });   // series 数随档/认领收缩 → 整替，防幽灵 series 残留
     }
   }
 
@@ -1278,6 +1294,8 @@
       // 延迟卡 + 功耗卡：TTL 缓存命中即时画 / 过期触发 fetch 落地后重绘
       renderLatencyCards();
       renderPowerCard();
+      // Agent 卡：切 tab 时图实例可能已重建，即便 TTL 命中也强制重画一次
+      if (_agentCache) renderAgentCard();
     }
   });
 
@@ -1374,13 +1392,13 @@
   /* ── 主题变更：IFCharts 自动 dispose+重建，但我们需要重新注入数据 ── */
   if (IFCharts && typeof IFCharts.onThemeChange === 'function') {
     IFCharts.onThemeChange(function () {
-      // 重建后实例已更新，重新渲染所有图表注入数据；功耗卡强制重画
-      // （实例已重建，热缓存 guard 的 _pgranRendered 需复位否则被跳过）
+      // 重建后实例已更新，重新渲染所有图表注入数据；热缓存 guard 需复位否则被跳过
       if (isMonitorActive()) {
         _pgranRendered = null;
+        _tokenRenderedAt = {};     // Token guard 复位（实例重建，强制重画）
         renderPowerCard();
         renderTokenChart();
-        renderAgentCard();
+        if (_agentCache) renderAgentCard();
         renderLatencyCards();
       }
     });

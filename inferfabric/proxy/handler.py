@@ -1048,35 +1048,32 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
           hour   : 近 24h    → 24×1h    桶      （原 day）
           day    : 近 30 天  → 30×1d    桶      （原 month；31→30）
           week   : 近 90 天  → 13×7d    周桶    （新增）
-        全档「相对年龄」分桶（idx = n-1 - floor(age/width)）：最旧在左 idx=0、
-        最新在右 idx=n-1 —— 与图 x 轴「近 X」语义一致，且避免墙钟把间隔 > 窗口宽
-        的离散时段合并不连续桶（旧 hour 档即此语义，现推广到全档）。
+        墙钟对齐固定窗分桶（bucketing.wallclock_slots）：桶边界钉死整 5 分钟 /
+        整点 / 本地零点 / 本地周一，不随 now 滚动——历史桶闭合后值固定，仅含 now
+        的末桶随新请求增长（与功耗卡同口径；取代旧「相对年龄」划窗式）。
         Y 轴 = tokens_in + tokens_out 总和；dual-scope {local, cloud}。
         每桶 cost 字段（¥，4 位小数）：云端请求按价格表（¥/1M tokens，
         MetricsAggregator.price_config）逐请求累加，未配价模型计 0；本地桶恒 0。
         数据源 = 监控 TAB Token 双卡的「云端窗口累计费用」折线。
         """
         from urllib.parse import urlparse, parse_qs
+        from inferfabric.bucketing import wallclock_slots, bucket_index, WALL
 
         try:
             qs = parse_qs(urlparse(self.path).query or "")
             g = (qs.get("granularity", ["hour"])[0]).lower()
-            specs = {
-                "minute": {"since": 3600,        "n": 12, "width_s": 5 * 60},      # 60min / 12×5min
-                "hour":   {"since": 24 * 3600,   "n": 24, "width_s": 3600},        # 24h / 24×1h
-                "day":    {"since": 30 * 86400,  "n": 30, "width_s": 86400},       # 30d / 30×1d
-                "week":   {"since": 90 * 86400,  "n": 13, "width_s": 7 * 86400},   # 90d / ~13 周桶
-            }
-            if g not in specs:
+            if g not in WALL:
                 self._send_json({"error": f"invalid granularity: {g}"}, 400)
                 return
-            spec = specs[g]
+            spec = WALL[g]
             now_ts = time.time()
-            since = int(now_ts - spec["since"])
+            slots = wallclock_slots(g, now_ts)
+            n = spec["n"]
+            # SQL 窗口剪枝：只取窗口内的行（since = 末桶起点）。桶边界由 slots 决定，
+            # 非此 since——since 仅收窄行集，不决定归属。
+            since = int(slots[0][0])
             rows = pm.telemetry.query_request_log(since=since, limit=100000)
 
-            n = spec["n"]
-            w_s = spec["width_s"]
             # 价格表（¥/1M tokens）：云端桶 cost 字段数据源（启动时由
             # ProxyManager._load_price_config 注入 MetricsAggregator，只读视图
             # 见其 price_config property）。本地桶无价格，cost 恒 0。
@@ -1085,26 +1082,24 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # 每桶含 prompt/completion 拆分（供 Prompt/Completion 堆叠条图表用）；
             # tokens 保留（= prompt+completion，向后兼容已有消费者）；
             # cached = 缓存命中 token 数（供缓存命中率 = cached/prompt）；
+            # t = 桶起点 epoch 秒（前端格式化 x 轴标签，取代裸下标 x）；
             # cost = 桶费用（¥）——云端请求按 (in/1M×价入 + out/1M×价出) 逐请求累加，
             # 云端卡「窗口累计费用」折线数据源；本地无价格恒 0（本地只花电费，
             # 电费在 功耗/电费 卡）
-            local_b = [{"x": i, "tokens": 0, "prompt": 0,
-                        "completion": 0, "cached": 0, "requests": 0, "cost": 0.0}
-                       for i in range(n)]
-            cloud_b = [{"x": i, "tokens": 0, "prompt": 0,
-                        "completion": 0, "cached": 0, "requests": 0, "cost": 0.0}
-                       for i in range(n)]
+            def _empty():
+                return [{"x": i, "t": int(slots[i][0]), "tokens": 0, "prompt": 0,
+                         "completion": 0, "cached": 0, "requests": 0, "cost": 0.0}
+                        for i in range(n)]
+            local_b = _empty()
+            cloud_b = _empty()
 
             for r in rows:
                 ts = r.get("timestamp")
                 if ts is None:
                     continue
-                # 相对年龄分桶：idx = n-1 - floor(age/width)。窗口右缘 = now →
-                # 每条请求仅当落在 [now-since, now] 内才入桶；窗外（如恰好越过
-                # since 边界）idx < 0 → 丢弃。
-                age_s = now_ts - ts
-                idx = n - 1 - int(age_s // w_s)
-                if not (0 <= idx < n):
+                # 墙钟分桶：左闭右开 start<=ts<end。窗外（早于首桶起点）→ -1 丢弃。
+                idx = bucket_index(slots, ts)
+                if idx < 0:
                     continue
                 try:
                     tokens_in = int(r.get("tokens_in") or 0)

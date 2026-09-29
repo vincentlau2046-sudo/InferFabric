@@ -9,6 +9,7 @@ import time
 from collections import defaultdict, Counter
 from typing import Mapping
 
+from inferfabric.bucketing import wallclock_slots, bucket_index
 from inferfabric.metrics_aggregator import cost_of_row
 
 # v7.0 调色板系列槽（与 charts.js PALETTES 对齐；跳过琥珀[1] 累计线专用槽）。
@@ -26,8 +27,10 @@ _UNKNOWN_META = {"name": "未识别", "color": "#9ca3af", "source": "observed"}
 _HISTORICAL_META = {"name": "历史（无信号）", "color": "#475569", "source": "historical"}
 
 
-def _empty_buckets(n):
-    return [{"x": i, "requests": 0, "tokens": 0, "cost": 0.0} for i in range(n)]
+def _empty_buckets(slots):
+    # 每桶带 t（起点 epoch 秒，供前端格式化标签）；x 保留下标向后兼容。
+    return [{"x": i, "t": int(slots[i][0]), "requests": 0, "tokens": 0, "cost": 0.0}
+            for i in range(len(slots))]
 
 
 def aggregate_agent_stats(rows, gran, scope, prices, meta,
@@ -35,8 +38,9 @@ def aggregate_agent_stats(rows, gran, scope, prices, meta,
     """rows: request_log dict 列表; gran/scope 见端点; meta: {agent: {name,color,source}};
     now: 墙钟右缘（缺省 time.time()；测试注入固定值保证分桶可断言）。"""
     spec = AGENT_GRAN[gran]
-    n, w_s = spec["n"], spec["width_s"]
+    n, w_s = spec["n"], spec["width_s"]         # w_s 仍随响应返回（向后兼容）
     now = time.time() if now is None else now
+    slots = wallclock_slots(gran, now)          # 墙钟对齐固定窗（不随 now 滚动）
 
     def in_scope(r):
         cp = r.get("cloud_provider")
@@ -60,11 +64,11 @@ def aggregate_agent_stats(rows, gran, scope, prices, meta,
         ts = r.get("timestamp")
         if not ts:
             continue
-        idx = n - 1 - int((now - ts) // w_s)
-        if not (0 <= idx < n):
+        idx = bucket_index(slots, ts)            # 左闭右开 start<=ts<end
+        if idx < 0:
             continue
         agent = r.get("agent") or "unknown"
-        ser = series.setdefault(agent, _empty_buckets(n))
+        ser = series.setdefault(agent, _empty_buckets(slots))
         tin = int(r.get("tokens_in") or 0)
         tout = int(r.get("tokens_out") or 0)
         b = ser[idx]

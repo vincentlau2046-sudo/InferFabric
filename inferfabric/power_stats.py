@@ -28,14 +28,17 @@ import subprocess
 import threading
 import time
 
+# 墙钟 slot 单一事实源在 bucketing.py；此处 re-export 保向后兼容
+# （test_power_series 仍 `from power_stats import hour_slots …`）。
+from inferfabric.bucketing import (  # noqa: F401
+    HOUR_WIN_BUCKETS, DAY_WIN_BUCKETS, WEEK_WIN_BUCKETS, WEEK_BUCKET_SEC,
+    hour_slots, day_slots, week_slots,
+)
+
 log = logging.getLogger("inferfabric.power_stats")
 
 PRICE_YUAN_PER_KWH = 1.0          # 电价常量（¥/度；1 度 = 1 kWh）
 SAMPLE_INTERVAL_SEC = 60.0        # PowerSampler 采样间隔（单样本能量折算用）
-HOUR_WIN_BUCKETS = 24             # 小时视图桶数
-DAY_WIN_BUCKETS = 30              # 天视图桶数
-WEEK_WIN_BUCKETS = 13             # 周视图桶数（13×7d ≈ 91 天，覆盖「近 90 天」）
-WEEK_BUCKET_SEC = 7 * 86400       # 一周边界秒数
 
 
 # ── 探针 ───────────────────────────────────────────────────────
@@ -118,35 +121,8 @@ class PowerSampler:
 
 
 # ── 分桶 ───────────────────────────────────────────────────────
-
-def hour_slots(now_ts: int) -> list[tuple[int, int]]:
-    """近 24h：整点对齐的 24 个 (start, end) 桶，末桶 = 当前小时；跨整点不偏移。"""
-    hour = now_ts - (now_ts % 3600)
-    return [(hour - (HOUR_WIN_BUCKETS - 1 - i) * 3600, hour - (HOUR_WIN_BUCKETS - 2 - i) * 3600)
-            for i in range(HOUR_WIN_BUCKETS)]
-
-
-def day_slots(now_ts: int) -> list[tuple[int, int]]:
-    """近 30 天：本地零点对齐的 30 个日桶，末桶 = 今天（部分）。"""
-    lt = time.localtime(now_ts)
-    midnight = int(time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1)))
-    return [(midnight - (DAY_WIN_BUCKETS - 1 - i) * 86400,
-             midnight - (DAY_WIN_BUCKETS - 2 - i) * 86400)
-            for i in range(DAY_WIN_BUCKETS)]
-
-
-def week_slots(now_ts: int) -> list[tuple[int, int]]:
-    """近 ~90 天：本地周一对齐的 13 个周桶（7 天），末桶 = 本周（部分桶）。
-
-    对齐自然周而非滑动窗口——「周」语义 = 星期；末桶从本周周一起算到 now。
-    """
-    lt = time.localtime(now_ts)
-    midnight = int(time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1)))
-    week_start = midnight - lt.tm_wday * 86400      # 本地周一 00:00
-    return [(week_start - (WEEK_WIN_BUCKETS - 1 - i) * WEEK_BUCKET_SEC,
-             week_start - (WEEK_WIN_BUCKETS - 2 - i) * WEEK_BUCKET_SEC)
-            for i in range(WEEK_WIN_BUCKETS)]
-
+# hour/day/week_slots 已移至 inferfabric.bucketing（墙钟对齐单一事实源），
+# 顶部 re-export；month_slots 为功耗卡专属（变长、需 first_ts），保留于此。
 
 def _next_month(y: int, m: int) -> tuple[int, int]:
     return (y + 1, 1) if m == 12 else (y, m + 1)

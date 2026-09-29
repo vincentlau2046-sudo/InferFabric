@@ -8,9 +8,10 @@ unit/proxy/test_token_curve.py — _handle_token_curve 四档（分钟/小时/�
   week   = 近 90 天 · ~13×1-week（7 天周桶）
   月单位整体弃用（端点删除 month，UI 不再提供）。
 
-全档统一「相对年龄」分桶：idx = n-1 - floor(age/width)，最旧在左 idx=0、
-最新在右 idx=n-1 —— 与图 x 轴「近 X」语义一致，避免墙钟把间隔 > 窗口宽的
-离散时段合并不连续桶。
+全档统一「墙钟对齐固定窗」分桶（bucketing.wallclock_slots，与功耗卡同口径）：
+桶边界钉死整 5 分钟 / 整点 / 本地零点 / 本地周一，不随 now 滚动——历史桶
+闭合后值固定，仅含 now 的末桶随新请求增长。每桶带 t（起点 epoch 秒），
+左闭右开 start <= ts < end。
 
 每桶含 prompt/completion 拆分（Prompt/Completion 堆叠条用）：
 tokens == prompt + completion（向后兼容）。dual-scope {local, cloud}。
@@ -114,26 +115,35 @@ class TestTokenCurveBucketSplit:
             assert b["prompt"] == 10 and b["completion"] == 20
             assert b["tokens"] == 30
 
-    def test_minute_relative_age_bucketing_not_clock_minute(self):
-        """minute 桶按相对年龄分桶（5min 宽），不按墙钟分钟。
+    def test_minute_wallclock_aligned(self):
+        """minute 桶墙钟对齐 5 分钟刻度（不随 now 滚动）。
 
-        构造两条请求：ts1 = now（0min 前→idx 11）、ts2 = now - 50*60（50min 前→idx 1）。
-        若按墙钟分钟，二者 minute 也可能相同；按相对年龄 idx 11 vs 1 必分离。
+        now 对齐到整 5 分钟；ts1 = 末桶起点（→ idx 11）、ts2 = now - 50min（→ idx 1）。
+        每桶 t 必为 300 整数倍（墙钟刻度）；ts1/ts2 恰为所属桶起点 → local[i].t == ts。
         """
         h, _ = _make_handler()
         h.path = "/api/token-curve?granularity=minute"
 
         now = time.time()
+        now_aligned = now - (now % 300)          # 整 5 分钟刻度
+        ts1 = now_aligned                        # 末桶起点 → idx 11
+        ts2 = now_aligned - 50 * 60              # 50min 前 → idx 1
         pm = MagicMock()
         pm.telemetry.query_request_log.return_value = [
-            _row(now, tokens_in=100, tokens_out=200),               # idx 11
-            _row(now - 50 * 60, tokens_in=7, tokens_out=8),         # idx 1
+            _row(ts1, tokens_in=100, tokens_out=200),
+            _row(ts2, tokens_in=7, tokens_out=8),
         ]
         h._handle_token_curve(pm)
         local = h._send_json.call_args.args[0]["local"]
 
+        # 每桶 t 墙钟对齐（300 整数倍）
+        for b in local:
+            assert b["t"] % 300 == 0, f"桶 t 非墙钟对齐: {b}"
+        # ts1 = 末桶起点 → idx 11；ts2 = idx 1 桶起点（now_aligned - 10×300）
         assert local[11]["requests"] == 1 and local[11]["prompt"] == 100
+        assert local[11]["t"] == int(ts1)
         assert local[1]["requests"] == 1 and local[1]["prompt"] == 7
+        assert local[1]["t"] == int(ts2)
         nonempty = [i for i, b in enumerate(local) if b["requests"] > 0]
         assert sorted(nonempty) == [1, 11], f"应只有 idx 1 和 11 非空: {nonempty}"
 
@@ -258,18 +268,21 @@ class TestTokenCurveCloudCost:
         h, _ = _make_handler()
         h.path = "/api/token-curve?granularity=minute"
         now = time.time()
+        # 墙钟对齐：两条请求钉在最新 5min 桶内（b0+60 / b0+180 均 ∈ [b0, b0+300)），
+        # 避免划窗式 now-60 跨桶（now 落桶前 60s 内时 now-60 入上一桶）。
+        b0 = now - (now % 300)
         pm = MagicMock()
         pm.metrics.price_config = {"deepseek-v4-flash": _price(1.0, 2.0)}
         pm.telemetry.query_request_log.return_value = [
-            _row(now, tokens_in=1_000_000, tokens_out=500_000,
+            _row(b0 + 60, tokens_in=1_000_000, tokens_out=500_000,
                  cloud_provider="baidu-qianfan", model="deepseek-v4-flash"),
             # 同桶第二条：100K 输入 + 100K 输出 → ¥0.1 + ¥0.2 = ¥0.3
-            _row(now - 60, tokens_in=100_000, tokens_out=100_000,
+            _row(b0 + 180, tokens_in=100_000, tokens_out=100_000,
                  cloud_provider="baidu-qianfan", model="deepseek-v4-flash"),
         ]
         h._handle_token_curve(pm)
         cloud = h._send_json.call_args.args[0]["cloud"]
-        target = cloud[11]   # now 与 now-60s 同落最新 5min 桶
+        target = cloud[11]   # 两条同落最新 5min 桶
         assert target["cost"] == pytest.approx(2.3), \
             f"cost 应为 2.0 + 0.3 = 2.3，got {target['cost']}"
 

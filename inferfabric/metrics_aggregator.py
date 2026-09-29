@@ -329,9 +329,10 @@ class MetricsAggregator:
 
         - 严格 n 桶覆盖窗口（n = 窗口/桶宽精确整除）：minute=12×5min、
           hour=24×1h、day=30×1d——桶数 = 档位定值，不随墙钟多点/少点。
-        - 桶按「相对年龄」锚定 now（同 token-curve）：idx 0 = 最旧（窗口左缘）、
-          idx n-1 = 最新（含 now）；桶内无样本 → 该位置 None（前端只桥接中间
-          空桶，首尾空不延伸）。
+        - 墙钟对齐固定窗（bucketing.wallclock_slots，同 token-curve/功耗卡）：
+          桶边界钉死整 5 分钟 / 整点 / 本地零点，不随 now 滚动；idx 0 = 最旧
+          （窗口左缘）、idx n-1 = 最新（含 now 的未闭合桶）；桶内无样本 → 该
+          位置 None（前端只桥接中间空桶，首尾空不延伸）。
         - 仅保留窗口内**有 TTFT 样本的模型**中请求数前 top_n 个（404 unknown_model
           等零数据模型不占位；键序 = 请求数降序 → 名称升序）。
         - 零 schema 变更：TPOT 逐请求推导（同 get_metrics 过滤条件）。
@@ -343,7 +344,11 @@ class MetricsAggregator:
         cutoff = now - ws
         bucket_s = max(1.0, bucket_ms / 1000.0)
         n_buckets = int(ws / bucket_s)          # 定值：12 / 24 / 30
-        start_bucket = now - n_buckets * bucket_s
+        # 墙钟对齐固定窗（bucketing）：桶边界钉死整 5 分钟 / 整点 / 本地零点，
+        # 不随 now 滚动——历史桶闭合后值固定，仅末桶（含 now）随新样本增长。
+        # len(slots) == n_buckets（ws 恰整除 bucket_s）。
+        from inferfabric.bucketing import wallclock_slots, bucket_index
+        slots = wallclock_slots(window, now)
 
         with self._lock:
             samples = [s for s in self._samples if s.get("timestamp", 0) >= cutoff]
@@ -369,8 +374,7 @@ class MetricsAggregator:
             if m not in top_set:
                 continue
             ts = s.get("timestamp", 0)
-            age_s = now - ts
-            bi = n_buckets - 1 - int(age_s // bucket_s)   # 相对年龄：idx 0 最旧 → n-1 最新
+            bi = bucket_index(slots, ts)     # 墙钟左闭右开；窗外 → -1 丢弃
             if bi < 0 or bi >= n_buckets:
                 continue
             cell = cells[(m, bi)]
@@ -399,7 +403,7 @@ class MetricsAggregator:
 
         labels = []
         for bi in range(n_buckets):
-            t = start_bucket + bi * bucket_s
+            t = slots[bi][0]                    # 桶起点 epoch（墙钟对齐）
             fmt = "%m-%d %H:%M" if ws >= 86400 else "%H:%M"
             labels.append(datetime.datetime.fromtimestamp(t).strftime(fmt))
 
