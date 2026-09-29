@@ -193,3 +193,45 @@ def test_reclassify_updates_unknown_rows(tmp_path):
     assert r1[0] == "claude-code"   # curl 命中 alias
     assert r2[0] == "unknown"       # Python-urllib 未命中（无 alias）
     db.close()
+
+
+def test_reclassify_also_handles_observed_residual(tmp_path):
+    """reclassify 也处理 observed 残留（agent='smoke-tmp' 等无 def 的 id），
+    不仅 agent='unknown'。认领后这类行也应被重新分类。"""
+    from inferfabric.agent_registry import AgentRegistry
+    import time
+    b = tmp_path / "builtin"; u = tmp_path / "user"
+    b.mkdir(); u.mkdir()
+    (b / "cc.yaml").write_text(
+        "id: claude-code\nname: Claude Code\ncolor: \"#d97757\"\nmatch:\n  - { header: x-app, value: cli }\n",
+        encoding="utf-8")
+    # claude-code 的 alias：curl 归入
+    (u / "claude-code.yaml").write_text(
+        "id: claude-code\naliases:\n  - { header: user-agent, regex: \"^curl\" }\n",
+        encoding="utf-8")
+    # 用户新建 smoke-test agent（match ^smoke）
+    (u / "smoke-test.yaml").write_text(
+        "id: smoke-test\nname: smoke test\nmatch:\n  - { header: user-agent, regex: \"^smoke\" }\n",
+        encoding="utf-8")
+    reg = AgentRegistry(b, u)
+    import sqlite3
+    from inferfabric.db import IFFDB, REQUEST_LOG_DB
+    db = IFFDB(tmp_path)
+    import inferfabric.migrations  # noqa
+    db._run_migrations()
+    ts = time.time()
+    with db.connect(REQUEST_LOG_DB) as conn:
+        # unknown 行 + observed 残留（agent='smoke-tmp'，无 def）
+        conn.execute("INSERT INTO request_log (req_id, model, status, timestamp, agent, ua) "
+                     "VALUES ('r1','m',200,?,'unknown','curl/8.5.2')", (ts,))
+        conn.execute("INSERT INTO request_log (req_id, model, status, timestamp, agent, ua) "
+                     "VALUES ('r2','m',200,?,'smoke-tmp','smoke-tmp/1.0')", (ts,))
+        conn.commit()
+    known = {d.id for d in reg.all()}
+    n = db.reclassify_request_log(reg.classify, known)
+    with db.connect(REQUEST_LOG_DB) as conn:
+        r1 = conn.execute("SELECT agent FROM request_log WHERE req_id='r1'").fetchone()
+        r2 = conn.execute("SELECT agent FROM request_log WHERE req_id='r2'").fetchone()
+    assert r1[0] == "claude-code"   # curl alias 命中
+    assert r2[0] == "smoke-test"    # smoke-tmp UA 被 ^smoke 命中 → 重新归类
+    db.close()

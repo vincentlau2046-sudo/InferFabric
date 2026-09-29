@@ -1200,10 +1200,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"agent": {
                 "id": d.id, "name": d.name, "color": d.color, "source": d.source,
             }}, 200)
-            # 认领后自动 reclassify：映射层变了，用新规则重新分类 unknown 历史行
-            # （事实层 ua/x_app 不变；reclassify 只更新 agent 派生值）。
+            # 认领后自动 reclassify：映射层变了，用新规则重新分类无 def 的历史行
+            # （unknown + observed 残留；事实层 ua/x_app 不变）。
             try:
-                pm.telemetry.reclassify_request_log(pm.agent_registry.classify)
+                known = {d.id for d in pm.agent_registry.all()}
+                pm.telemetry.reclassify_request_log(pm.agent_registry.classify, known)
             except Exception as e:
                 log.warning("post-claim reclassify failed (non-fatal): %s", e)
         except KeyError:
@@ -1229,14 +1230,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"error": "delete failed"}, 500)
 
     def _handle_reclassify(self, pm):
-        """POST /api/agents/reclassify — 认领后重新分类 unknown 历史行。
+        """POST /api/agents/reclassify — 认领后重新分类无 def 的历史行。
 
         事实层（ua/x_app）不变，用当前 registry 映射层重新 classify。
-        返回更新行数。认领 alias 后自动调用——unassigned 立即清空。
+        处理 unknown 聚合桶 + observed 残留（agent id 无对应 def）。
+        返回更新行数。认领后自动调用——unassigned 立即清空。
         """
         try:
             reg = pm.agent_registry
-            n = pm.telemetry.reclassify_request_log(reg.classify)
+            known = {d.id for d in reg.all()}
+            n = pm.telemetry.reclassify_request_log(reg.classify, known)
             self._send_json({"reclassified": n, "ok": True}, 200)
         except Exception as e:
             log.error("/api/agents/reclassify failed: %s", e)

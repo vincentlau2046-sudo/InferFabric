@@ -375,25 +375,35 @@ class IFFDB:
             rows = conn.execute(sql, params).fetchall()
             return [dict(zip(cols, r)) for r in rows]
 
-    def reclassify_request_log(self, classify_fn) -> int:
-        """对 agent='unknown' 且有 ua 的行用 classify_fn 重新分类。
-        classify_fn(ua, x_app) -> agent_id；返回非 unknown 则 UPDATE。
-        返回更新行数。认领后调用——映射层变了，事实层（ua/x_app）不变。
+    def reclassify_request_log(self, classify_fn, known_ids: set | None = None) -> int:
+        """对无真实 def 的行（unknown + observed 残留如 smoke-tmp）用 classify_fn
+        重新分类。known_ids = registry 里所有真实 def 的 id 集合；不在集合内且
+        非 historical 的行都重新 classify。认领后调用——映射层变了，事实层不变。
         """
         with self._write_lock:
             with self.connect(REQUEST_LOG_DB) as conn:
-                rows = conn.execute(
-                    "SELECT id, ua, x_app FROM request_log "
-                    "WHERE agent='unknown' AND ua!=''").fetchall()
+                # 取所有有 ua、非 historical、非已知 def 的行
+                if known_ids:
+                    placeholders = ",".join("?" * len(known_ids))
+                    rows = conn.execute(
+                        f"SELECT id, ua, x_app, agent FROM request_log "
+                        f"WHERE ua!='' AND agent!='historical' "
+                        f"AND agent NOT IN ({placeholders})",
+                        list(known_ids)).fetchall()
+                else:
+                    # 无 known_ids 时回退：只处理 unknown（向后兼容）
+                    rows = conn.execute(
+                        "SELECT id, ua, x_app, agent FROM request_log "
+                        "WHERE agent='unknown' AND ua!=''").fetchall()
                 updated = 0
-                for row_id, ua, x_app in rows:
+                for row_id, ua, x_app, old_agent in rows:
                     headers = {"user-agent": ua or ""}
                     if x_app:
                         headers["x-app"] = x_app
                     new_agent = classify_fn("openai", headers)
-                    # classify 返回 AgentHit；取 .agent 字段
                     agent_id = getattr(new_agent, "agent", new_agent)
-                    if agent_id != "unknown" and agent_id:
+                    # 仅当新分类与当前不同（且非 unknown，除非原来就是 unknown）才更新
+                    if agent_id and agent_id != old_agent:
                         conn.execute(
                             "UPDATE request_log SET agent=? WHERE id=?",
                             (agent_id, row_id))

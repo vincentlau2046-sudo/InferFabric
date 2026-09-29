@@ -148,9 +148,9 @@ class TelemetryHub:
         return self._legacy_db.query_request_log(since=since, until=until,
                                                   model=model, limit=limit)
 
-    def reclassify_request_log(self, classify_fn) -> int:
-        """重新分类 unknown 历史行（认领后触发）。代理到 IFFDB。"""
-        return self._db.reclassify_request_log(classify_fn)
+    def reclassify_request_log(self, classify_fn, known_ids=None) -> int:
+        """重新分类无 def 的历史行（认领后触发）。代理到 IFFDB。"""
+        return self._db.reclassify_request_log(classify_fn, known_ids)
 
     def get_token_stats(self, window: str = "weekly") -> list[dict]:
         return self.token_collector.query(window)
