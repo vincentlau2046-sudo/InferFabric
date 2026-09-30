@@ -429,7 +429,7 @@ A macOS-inspired sidebar dashboard for model management, monitoring, and multi-e
 InferFabric 是单文件 Python 应用，运行时依赖 `aiohttp` + `cachetools`（及 aiohttp 生态的传递依赖）。`requirements.txt` 已 pin 全部版本。
 
 ```bash
-git clone https://github.com/vincentlau2046-sudo/InferFabric.git
+git clone https://github.com/vincentlau2046/InferFabric.git
 cd InferFabric
 pip install -r requirements.txt
 ```
@@ -642,4 +642,4 @@ bash scripts/iff-recovery.sh --full  # Nuclear: SIGKILL all + nvidia-smi -gpu-re
 
 ---
 
-[InferFabric](https://github.com/vincentlau2046-sudo/InferFabric) · MIT License
+[InferFabric](https://github.com/vincentlau2046/InferFabric) · MIT License

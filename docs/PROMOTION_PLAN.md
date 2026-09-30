@@ -4,7 +4,7 @@
 
 ## 0. 现有资产（已就位，可直接用）
 
-- GitHub 仓库：github.com/vincentlau2046-sudo/InferFabric（MIT 许可）
+- GitHub 仓库：github.com/vincentlau2046/InferFabric（MIT 许可）
 - 当前版本：v5.5.1（README 已含 SVG 架构图 + Dashboard 截图）
 - OpenAPI 3.1 规范（37 端点 / 46 schemas），运行期由 GET /api/openapi.json 提供
 - 第三方依赖仅 PyYAML（其余全为 Python 标准库）— PyPI 打包只需声明 PyYAML
@@ -48,7 +48,7 @@
 
     I built a single-GPU LLM inference gateway (InferFabric). It fronts vLLM / SGLang / Ollama / ComfyUI / TTS / ASR on one GPU, with a 3-state GPU state machine, OpenAI + Anthropic dual-protocol routing, cloud-provider presets, and a two-level (DualGate) rate limiter. MIT, Python, zero heavy deps (only PyYAML).
 
-    - GitHub: github.com/vincentlau2046-sudo/InferFabric
+    - GitHub: github.com/vincentlau2046/InferFabric
     - PyPI: inferfabric (pip install inferfabric)
     - OpenAPI 3.1 spec served at GET /api/openapi.json
 

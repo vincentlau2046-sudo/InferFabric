@@ -10,7 +10,7 @@
   由于 max_tokens=32，finish_reason=length，模型只生成了 reasoning 片段
 - DSH Web GUI（http://127.0.0.1:3080）当前由预构建 launcher 服务（apps/cli/lib/bin.js --profile web --port 3080）；
   客户端插件的 HMR 热更新仅在 pnpm run dev:web（dev-web.ts）运行期间生效
-- IFF 仓库：github.com/vincentlau2046-sudo/InferFabric（MIT）；尚无 PyPI 打包（无 pyproject.toml / setup.py）
+- IFF 仓库：github.com/vincentlau2046/InferFabric（MIT）；尚无 PyPI 打包（无 pyproject.toml / setup.py）
 
 ## 1. DSH 插件化架构
 
